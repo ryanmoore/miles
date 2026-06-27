@@ -3,6 +3,20 @@ from pathlib import Path
 from typing import TypedDict
 
 
+class LapRow(TypedDict):
+    lap_id: int
+    activity_id: int
+    lap_index: int
+    distance_m: float | None
+    moving_time_s: int | None
+    average_speed_mps: float | None
+    average_heartrate: float | None
+    max_heartrate: float | None
+    average_cadence: float | None
+    total_elevation_gain_m: float | None
+    pace_zone: int | None
+
+
 class ActivityRow(TypedDict):
     activity_id: int
     name: str | None
@@ -64,6 +78,26 @@ def init_db(conn: sqlite3.Connection) -> None:
             synced_at     TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS laps (
+            lap_id      INTEGER PRIMARY KEY,
+            activity_id INTEGER NOT NULL REFERENCES activities(activity_id) ON DELETE CASCADE,
+            lap_index   INTEGER NOT NULL,
+            distance_m             REAL,
+            moving_time_s          INTEGER,
+            average_speed_mps      REAL,
+            average_heartrate      REAL,
+            max_heartrate          REAL,
+            average_cadence        REAL,
+            total_elevation_gain_m REAL,
+            pace_zone              INTEGER,
+            UNIQUE(activity_id, lap_index)
+        )
+    """)
+    try:
+        conn.execute("ALTER TABLE activities ADD COLUMN workout_label TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
 
 
@@ -87,6 +121,23 @@ def upsert_activities(conn: sqlite3.Connection, rows: list[ActivityRow]) -> None
             :gear_id, :strava_url, :synced_at
         )
     """, rows)
+    conn.commit()
+
+
+def upsert_laps(conn: sqlite3.Connection, laps: list[LapRow]) -> None:
+    conn.executemany("""
+        INSERT OR REPLACE INTO laps (
+            lap_id, activity_id, lap_index,
+            distance_m, moving_time_s, average_speed_mps,
+            average_heartrate, max_heartrate, average_cadence,
+            total_elevation_gain_m, pace_zone
+        ) VALUES (
+            :lap_id, :activity_id, :lap_index,
+            :distance_m, :moving_time_s, :average_speed_mps,
+            :average_heartrate, :max_heartrate, :average_cadence,
+            :total_elevation_gain_m, :pace_zone
+        )
+    """, laps)
     conn.commit()
 
 

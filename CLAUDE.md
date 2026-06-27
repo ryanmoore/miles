@@ -24,8 +24,9 @@ Strava API → miles-sync → SQLite (data/activities.db)
 ```
 
 Key files:
-- `miles/db.py` — schema, upsert, `ActivityRow` TypedDict, `WORKOUT_TYPE_MAP`
-- `miles/mcp_server.py` — MCP tools: `get_weekly_mileage`, `get_activities`, `get_training_block`, `get_marathon_comparison`, `run_sql`
+- `miles/db.py` — schema, upsert, `ActivityRow` / `LapRow` TypedDicts, `WORKOUT_TYPE_MAP`
+- `miles/classifier.py` — keyword-based `workout_label` classifier; extend `WORKOUT_LABEL_PATTERNS` to add new types
+- `miles/mcp_server.py` — MCP tools: `get_weekly_mileage`, `get_activities`, `get_training_block`, `get_marathon_comparison`, `get_workout_laps`, `run_sql`
 - `miles/api.py` — FastAPI endpoints `/api/marathons` and `/api/marathon-weeks`, also serves `miles/static/`
 - `miles/static/index.html` — ECharts line chart (3 tabs: Fastest 5 / Recent 3 / PR vs Recent) + two comparison tables (vanilla JS, no framework)
 - `.claude/commands/marathon-analysis.md` — `/marathon-analysis` skill for guided training analysis
@@ -47,6 +48,14 @@ Week offset SQL — anchored to `build_start` so all differences are positive (C
 CAST((julianday(DATE(start_date)) - julianday(build_start)) / 7.0 AS INTEGER) - 12 AS week_offset
 ```
 Range: `>= build_start AND <= race_date` (includes race day in week 0).
+
+## Workout laps & classification
+
+`miles-sync` lazily fetches laps for all `run_type = 'workout'` activities and stores them in the `laps` table. Each subsequent sync picks up any new workouts automatically.
+
+`miles/classifier.py` assigns a `workout_label` to each workout activity based on name keywords (e.g. "LT", "MP Flux", "Tempo"). Many activities remain unlabeled — either generic Strava auto-names ("Afternoon Run", "Evening Run") or one-off names. This is expected; query by `name LIKE` or `run_sql` for those. Labeled workouts support the `get_workout_laps` MCP tool for cross-build comparisons.
+
+Laps use the athlete's manual lap button or Garmin auto-lap (1-mile splits). Filter out artifact laps (`moving_time_s < 30` or `distance_m < 0.02`) when analyzing rep data.
 
 ## Development notes
 

@@ -1,13 +1,14 @@
 import os
+import time
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 from stravalib import Client
-from stravalib.model import SummaryActivity
+from stravalib.model import Lap, SummaryActivity
 
-from .db import WORKOUT_TYPE_MAP, ActivityRow
+from .db import WORKOUT_TYPE_MAP, ActivityRow, LapRow
 
 load_dotenv()
 
@@ -35,9 +36,49 @@ def _write_env_key(key: str, value: str) -> None:
     env_path.write_text("\n".join(updated) + "\n")
 
 
-def get_activities(after_ts: str | None = None) -> Iterator[ActivityRow]:
+def _lap_row(lap: Lap, activity_id: int) -> LapRow:
+    def secs(td: int | timedelta | None) -> int | None:
+        if td is None:
+            return None
+        return int(td.total_seconds()) if isinstance(td, timedelta) else int(td)
+
+    def flt(q: float | None) -> float | None:
+        return float(q) if q is not None else None
+
+    assert lap.id is not None, "Lap must have an id"
+    assert lap.lap_index is not None, "Lap must have a lap_index"
+    return {
+        "lap_id": lap.id,
+        "activity_id": activity_id,
+        "lap_index": lap.lap_index,
+        "distance_m": flt(lap.distance),
+        "moving_time_s": secs(lap.moving_time),
+        "average_speed_mps": flt(lap.average_speed),
+        "average_heartrate": lap.average_heartrate,
+        "max_heartrate": lap.max_heartrate,
+        "average_cadence": lap.average_cadence,
+        "total_elevation_gain_m": flt(lap.total_elevation_gain),
+        "pace_zone": lap.pace_zone,
+    }
+
+
+def _get_client() -> Client:
     access_token = _refresh_and_get_token()
     client = Client(access_token=access_token)
+    client.refresh_token = os.environ.get("STRAVA_REFRESH_TOKEN", "")
+    client.token_expires = int(time.time()) + 3600
+    return client
+
+
+def get_activity_laps_batch(activity_ids: list[int]) -> Iterator[tuple[int, list[LapRow]]]:
+    """Yield (activity_id, laps) for each id using a single token refresh."""
+    client = _get_client()
+    for aid in activity_ids:
+        yield aid, [_lap_row(lap, aid) for lap in client.get_activity_laps(aid)]
+
+
+def get_activities(after_ts: str | None = None) -> Iterator[ActivityRow]:
+    client = _get_client()
     for activity in client.get_activities(after=after_ts):
         yield row_from_activity(activity)
 

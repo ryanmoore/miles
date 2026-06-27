@@ -177,6 +177,66 @@ def get_marathons(build_weeks: int = _BUILD_WEEKS) -> list[MarathonRow]:
     return out
 
 
+class WeekPoint(TypedDict):
+    offset: int
+    miles: float
+
+
+class MarathonWeeks(TypedDict):
+    name: str | None
+    date: str
+    finish_time_s: int | None
+    finish_time: str
+    weeks: list[WeekPoint]
+
+
+@app.get("/api/marathon-weeks")
+def get_marathon_weeks(build_weeks: int = _BUILD_WEEKS) -> list[MarathonWeeks]:
+    """
+    Weekly mileage for each marathon build, with each week expressed as an
+    offset from race day (0 = race week, -1 = one week before, etc.).
+    Race day itself is excluded so week 0 shows only taper runs.
+    """
+    conn = _conn()
+    tc, tp = _type_clause()
+
+    races = conn.execute("""
+        SELECT name, DATE(start_date) AS race_date, moving_time_s
+        FROM activities
+        WHERE run_type = 'race' AND distance_m BETWEEN ? AND ?
+        ORDER BY race_date
+    """, [_MARATHON_MIN_M, _MARATHON_MAX_M]).fetchall()
+
+    out: list[MarathonWeeks] = []
+    for race in races:
+        race_date: str = race["race_date"]
+        build_start: str = conn.execute(
+            "SELECT DATE(?, ?)", (race_date, f"-{build_weeks * 7} days")
+        ).fetchone()[0]
+
+        week_rows = conn.execute(f"""
+            SELECT
+                CAST((julianday(DATE(start_date)) - julianday(?)) / 7.0 AS INTEGER) AS week_offset,
+                ROUND(SUM(distance_m) / 1609.34, 2) AS miles
+            FROM activities
+            WHERE {tc}
+              AND DATE(start_date) >= ?
+              AND DATE(start_date) < ?
+            GROUP BY week_offset
+            ORDER BY week_offset
+        """, [race_date] + tp + [build_start, race_date]).fetchall()
+
+        out.append(MarathonWeeks(
+            name=race["name"],
+            date=race_date,
+            finish_time_s=race["moving_time_s"],
+            finish_time=_fmt_time(race["moving_time_s"]),
+            weeks=[WeekPoint(offset=row["week_offset"], miles=row["miles"]) for row in week_rows],
+        ))
+
+    return out
+
+
 app.mount("/", StaticFiles(directory=str(_STATIC), html=True), name="static")
 
 

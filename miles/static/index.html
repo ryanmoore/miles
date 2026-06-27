@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Miles</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -38,6 +39,16 @@
       letter-spacing: -0.01em;
       margin-bottom: 0.25rem;
     }
+    .chart-wrap {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+      padding: 1.25rem 1.25rem 0.75rem;
+      position: relative;
+      height: 380px;
+    }
+
     .desc {
       font-size: 0.8rem;
       color: #94a3b8;
@@ -105,6 +116,14 @@
 
 <main>
   <div id="status">Loading…</div>
+
+  <section>
+    <h2>Weekly Mileage by Build</h2>
+    <p class="desc">Each line is one marathon build · weeks run right to race day · virtual races dashed</p>
+    <div class="chart-wrap">
+      <div id="chart-builds" style="width:100%;height:100%"></div>
+    </div>
+  </section>
 
   <section>
     <h2>Build Comparison</h2>
@@ -225,7 +244,113 @@
     document.getElementById('body-peaks').innerHTML  = rowsPeaks.join('');
   }
 
-  load().catch(err => {
+  const PALETTE = [
+    '#1d4ed8','#b91c1c','#15803d','#b45309','#6d28d9',
+    '#be185d','#0e7490','#4d7c0f','#c2410c','#4338ca',
+    '#047857','#9d174d','#0369a1','#78716c',
+  ];
+
+  async function loadChart() {
+    const res = await fetch('/api/marathon-weeks');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    const BUILD_WEEKS = 12;
+    const offsets = Array.from({ length: BUILD_WEEKS + 1 }, (_, i) => i - BUILD_WEEKS);
+    const labels  = offsets.map(o => o === 0 ? 'Race wk' : String(Math.abs(o)));
+
+    const real   = data.filter(r => !r.name?.includes('Virtual'))
+                       .sort((a, b) => (a.finish_time_s ?? 99999) - (b.finish_time_s ?? 99999));
+    const virt   = data.filter(r =>  r.name?.includes('Virtual'));
+    const sorted = [...real, ...virt];
+
+    const series = sorted.map((marathon, i) => {
+      const weekMap   = Object.fromEntries(marathon.weeks.map(w => [w.offset, w.miles]));
+      const isVirtual = marathon.name?.includes('Virtual') ?? false;
+      const isPR      = !isVirtual && i === 0;
+      return {
+        name: `${marathon.name} (${marathon.finish_time})`,
+        type: 'line',
+        data: offsets.map(o => weekMap[o] ?? null),
+        connectNulls: false,
+        symbol: 'none',
+        lineStyle: {
+          width: isPR ? 2.5 : 1.5,
+          type: isVirtual ? 'dashed' : 'solid',
+        },
+        emphasis: {
+          focus: 'series',
+          lineStyle: { width: isPR ? 3.5 : 2.5 },
+        },
+        blur: {
+          lineStyle: { opacity: 0.12 },
+        },
+      };
+    });
+
+    const chart = echarts.init(document.getElementById('chart-builds'));
+    chart.setOption({
+      color: PALETTE,
+      grid: { top: 16, right: 24, bottom: 72, left: 52 },
+      legend: {
+        type: 'scroll',
+        bottom: 0,
+        itemWidth: 18,
+        itemHeight: 3,
+        textStyle: { fontSize: 11, color: '#475569' },
+        pageTextStyle: { color: '#94a3b8', fontSize: 11 },
+      },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'line', lineStyle: { color: '#e2e8f0', width: 1 } },
+        backgroundColor: '#fff',
+        borderColor: '#e2e8f0',
+        textStyle: { fontSize: 12, color: '#1e293b' },
+        formatter(params) {
+          const lbl   = params[0].axisValue;
+          const title = lbl === 'Race wk' ? 'Race week'
+                      : `${lbl} week${lbl === '1' ? '' : 's'} before race`;
+          const rows  = params
+            .filter(p => p.value != null)
+            .sort((a, b) => b.value - a.value)
+            .map(p => `<div style="display:flex;justify-content:space-between;gap:1rem">
+                         <span>${p.marker}${p.seriesName}</span>
+                         <b>${p.value.toFixed(1)} mi</b>
+                       </div>`)
+            .join('');
+          return `<div style="font-weight:600;margin-bottom:6px;color:#0f172a">${title}</div>${rows}`;
+        },
+      },
+      xAxis: {
+        type: 'category',
+        data: labels,
+        axisLine: { lineStyle: { color: '#e2e8f0' } },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 11, color: '#94a3b8' },
+        name: 'Weeks before race',
+        nameLocation: 'middle',
+        nameGap: 28,
+        nameTextStyle: { fontSize: 11, color: '#94a3b8' },
+      },
+      yAxis: {
+        type: 'value',
+        name: 'Miles',
+        nameLocation: 'middle',
+        nameGap: 40,
+        nameTextStyle: { fontSize: 11, color: '#94a3b8' },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: '#f1f5f9' } },
+        axisLabel: { fontSize: 11, color: '#94a3b8' },
+        min: 0,
+      },
+      series,
+    });
+
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  Promise.all([load(), loadChart()]).catch(err => {
     document.getElementById('status').textContent = `Error: ${err.message}`;
   });
 </script>

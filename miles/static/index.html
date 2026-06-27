@@ -26,7 +26,7 @@
     header h1 { font-size: 1.125rem; font-weight: 700; letter-spacing: -0.02em; }
     header span { font-size: 0.8125rem; color: #64748b; }
 
-    main { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+    main { max-width: 1600px; margin: 0 auto; padding: 1.5rem 2rem; }
 
     #status { font-size: 0.8125rem; color: #94a3b8; margin-bottom: 2rem; }
 
@@ -46,7 +46,7 @@
       box-shadow: 0 1px 2px rgba(0,0,0,0.04);
       padding: 1.25rem 1.25rem 0.75rem;
       position: relative;
-      height: 380px;
+      height: 500px;
     }
 
     .desc {
@@ -244,11 +244,32 @@
     document.getElementById('body-peaks').innerHTML  = rowsPeaks.join('');
   }
 
-  const PALETTE = [
-    '#1d4ed8','#b91c1c','#15803d','#b45309','#6d28d9',
-    '#be185d','#0e7490','#4d7c0f','#c2410c','#4338ca',
-    '#047857','#9d174d','#0369a1','#78716c',
-  ];
+  function buildColor(index, total, isVirtual) {
+    if (isVirtual) return '#94a3b8';
+    const t = total > 1 ? index / (total - 1) : 0; // 0=fastest, 1=slowest
+    const h = Math.round(220 + t * (25 - 220));     // blue → orange
+    const l = 42 + t * 6;                           // slightly lighter for slower
+    return `hsl(${h}, 75%, ${l}%)`;
+  }
+
+  function legendLabel(name, finish_time_s, date) {
+    const nameYear = (name.match(/\d{4}/) ?? [])[0];
+    const fallback = date ? date.slice(0, 4) : null;
+    const year = nameYear ?? fallback;
+    const yr = year ? `'${year.slice(2)}` : '';
+    let short = name
+      .replace("Grandma's Marathon", "Grandma's")
+      .replace('Marathon', '')
+      .replace(/\s+/g, ' ').trim();
+    if (nameYear) {
+      short = short.replace(nameYear, yr).replace(/\s+/g, ' ').trim();
+    } else if (year) {
+      short = `${short} ${yr}`;
+    }
+    const h = Math.floor(finish_time_s / 3600);
+    const m = String(Math.floor((finish_time_s % 3600) / 60)).padStart(2, '0');
+    return `${short} · ${h}:${m}`;
+  }
 
   async function loadChart() {
     const res = await fetch('/api/marathon-weeks');
@@ -264,33 +285,56 @@
     const virt   = data.filter(r =>  r.name?.includes('Virtual'));
     const sorted = [...real, ...virt];
 
+    const realCount = real.length;
     const series = sorted.map((marathon, i) => {
       const weekMap   = Object.fromEntries(marathon.weeks.map(w => [w.offset, w.miles]));
       const isVirtual = marathon.name?.includes('Virtual') ?? false;
       const isPR      = !isVirtual && i === 0;
+      const color     = buildColor(i, realCount, isVirtual);
+      const label     = legendLabel(marathon.name ?? '', marathon.finish_time_s ?? 0, marathon.date);
       return {
-        name: `${marathon.name} (${marathon.finish_time})`,
+        name: label,
         type: 'line',
+        color,
+        z: isPR ? 10 : 1,
         data: offsets.map(o => weekMap[o] ?? null),
         connectNulls: false,
         symbol: 'none',
         lineStyle: {
-          width: isPR ? 2.5 : 1.5,
+          color,
+          width: isPR ? 3 : 1.5,
           type: isVirtual ? 'dashed' : 'solid',
         },
         emphasis: {
           focus: 'series',
-          lineStyle: { width: isPR ? 3.5 : 2.5 },
+          lineStyle: { width: isPR ? 4 : 2.5 },
         },
         blur: {
           lineStyle: { opacity: 0.12 },
         },
+        markPoint: {
+          symbol: 'circle',
+          symbolSize: 6,
+          itemStyle: { color, borderColor: '#fff', borderWidth: 1.5 },
+          data: [{ type: 'max', label: { show: false } }],
+        },
+        ...(i === 0 ? {
+          markArea: {
+            silent: true,
+            itemStyle: { color: 'rgba(148,163,184,0.07)' },
+            label: {
+              show: true, position: 'insideTopLeft',
+              formatter: 'Taper', fontSize: 10, color: '#94a3b8',
+            },
+            data: [[{ xAxis: '2' }, { xAxis: 'Race wk' }]],
+          },
+        } : {}),
       };
     });
 
     const chart = echarts.init(document.getElementById('chart-builds'));
     chart.setOption({
-      color: PALETTE,
+      animation: false,
       grid: { top: 16, right: 24, bottom: 72, left: 52 },
       legend: {
         type: 'scroll',
@@ -316,9 +360,13 @@
             .map(p => `<div style="display:flex;justify-content:space-between;gap:1rem">
                          <span>${p.marker}${p.seriesName}</span>
                          <b>${p.value.toFixed(1)} mi</b>
-                       </div>`)
-            .join('');
-          return `<div style="font-weight:600;margin-bottom:6px;color:#0f172a">${title}</div>${rows}`;
+                       </div>`);
+          const visible = rows.slice(0, 8);
+          const extra   = rows.length - visible.length;
+          const more    = extra > 0
+            ? `<div style="color:#94a3b8;font-size:11px;margin-top:4px">… ${extra} more</div>`
+            : '';
+          return `<div style="font-weight:600;margin-bottom:6px;color:#0f172a">${title}</div>${visible.join('')}${more}`;
         },
       },
       xAxis: {
@@ -342,7 +390,7 @@
         axisTick: { show: false },
         splitLine: { lineStyle: { color: '#f1f5f9' } },
         axisLabel: { fontSize: 11, color: '#94a3b8' },
-        min: 0,
+        min: val => Math.max(0, Math.floor((val.min - 5) / 5) * 5),
       },
       series,
     });

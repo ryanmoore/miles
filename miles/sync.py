@@ -1,15 +1,23 @@
+import sqlite3
+import time
+from datetime import datetime
+
 import click
+from stravalib.exc import Fault
 
 from . import db, strava_client
 from .classifier import classify_workout
 
 
-@click.command()
-@click.option("--full", is_flag=True, help="Ignore last sync date and fetch everything.")
-def main(full: bool) -> None:
-    conn = db.connect()
-    db.init_db(conn)
+def _wait_for_rate_limit() -> None:
+    now = datetime.now()
+    seconds_into_window = (now.minute % 15) * 60 + now.second
+    wait = (15 * 60) - seconds_into_window + 5  # +5s buffer past window boundary
+    print(f"\nRate limit hit — sleeping {wait}s until next 15-min window...", flush=True)
+    time.sleep(wait)
 
+
+def _run(conn: sqlite3.Connection, full: bool) -> None:
     after = None if full else db.last_synced_date(conn)
     if after:
         print(f"Incremental sync: fetching activities after {after}")
@@ -43,7 +51,6 @@ def main(full: bool) -> None:
         names = {a["activity_id"]: a["name"] for a in unsynced}
         lap_total = 0
         for i, (activity_id, laps) in enumerate(strava_client.get_activity_laps_batch(ids), 1):
-            print(f"  {i}/{total_workouts} workouts ({lap_total} laps so far)...", end="\r")
             if laps:
                 db.upsert_laps(conn, laps)
                 lap_total += len(laps)
@@ -56,7 +63,9 @@ def main(full: bool) -> None:
                         (label, activity_id),
                     )
                     conn.commit()
-        print(f"  {total_workouts}/{total_workouts} workouts — {lap_total} laps synced.    ")
+            if i % 5 == 0 or i == total_workouts:
+                print(f"  {i}/{total_workouts} workouts, {lap_total} laps...")
+        print(f"Laps done. {lap_total} total.")
 
     # Backfill labels for any workout activities that have laps but no label yet.
     unlabeled = conn.execute("""
@@ -65,9 +74,9 @@ def main(full: bool) -> None:
           AND activity_id IN (SELECT DISTINCT activity_id FROM laps)
     """).fetchall()
     for activity in unlabeled:
-        name: str | None = activity["name"]
-        if name:
-            label = classify_workout(name)
+        unlabeled_name: str | None = activity["name"]
+        if unlabeled_name:
+            label = classify_workout(unlabeled_name)
             if label:
                 conn.execute(
                     "UPDATE activities SET workout_label = ? WHERE activity_id = ?",
@@ -75,6 +84,22 @@ def main(full: bool) -> None:
                 )
     if unlabeled:
         conn.commit()
+
+
+@click.command()
+@click.option("--full", is_flag=True, help="Ignore last sync date and fetch everything.")
+def main(full: bool) -> None:
+    conn = db.connect()
+    db.init_db(conn)
+    while True:
+        try:
+            _run(conn, full)
+            break
+        except Fault as e:
+            if e.response is not None and e.response.status_code == 429:
+                _wait_for_rate_limit()
+            else:
+                raise
 
 
 if __name__ == "__main__":

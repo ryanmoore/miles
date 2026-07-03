@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .derive import ensure_derived
+from .format import fmt_time as _fmt_time
 from .races import MARATHON_MAX_M, MARATHON_MIN_M
 
 app = FastAPI(title="miles")
@@ -56,15 +57,6 @@ def _conn() -> sqlite3.Connection:
 def _type_clause() -> tuple[str, list[str]]:
     ph = ",".join("?" * len(_RUN_TYPES))
     return f"sport_type IN ({ph})", list(_RUN_TYPES)
-
-
-def _fmt_time(seconds: int | None) -> str:
-    if seconds is None:
-        return "—"
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
-    return f"{h}:{m:02d}:{s:02d}"
 
 
 @app.get("/api/marathons")

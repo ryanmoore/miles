@@ -8,7 +8,8 @@ from mcp.server.fastmcp import FastMCP
 from . import db
 from .builds import RaceRef, detect_builds
 from .derive import ensure_derived
-from .periods import WeekAgg, detect_periods
+from .format import fmt_time
+from .periods import WeekAgg, _is_active, detect_periods
 from .races import MARATHON_MAX_M, MARATHON_MIN_M, classify_race_distance
 
 mcp = FastMCP("miles")
@@ -289,6 +290,153 @@ def get_marathon_comparison(build_weeks: int = 12) -> str:
         })
 
     return json.dumps(_fmt_paces(out))
+
+
+def _race_rows(
+    conn: sqlite3.Connection,
+    distance_category: str | None = None,
+    start_date: str | None = None,
+) -> list[dict[str, object]]:
+    """
+    All effective-race activities, ascending by date. PR flags are computed over
+    the athlete's full race history first; distance_category/start_date filter
+    the returned rows afterward, so filtering never changes an is_pr verdict.
+    """
+    effective_run_type = db.effective_run_type_sql("a")
+    _, sport_params = _run_type_filter()
+    placeholders = ",".join("?" * len(sport_params))
+    where = f"WHERE a.sport_type IN ({placeholders}) AND {effective_run_type} = 'race'"
+
+    rows = conn.execute(f"""
+        SELECT
+            a.activity_id,
+            a.name,
+            DATE(a.start_date) AS date,
+            a.distance_m,
+            ROUND(a.distance_m / 1609.34, 2) AS distance_miles,
+            a.moving_time_s,
+            CASE WHEN a.average_speed_mps > 0
+                 THEN ROUND(26.8224 / a.average_speed_mps, 2)
+                 ELSE NULL END AS pace_min_per_mile,
+            ROUND(a.average_heartrate, 1) AS avg_hr,
+            CASE WHEN a.workout_type = 0 AND a.run_type_inferred IS NOT NULL
+                 THEN 'inferred' ELSE 'strava' END AS run_type_source
+        FROM activities a
+        {where}
+        ORDER BY date ASC
+    """, sport_params).fetchall()
+
+    best_finish_s: dict[str, int] = {}
+    out: list[dict[str, object]] = []
+    for r in rows:
+        category: str = classify_race_distance(r["distance_m"]) or "other"
+        finish_time_s: int | None = r["moving_time_s"]
+        is_pr = False
+        if category != "other" and finish_time_s is not None:
+            best = best_finish_s.get(category)
+            if best is None or finish_time_s < best:
+                is_pr = True
+                best_finish_s[category] = finish_time_s
+
+        if distance_category is not None and category != distance_category:
+            continue
+        race_date: str = r["date"]
+        if start_date is not None and race_date < start_date:
+            continue
+
+        out.append({
+            "activity_id": r["activity_id"],
+            "name": r["name"],
+            "date": race_date,
+            "distance_category": category,
+            "distance_miles": r["distance_miles"],
+            "finish_time_s": finish_time_s,
+            "finish_time": fmt_time(finish_time_s),
+            "pace_min_per_mile": r["pace_min_per_mile"],
+            "avg_hr": r["avg_hr"],
+            "run_type_source": r["run_type_source"],
+            "is_pr": is_pr,
+        })
+    return out
+
+
+@mcp.tool()
+def get_race_history(distance_category: str | None = None, start_date: str | None = None) -> str:
+    """
+    Every race at every distance, with PR flags and an 8-week pre-race training
+    snapshot — the casual/varied-distance athlete's analogue of
+    get_marathon_comparison.
+
+    distance_category comes from distance buckets (5K, 10K, half, marathon, ...);
+    non-standard distances fall into "other" and are never PR-flagged.
+    is_pr means "was a PR when run": the fastest finish so far, chronologically,
+    within its category — a later faster race supersedes it for later dates, but
+    the historical flag on the earlier race stays true.
+
+    Optionally filter by distance_category (applied after categorization, so
+    "other" is filterable too) or start_date (YYYY-MM-DD, inclusive) — filtering
+    never changes is_pr, which always reflects full race history.
+    Results are ascending by date (newest last). Returns [] if no races found.
+
+    Each race also carries pre_race_8wk: runs, miles, longest_run_miles, and
+    active_weeks over the 8 Monday-aligned weeks before the race's week
+    (excluding race week itself) — active week defined as in get_training_periods.
+    """
+    conn = _conn()
+    rows = _race_rows(conn, distance_category=distance_category, start_date=start_date)
+
+    type_clause, type_params = _run_type_filter()
+    for row in rows:
+        race_dt = date.fromisoformat(str(row["date"]))
+        race_week_monday = race_dt - timedelta(days=race_dt.weekday())
+        window_start = race_week_monday - timedelta(weeks=8)
+
+        week_rows = conn.execute(f"""
+            SELECT
+                DATE(start_date, '-' || ((CAST(strftime('%w', start_date) AS INTEGER) + 6) % 7) || ' days') AS monday,
+                ROUND(SUM(distance_m) / 1609.34, 2) AS miles,
+                COUNT(*) AS runs
+            FROM activities
+            WHERE {type_clause}
+              AND DATE(start_date) >= ?
+              AND DATE(start_date) < ?
+            GROUP BY monday
+        """, type_params + [window_start.isoformat(), race_week_monday.isoformat()]).fetchall()
+
+        by_monday = {r["monday"]: r for r in week_rows}
+        active_weeks = 0
+        d = window_start
+        while d < race_week_monday:
+            wr = by_monday.get(d.isoformat())
+            week: WeekAgg = {
+                "monday": d.isoformat(),
+                "miles": (wr["miles"] or 0.0) if wr else 0.0,
+                "runs": (wr["runs"] or 0) if wr else 0,
+                "workouts": 0,
+            }
+            if _is_active(week):
+                active_weeks += 1
+            d += timedelta(weeks=1)
+
+        totals = conn.execute(f"""
+            SELECT
+                COUNT(*) AS runs,
+                ROUND(SUM(distance_m) / 1609.34, 1) AS miles,
+                ROUND(MAX(distance_m) / 1609.34, 1) AS longest_run_miles
+            FROM activities
+            WHERE {type_clause}
+              AND DATE(start_date) >= ?
+              AND DATE(start_date) < ?
+        """, type_params + [window_start.isoformat(), race_week_monday.isoformat()]).fetchone()
+
+        row["pre_race_8wk"] = {
+            "runs": totals["runs"] or 0,
+            "miles": totals["miles"] or 0.0,
+            "longest_run_miles": totals["longest_run_miles"] or 0.0,
+            "active_weeks": active_weeks,
+        }
+
+    return json.dumps(_fmt_paces(rows))
 
 
 @mcp.tool()

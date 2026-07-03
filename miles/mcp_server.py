@@ -7,7 +7,8 @@ from mcp.server.fastmcp import FastMCP
 
 from . import db
 from .derive import ensure_derived
-from .races import MARATHON_MAX_M, MARATHON_MIN_M
+from .periods import WeekAgg, detect_periods
+from .races import MARATHON_MAX_M, MARATHON_MIN_M, classify_race_distance
 
 mcp = FastMCP("miles")
 
@@ -287,6 +288,79 @@ def get_marathon_comparison(build_weeks: int = 12) -> str:
         })
 
     return json.dumps(_fmt_paces(out))
+
+
+@mcp.tool()
+def get_training_periods(start_date: str | None = None) -> str:
+    """
+    Detects stretches of consistent training ("periods") separated by gaps of
+    3+ empty weeks, from weekly mileage/run-count. Use this instead of assuming
+    a fixed build window when training is sporadic — a sporadic athlete's real
+    structure is bursts of training separated by gaps, not clean 12-week builds.
+
+    Periods describe continuity, not race preparation: there is no maximum
+    period length, so a consistent year-round runner correctly yields one long
+    period — that is not a "build" and should not be described as one.
+    `fragment: true` marks short-lived active clusters too brief to call a period.
+
+    Optionally restrict to weeks starting on/after start_date (YYYY-MM-DD).
+    Returns {"periods": [...], "gaps": [{"start", "end", "weeks"}, ...]}.
+    Each period also carries `races`: races (effective run type, including
+    inferred) that fall within it, each as
+    {date, name, distance_category, distance_miles}.
+    """
+    conn = _conn()
+    type_clause, type_params = _run_type_filter()
+    where = f"WHERE {type_clause}"
+    params = list(type_params)
+    if start_date:
+        where += " AND start_date >= ?"
+        params.append(start_date)
+
+    week_rows = conn.execute(f"""
+        SELECT
+            DATE(start_date, '-' || ((CAST(strftime('%w', start_date) AS INTEGER) + 6) % 7) || ' days') AS monday,
+            ROUND(SUM(distance_m) / 1609.34, 2) AS miles,
+            COUNT(*) AS runs
+        FROM activities
+        {where}
+        GROUP BY monday
+        ORDER BY monday
+    """, params).fetchall()
+
+    weeks: list[WeekAgg] = [
+        {"monday": r["monday"], "miles": r["miles"] or 0.0, "runs": r["runs"]}
+        for r in week_rows
+    ]
+    periods, gaps = detect_periods(weeks)
+    if not periods:
+        return json.dumps({"periods": [], "gaps": []})
+
+    effective_run_type = db.effective_run_type_sql()
+    race_type_clause, race_type_params = _run_type_filter()
+    race_rows = conn.execute(f"""
+        SELECT DATE(start_date) AS date, name, distance_m,
+               ROUND(distance_m / 1609.34, 2) AS distance_miles
+        FROM activities
+        WHERE {race_type_clause} AND {effective_run_type} = 'race'
+        ORDER BY date
+    """, race_type_params).fetchall()
+
+    races = [
+        {
+            "date": r["date"],
+            "name": r["name"],
+            "distance_category": classify_race_distance(r["distance_m"]) or "other",
+            "distance_miles": r["distance_miles"],
+        }
+        for r in race_rows
+    ]
+
+    out_periods = [
+        {**p, "races": [r for r in races if p["start"] <= r["date"] <= p["end"]]}
+        for p in periods
+    ]
+    return json.dumps({"periods": out_periods, "gaps": gaps})
 
 
 @mcp.tool()

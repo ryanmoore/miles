@@ -8,11 +8,10 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import db
+from .races import MARATHON_MAX_M, MARATHON_MIN_M
 
 app = FastAPI(title="miles")
 
-_MARATHON_MIN_M = 42000.0
-_MARATHON_MAX_M = 43500.0
 _BUILD_WEEKS = 12
 _RUN_TYPES = ("Run", "TrailRun", "VirtualRun")
 _STATIC = Path(__file__).parent / "static"
@@ -88,7 +87,7 @@ def get_marathons(build_weeks: int = _BUILD_WEEKS) -> list[MarathonRow]:
         WHERE run_type = 'race'
           AND distance_m BETWEEN ? AND ?
         ORDER BY race_date
-    """, [_MARATHON_MIN_M, _MARATHON_MAX_M]).fetchall()
+    """, [MARATHON_MIN_M, MARATHON_MAX_M]).fetchall()
 
     out: list[MarathonRow] = []
     for race in races:
@@ -206,7 +205,7 @@ def get_marathon_weeks(build_weeks: int = _BUILD_WEEKS) -> list[MarathonWeeks]:
         FROM activities
         WHERE run_type = 'race' AND distance_m BETWEEN ? AND ?
         ORDER BY race_date
-    """, [_MARATHON_MIN_M, _MARATHON_MAX_M]).fetchall()
+    """, [MARATHON_MIN_M, MARATHON_MAX_M]).fetchall()
 
     out: list[MarathonWeeks] = []
     for race in races:

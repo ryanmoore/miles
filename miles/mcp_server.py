@@ -7,6 +7,7 @@ from mcp.server.fastmcp import FastMCP
 
 from . import db
 from .classifier import LapType, classify_laps
+from .races import MARATHON_MAX_M, MARATHON_MIN_M
 
 mcp = FastMCP("miles")
 
@@ -193,10 +194,6 @@ def get_training_block(start_date: str, end_date: str) -> str:
         "total": dict(totals),
         "by_type": [dict(r) for r in by_type],
     }))
-
-
-MARATHON_MIN_M = 42000.0
-MARATHON_MAX_M = 43500.0
 
 
 @mcp.tool()

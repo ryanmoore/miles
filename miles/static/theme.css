@@ -1,0 +1,203 @@
+/* Design tokens shared by every static page. Source of truth for colors,
+   type, and the extracted table/tab/chrome styles. Light is default; dark
+   follows prefers-color-scheme. Chart pages read these via getComputedStyle
+   in nav.js's chartTheme(). */
+
+:root {
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --bg: #f9f9f7;
+  --surface: #fcfcfb;
+  --text: #0b0b0b;
+  --text-secondary: #52514e;
+  --muted: #898781;
+  --gridline: #e1e0d9;
+  --baseline: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --accent: #2a78d6;
+  --good: #006300;
+
+  --series-1: #2a78d6; /* blue */
+  --series-2: #1baf7a; /* aqua */
+  --series-3: #eda100; /* yellow */
+  --series-4: #008300; /* green */
+  --series-5: #4a3aa7; /* violet */
+  --series-6: #e34948; /* red */
+  --series-7: #e87ba4; /* magenta */
+  --series-8: #eb6834; /* orange */
+
+  --pr-bg: #f0fdf4;
+  --pr-bg-hover: #dcfce7;
+  --sub3-bg: #fafffe;
+  --sub3-bg-hover: #ecfdf5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d0d0d;
+    --surface: #1a1a19;
+    --text: #ffffff;
+    --text-secondary: #c3c2b7;
+    --muted: #898781;
+    --gridline: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --accent: #3987e5;
+    --good: #0ca30c;
+
+    --series-1: #3987e5;
+    --series-2: #199e70;
+    --series-3: #c98500;
+    --series-4: #008300;
+    --series-5: #9085e9;
+    --series-6: #e66767;
+    --series-7: #d55181;
+    --series-8: #d95926;
+
+    --pr-bg: #0f2417;
+    --pr-bg-hover: #14301d;
+    --sub3-bg: #10201a;
+    --sub3-bg-hover: #142a22;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+/* Shared chrome, injected by nav.js */
+.site-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 1.25rem 2rem;
+  display: flex;
+  align-items: baseline;
+  gap: 1.5rem;
+}
+.site-header .brand {
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  text-decoration: none;
+}
+.site-header nav { display: flex; gap: 1.25rem; }
+.site-header nav a {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+}
+.site-header nav a:hover { color: var(--text-secondary); }
+.site-header nav a.active { color: var(--accent); font-weight: 600; }
+
+main { max-width: 1600px; margin: 0 auto; padding: 1.5rem 2rem; }
+
+.lede { font-size: 0.8125rem; color: var(--muted); margin-bottom: 2rem; }
+
+#status { font-size: 0.8125rem; color: var(--muted); margin-bottom: 2rem; }
+
+section { margin-bottom: 3rem; }
+
+section h2 {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  margin-bottom: 0.25rem;
+}
+
+.chart-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  padding: 1.25rem 1.25rem 0.75rem;
+  position: relative;
+  height: 500px;
+}
+
+.desc {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.875rem;
+}
+
+.scroll {
+  overflow-x: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+thead th {
+  padding: 0.5rem 1rem;
+  background: var(--bg);
+  font-weight: 600;
+  color: var(--muted);
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+thead th.r { text-align: right; }
+
+tbody td {
+  padding: 0.5625rem 1rem;
+  border-bottom: 1px solid var(--gridline);
+  color: var(--text-secondary);
+  vertical-align: middle;
+}
+tbody tr:last-child td { border-bottom: none; }
+
+td.r    { text-align: right; font-variant-numeric: tabular-nums; }
+td.dim  { color: var(--muted); font-size: 0.75rem; }
+td.bold { font-weight: 600; }
+td.dash { text-align: right; color: var(--baseline); }
+
+tr.pr   td { background: var(--pr-bg); }
+tr.pr   td.bold { color: var(--good); }
+tr.sub3 td { background: var(--sub3-bg); }
+tr.virt td { color: var(--muted); font-style: italic; }
+tr.virt td.bold { color: var(--muted); font-weight: 500; }
+
+tbody tr:not(.virt):hover td { background: var(--bg); }
+tr.pr:hover td   { background: var(--pr-bg-hover); }
+tr.sub3:hover td { background: var(--sub3-bg-hover); }
+
+.mode-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+.mode-tab {
+  padding: 0.25rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+.mode-tab.active {
+  background: var(--text);
+  color: var(--surface);
+  border-color: var(--text);
+}
+.mode-tab:hover:not(.active) { background: var(--gridline); }

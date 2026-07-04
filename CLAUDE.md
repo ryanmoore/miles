@@ -67,6 +67,8 @@ Laps use the athlete's manual lap button or Garmin auto-lap (1-mile splits). Fil
 
 `miles-api` runs uvicorn with `reload=True` — edits to `api.py` or `static/index.html` take effect on browser refresh. Do not kill or restart the server.
 
+`miles/static/theme.css` is the token source (colors, chart palette, type, shared table/tab/nav classes) for every static page — new pages link it rather than redefining styles. `nav.js` injects the shared header and exposes `chartTheme()` for ECharts pages.
+
 ECharts chart container must be `<div>`, not `<canvas>` — ECharts manages its own canvas internally.
 
 The chart has three tabs (Fastest 5 / Recent 3 / PR vs Recent) toggling which builds are highlighted. Set `animation: false` on the ECharts instance — draw animations cause screenshot artifacts.

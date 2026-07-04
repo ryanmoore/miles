@@ -4,140 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Miles</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
+  <link rel="stylesheet" href="/theme.css">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f8fafc;
-      color: #1e293b;
-      min-height: 100vh;
-    }
-
-    header {
-      background: #0f172a;
-      color: #fff;
-      padding: 1.25rem 2rem;
-      display: flex;
-      align-items: baseline;
-      gap: 1rem;
-    }
-    header h1 { font-size: 1.125rem; font-weight: 700; letter-spacing: -0.02em; }
-    header span { font-size: 0.8125rem; color: #64748b; }
-
-    main { max-width: 1600px; margin: 0 auto; padding: 1.5rem 2rem; }
-
-    #status { font-size: 0.8125rem; color: #94a3b8; margin-bottom: 2rem; }
-
-    section { margin-bottom: 3rem; }
-
-    section h2 {
-      font-size: 0.9375rem;
-      font-weight: 600;
-      color: #0f172a;
-      letter-spacing: -0.01em;
-      margin-bottom: 0.25rem;
-    }
-    .chart-wrap {
-      background: #fff;
-      border: 1px solid #e2e8f0;
-      border-radius: 8px;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-      padding: 1.25rem 1.25rem 0.75rem;
-      position: relative;
-      height: 500px;
-    }
-
-    .desc {
-      font-size: 0.8rem;
-      color: #94a3b8;
-      margin-bottom: 0.875rem;
-    }
-
-    .scroll {
-      overflow-x: auto;
-      border-radius: 8px;
-      border: 1px solid #e2e8f0;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      background: #fff;
-      font-size: 0.8125rem;
-      white-space: nowrap;
-    }
-
-    thead th {
-      padding: 0.5rem 1rem;
-      background: #f8fafc;
-      font-weight: 600;
-      color: #64748b;
-      text-align: left;
-      border-bottom: 1px solid #e2e8f0;
-      font-size: 0.7rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    thead th.r { text-align: right; }
-
-    tbody td {
-      padding: 0.5625rem 1rem;
-      border-bottom: 1px solid #f1f5f9;
-      color: #334155;
-      vertical-align: middle;
-    }
-    tbody tr:last-child td { border-bottom: none; }
-
-    td.r   { text-align: right; font-variant-numeric: tabular-nums; }
-    td.dim  { color: #94a3b8; font-size: 0.75rem; }
-    td.bold { font-weight: 600; }
-    td.dash { text-align: right; color: #cbd5e1; }
-
-    tr.pr   td { background: #f0fdf4; }
-    tr.pr   td.bold { color: #15803d; }
-    tr.sub3 td { background: #fafffe; }
-    tr.virt td { color: #94a3b8; font-style: italic; }
-    tr.virt td.bold { color: #94a3b8; font-weight: 500; }
-
-    tbody tr:not(.virt):hover td { background: #f8fafc; }
-    tr.pr:hover td  { background: #dcfce7; }
-    tr.sub3:hover td { background: #ecfdf5; }
-
-    .mode-tabs {
-      display: flex;
-      gap: 0.25rem;
-      margin-bottom: 0.75rem;
-    }
-    .mode-tab {
-      padding: 0.25rem 0.75rem;
-      border: 1px solid #e2e8f0;
-      border-radius: 4px;
-      background: #f8fafc;
-      color: #64748b;
-      font-size: 0.75rem;
-      font-weight: 500;
-      cursor: pointer;
-      font-family: inherit;
-    }
-    .mode-tab.active {
-      background: #0f172a;
-      color: #fff;
-      border-color: #0f172a;
-    }
-    .mode-tab:hover:not(.active) { background: #f1f5f9; }
-  </style>
 </head>
 <body>
-
-<header>
-  <h1>Miles</h1>
-  <span>marathon build analysis</span>
-</header>
+<script src="/nav.js"></script>
 
 <main>
+  <p class="lede">marathon build analysis</p>
   <div id="status">Loading…</div>
 
   <section>
@@ -272,14 +147,16 @@
     document.getElementById('body-peaks').innerHTML  = rowsPeaks.join('');
   }
 
-  function gradientColor(rank, total) {
+  function gradientColor(rank, total, dark) {
     const t = total > 1 ? rank / (total - 1) : 0;
-    return `hsl(${Math.round(215 + t * (15 - 215))}, 82%, ${42 + t * 6}%)`;
+    const l = dark ? 58 + t * 10 : 42 + t * 6;
+    return `hsl(${Math.round(215 + t * (15 - 215))}, 82%, ${l}%)`;
   }
 
-  function recentColor(rank, total) {
+  function recentColor(rank, total, dark) {
     const t = total > 1 ? rank / (total - 1) : 0;
-    return `hsl(${Math.round(48 + t * (20 - 48))}, 90%, 45%)`;
+    const l = dark ? 60 : 45;
+    return `hsl(${Math.round(48 + t * (20 - 48))}, 90%, ${l}%)`;
   }
 
   function legendLabel(name, finish_time_s, date) {
@@ -307,6 +184,7 @@
   }
 
   async function loadChart() {
+    const theme = chartTheme();
     const res = await fetch('/api/marathon-weeks');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -339,22 +217,22 @@
 
         // Natural color each series would have across the full spectrum —
         // used as the emphasis color so hovering a gray line reveals it.
-        const naturalColor = isVirtual ? '#94a3b8' : gradientColor(i, real.length);
+        const naturalColor = isVirtual ? theme.muted : gradientColor(i, real.length, theme.isDark);
 
         if (mode === 'fastest') {
           highlighted  = !isVirtual && i < 5;
-          color        = highlighted ? gradientColor(i, 5) : '#cbd5e1';
+          color        = highlighted ? gradientColor(i, 5, theme.isDark) : theme.baseline;
           lineWidth    = isPR ? 3 : highlighted ? 2 : 1;
           lineOpacity  = highlighted || isVirtual ? 1 : 0.45;
         } else if (mode === 'recent') {
           highlighted  = inRecent3 && !isVirtual;
           const rRank  = recentRank.get(marathon.date ?? '') ?? 0;
-          color        = highlighted ? recentColor(rRank, 3) : isPR ? '#93c5fd' : '#cbd5e1';
+          color        = highlighted ? recentColor(rRank, 3, theme.isDark) : isPR ? theme.accent : theme.baseline;
           lineWidth    = highlighted ? 2.5 : isPR ? 1.5 : 1;
           lineOpacity  = highlighted ? 1 : isPR ? 0.65 : 0.35;
         } else { // focus: PR vs most recent
           highlighted  = isPR || isRecent1;
-          color        = isPR ? 'hsl(215, 85%, 45%)' : isRecent1 ? 'hsl(40, 90%, 48%)' : '#cbd5e1';
+          color        = isPR ? theme.accent : isRecent1 ? theme.series[2] : theme.baseline;
           lineWidth    = highlighted ? 3 : 1;
           lineOpacity  = highlighted ? 1 : 0.25;
         }
@@ -366,22 +244,22 @@
             symbol: 'roundRect',
             symbolSize: [24, 14],
             symbolOffset: [0, -20],
-            itemStyle: { color: 'hsl(215, 85%, 45%)', borderRadius: 2 },
-            data: [{ type: 'max', label: { show: true, formatter: 'PR', color: '#fff', fontSize: 9, fontWeight: 700 } }],
+            itemStyle: { color: theme.accent, borderRadius: 2 },
+            data: [{ type: 'max', label: { show: true, formatter: 'PR', color: theme.surface, fontSize: 9, fontWeight: 700 } }],
           },
         };
         const dotMark = {
           markPoint: {
             symbol: 'circle', symbolSize: 6,
-            itemStyle: { color, borderColor: '#fff', borderWidth: 1.5 },
+            itemStyle: { color, borderColor: theme.surface, borderWidth: 1.5 },
             data: [{ type: 'max', label: { show: false } }],
           },
         };
         const taper = {
           markArea: {
             silent: true,
-            itemStyle: { color: 'rgba(148,163,184,0.07)' },
-            label: { show: true, position: 'insideTopLeft', formatter: 'Taper', fontSize: 10, color: '#94a3b8' },
+            itemStyle: { color: withAlpha(theme.muted, theme.isDark ? 0.12 : 0.07) },
+            label: { show: true, position: 'insideTopLeft', formatter: 'Taper', fontSize: 10, color: theme.muted },
             data: [[{ xAxis: '2' }, { xAxis: 'Race wk' }]],
           },
         };
@@ -414,16 +292,16 @@
         top: 'middle',
         itemWidth: 18,
         itemHeight: 3,
-        textStyle: { fontSize: 11, color: '#475569' },
-        pageTextStyle: { color: '#94a3b8', fontSize: 11 },
+        textStyle: { fontSize: 11, color: theme.textSecondary },
+        pageTextStyle: { color: theme.muted, fontSize: 11 },
         pageIconSize: 10,
       },
       tooltip: {
         trigger: 'axis',
-        axisPointer: { type: 'line', lineStyle: { color: '#e2e8f0', width: 1 } },
-        backgroundColor: '#fff',
-        borderColor: '#e2e8f0',
-        textStyle: { fontSize: 12, color: '#1e293b' },
+        axisPointer: { type: 'line', lineStyle: { color: theme.gridline, width: 1 } },
+        backgroundColor: theme.surface,
+        borderColor: theme.gridline,
+        textStyle: { fontSize: 12, color: theme.text },
         formatter(params) {
           const lbl   = params[0].axisValue;
           const title = lbl === 'Race wk' ? 'Race week'
@@ -438,32 +316,32 @@
           const visible = rows.slice(0, 8);
           const extra   = rows.length - visible.length;
           const more    = extra > 0
-            ? `<div style="color:#94a3b8;font-size:11px;margin-top:4px">… ${extra} more</div>`
+            ? `<div style="color:${theme.muted};font-size:11px;margin-top:4px">… ${extra} more</div>`
             : '';
-          return `<div style="font-weight:600;margin-bottom:6px;color:#0f172a">${title}</div>${visible.join('')}${more}`;
+          return `<div style="font-weight:600;margin-bottom:6px;color:${theme.text}">${title}</div>${visible.join('')}${more}`;
         },
       },
       xAxis: {
         type: 'category',
         data: labels,
-        axisLine: { lineStyle: { color: '#e2e8f0' } },
+        axisLine: { lineStyle: { color: theme.gridline } },
         axisTick: { show: false },
-        axisLabel: { fontSize: 11, color: '#94a3b8' },
+        axisLabel: { fontSize: 11, color: theme.muted },
         name: 'Weeks before race',
         nameLocation: 'middle',
         nameGap: 28,
-        nameTextStyle: { fontSize: 11, color: '#94a3b8' },
+        nameTextStyle: { fontSize: 11, color: theme.muted },
       },
       yAxis: {
         type: 'value',
         name: 'Miles',
         nameLocation: 'middle',
         nameGap: 40,
-        nameTextStyle: { fontSize: 11, color: '#94a3b8' },
+        nameTextStyle: { fontSize: 11, color: theme.muted },
         axisLine: { show: false },
         axisTick: { show: false },
-        splitLine: { lineStyle: { color: '#f1f5f9' } },
-        axisLabel: { fontSize: 11, color: '#94a3b8' },
+        splitLine: { lineStyle: { color: theme.gridline } },
+        axisLabel: { fontSize: 11, color: theme.muted },
         min: val => Math.max(0, Math.floor((val.min - 5) / 5) * 5),
       },
       series: makeSeries('fastest'),

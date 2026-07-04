@@ -92,10 +92,12 @@ claude mcp add miles-friend -e MILES_DB=/path/to/friend.db -- uv run --directory
 uv run miles-api
 ```
 
-Opens a local web interface at `http://localhost:8000` with two tables:
+Opens a local web interface at `http://localhost:8000` with four pages:
 
-- **Build Comparison** — each marathon with its 12-week build stats (volume, workout quality, long run count, easy HR)
-- **Peak Weeks** — peak single week and rolling 3-week average for each build
+- **Marathons** — build-comparison chart plus per-build stats and peak-week tables
+- **Races** — full race history with PRs and effort labels
+- **Training** — training periods, builds, and weekly volume with race markers
+- **Years** — year-by-year volume comparison
 
 ## MCP tools
 

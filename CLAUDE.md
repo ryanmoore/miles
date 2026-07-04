@@ -28,11 +28,14 @@ Key files:
 - `miles/db.py` — schema, upsert, `ActivityRow` / `LapRow` TypedDicts, `WORKOUT_TYPE_MAP`, `EFFECTIVE_RUN_TYPE_SQL`
 - `miles/races.py` — race-distance buckets (`classify_race_distance`), nominal distances, marathon bounds
 - `miles/inference.py` — infers run_type for untagged (`workout_type = 0`) activities from name/distance/history; explicit Strava tags always win
+- `miles/fitness.py` — dated fitness estimates (`estimate_fitness`, monthly `fitness_checkpoints` table): tier-1 recency-weighted races (Riegel), tier-2 workout work-laps anchored as 5K pace, tier-3 training-pace envelope floor; every estimate carries a confidence level
+- `miles/periods.py` — splits history into training periods at 3+ inactive weeks
+- `miles/builds.py` — race-anchored build detection (18-week cap, ramp floor, prior-race bound)
 - `miles/derive.py` — `derive_all`: full recompute of all derived values + `meta` version stamp; runs at end of every sync, self-heals on version mismatch when tools connect. Derived values are rebuildable — raw synced rows are ground truth
 - `miles/classifier.py` — keyword-based `workout_label` classifier (extend `WORKOUT_LABEL_PATTERNS` to add new types) and `classify_laps`, which types each lap as warmup/work/recovery/float/cooldown/steady via positional work-block detection (speed gap split + HR-guarded edge trim)
-- `miles/mcp_server.py` — MCP tools: `get_weekly_mileage`, `get_activities`, `get_training_block`, `get_marathon_comparison`, `get_workout_laps`, `run_sql`
-- `miles/api.py` — FastAPI endpoints `/api/marathons` and `/api/marathon-weeks`, also serves `miles/static/`
-- `miles/static/index.html` — ECharts line chart (3 tabs: Fastest 5 / Recent 3 / PR vs Recent) + two comparison tables (vanilla JS, no framework)
+- `miles/mcp_server.py` — 20 MCP tools (table in README): training periods/consistency, race history/PRs/equivalents/splits, fitness estimates, workout laps, `run_sql` escape hatch
+- `miles/api.py` — FastAPI endpoints `/api/marathons`, `/api/marathon-weeks`, `/api/races`, `/api/weekly-history`, `/api/years`; also serves `miles/static/`
+- `miles/static/` — vanilla JS, no framework: `index.html` (marathon build chart + tables), `races.html`, `training.html`, `years.html`; `theme.css` + `nav.js` shared across pages
 - `.claude/commands/miles.md` — `/miles` skill: the running-analyst persona (strictly descriptive, data-calibrated tone, tool routing)
 - `.claude/commands/marathon-analysis.md` — `/marathon-analysis` skill for guided training analysis
 - `screenshot.py` — Playwright visual verification; uses system chromium (`/usr/bin/chromium-browser`)
@@ -42,6 +45,8 @@ Key files:
 `run_type` is derived from Strava's `workout_type` int at sync time: `easy`(0) `race`(1) `long_run`(2) `workout`(3). Set by the athlete in Strava; 0 means *unset*, and those rows get a `run_type_inferred` (see `inference.py`). Query the effective type with `EFFECTIVE_RUN_TYPE_SQL` (`db.py`) — explicit tags always win.
 
 Marathon detection: `run_type = 'race'` AND `distance_m BETWEEN 42000 AND 43500`.
+
+Race effort: `activities.race_effort` (`raced`/`hard`/`casual`) + `effort_ratio` — actual pace vs the fitness estimate as of the day before the race, HR-corroborated. Derived and rebuildable like all classification.
 
 Build windows default to 12 weeks before race day. Weeks are Monday-aligned:
 ```python
@@ -56,7 +61,7 @@ Range: `>= build_start AND <= race_date` (includes race day in week 0).
 
 ## Workout laps & classification
 
-`miles-sync` lazily fetches laps for all `run_type = 'workout'` activities and stores them in the `laps` table. Each subsequent sync picks up any new workouts automatically.
+`miles-sync` lazily fetches laps for all activities with effective type `workout` or `race` and stores them in the `laps` table. Each subsequent sync picks up any new ones automatically.
 
 `miles/classifier.py` assigns a `workout_label` to each workout activity based on name keywords (e.g. "LT", "MP Flux", "Tempo"). Many activities remain unlabeled — either generic Strava auto-names ("Afternoon Run", "Evening Run") or one-off names. This is expected; query by `name LIKE` or `run_sql` for those. Labeled workouts support the `get_workout_laps` MCP tool for cross-build comparisons.
 

@@ -46,8 +46,8 @@ def _type_clause() -> tuple[str, list[str]]:
 
 
 def _build_start(race_date: str, build_weeks: int) -> date:
-    """Monday-aligned build_start (CLAUDE.md's build-window convention), so
-    every build spans whole weeks with no partially-cut-off week."""
+    """Monday-aligned build_start, so every build spans whole weeks with no
+    partially-cut-off week — the build-window convention used app-wide."""
     race_dt = date.fromisoformat(race_date)
     race_week_monday = race_dt - timedelta(days=race_dt.weekday())
     return race_week_monday - timedelta(weeks=build_weeks)
@@ -212,9 +212,8 @@ def get_distance_build_weeks(bucket: Bucket) -> list[DistanceBuildWeeks]:
         race_date = cast(str, race["date"])
         build_start_s = _build_start(race_date, build_weeks).isoformat()
 
-        # Offset formula anchored to build_start (always a Monday), matching
-        # CLAUDE.md's convention: 0 = race week, -1 = week before, …
-        # -build_weeks = first week of the build.
+        # Offset formula anchored to build_start (always a Monday):
+        # 0 = race week, -1 = week before, -build_weeks = first build week.
         week_rows = conn.execute(f"""
             SELECT
                 CAST((julianday(DATE(start_date)) - julianday(?)) / 7.0 AS INTEGER) - {build_weeks} AS week_offset,

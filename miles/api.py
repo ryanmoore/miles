@@ -12,7 +12,7 @@ from .builds import Build, RaceRef, detect_builds
 from .derive import ensure_derived
 from .format import fmt_pace as _fmt_pace
 from .format import fmt_time as _fmt_time
-from .periods import Gap, Period, WeekAgg, _zero_fill, detect_periods
+from .periods import Gap, Period, WeekAgg, _is_active, _zero_fill, detect_periods
 from .races import MARATHON_MAX_M, MARATHON_MIN_M, classify_race_distance, race_rows
 
 app = FastAPI(title="miles")
@@ -364,6 +364,161 @@ def get_races() -> list[RaceRow]:
             effort=cast(str | None, r["effort"]),
             activity_id=cast(int, r["activity_id"]),
             strava_url=cast(str | None, r["strava_url"]),
+        ))
+    return out
+
+
+class YearWeekPoint(TypedDict):
+    week: int
+    miles: float
+
+
+class LongestRun(TypedDict):
+    date: str
+    miles: float
+
+
+class YearRace(TypedDict):
+    date: str
+    name: str | None
+    distance_category: str
+    finish_time: str
+    is_pr: bool
+    effort: str | None
+
+
+class YearHighlights(TypedDict):
+    total_miles: float
+    runs: int
+    active_weeks: int
+    longest_run: LongestRun | None
+    peak_week_miles: float
+    races: list[YearRace]
+    prs_set: int
+
+
+class YearRow(TypedDict):
+    year: int
+    weeks: list[YearWeekPoint]
+    highlights: YearHighlights
+
+
+@app.get("/api/years")
+def get_years() -> list[YearRow]:
+    """
+    Per-calendar-year weekly mileage (Monday-aligned; week 1 starts at the
+    year's first Monday, days before it belong to the previous year's final
+    week) plus highlights: totals, active weeks, longest run, peak week,
+    races, PRs set. Current year's series stops at the current week; future
+    weeks are absent, not zero. Years with no runs are omitted. Highlights
+    totals are calendar-year, so year-boundary weeks can differ slightly
+    from the chart's weekly sum.
+    """
+    conn = _conn()
+    tc, tp = _type_clause()
+    today = date.today()
+    current_year = today.year
+    current_monday = today - timedelta(days=today.weekday())
+
+    totals = conn.execute(f"""
+        SELECT
+            CAST(strftime('%Y', start_date) AS INTEGER) AS year,
+            ROUND(SUM(distance_m) / 1609.34, 2) AS miles,
+            COUNT(*) AS runs
+        FROM activities
+        WHERE {tc}
+        GROUP BY year
+    """, tp).fetchall()
+    year_total: dict[int, float] = {r["year"]: r["miles"] or 0.0 for r in totals}
+    year_runs: dict[int, int] = {r["year"]: r["runs"] for r in totals}
+
+    run_rows = conn.execute(f"""
+        SELECT
+            CAST(strftime('%Y', start_date) AS INTEGER) AS year,
+            DATE(start_date) AS d,
+            ROUND(distance_m / 1609.34, 2) AS miles
+        FROM activities
+        WHERE {tc}
+    """, tp).fetchall()
+
+    longest: dict[int, LongestRun] = {}
+    for r in run_rows:
+        year, miles = r["year"], r["miles"] or 0.0
+        best = longest.get(year)
+        if best is None or miles > best["miles"]:
+            longest[year] = LongestRun(date=r["d"], miles=miles)
+
+    # Monday-aligned weeks across all history, bucketed by the calendar year
+    # the Monday falls in — the source for the weekly series, peak week, and
+    # active-week counts alike.
+    monday_rows = conn.execute(f"""
+        SELECT
+            DATE(start_date, '-' || ((CAST(strftime('%w', start_date) AS INTEGER) + 6) % 7) || ' days') AS monday,
+            ROUND(SUM(distance_m) / 1609.34, 2) AS miles,
+            COUNT(*) AS runs
+        FROM activities
+        WHERE {tc}
+        GROUP BY monday
+    """, tp).fetchall()
+
+    def _week_no(monday: date) -> int:
+        jan1 = date(monday.year, 1, 1)
+        first_monday = jan1 + timedelta(days=(7 - jan1.weekday()) % 7)
+        return (monday - first_monday).days // 7 + 1
+
+    week_miles: dict[int, dict[int, float]] = {}
+    for r in monday_rows:
+        m = date.fromisoformat(r["monday"])
+        week_miles.setdefault(m.year, {})[_week_no(m)] = r["miles"] or 0.0
+
+    active_weeks: dict[int, int] = {}
+    for r in monday_rows:
+        wk: WeekAgg = {"monday": r["monday"], "miles": r["miles"] or 0.0, "runs": r["runs"], "workouts": 0}
+        if _is_active(wk):
+            yr = date.fromisoformat(r["monday"]).year
+            active_weeks[yr] = active_weeks.get(yr, 0) + 1
+
+    races_by_year: dict[int, list[YearRace]] = {}
+    prs_by_year: dict[int, int] = {}
+    for r in race_rows(conn):
+        yr = date.fromisoformat(cast(str, r["date"])).year
+        races_by_year.setdefault(yr, []).append(YearRace(
+            date=cast(str, r["date"]),
+            name=cast(str | None, r["name"]),
+            distance_category=cast(str, r["distance_category"]),
+            finish_time=cast(str, r["finish_time"]),
+            is_pr=cast(bool, r["is_pr"]),
+            effort=cast(str | None, r["effort"]),
+        ))
+        if r["is_pr"]:
+            prs_by_year[yr] = prs_by_year.get(yr, 0) + 1
+
+    out: list[YearRow] = []
+    for year in sorted(set(week_miles) | set(year_total)):
+        # Zero-mile years are logging artifacts (e.g. a 0-distance HR reading
+        # recorded as a run), not running years.
+        if year_total.get(year, 0.0) <= 0:
+            continue
+        if year == current_year:
+            last_monday = current_monday
+        else:
+            last_monday = date(year, 12, 31)
+            last_monday -= timedelta(days=last_monday.weekday())
+        last_week = max(1, _week_no(last_monday))
+        wm = week_miles.get(year, {})
+        weeks = [YearWeekPoint(week=w, miles=wm.get(w, 0.0)) for w in range(1, last_week + 1)]
+        out.append(YearRow(
+            year=year,
+            weeks=weeks,
+            highlights=YearHighlights(
+                total_miles=year_total.get(year, 0.0),
+                runs=year_runs.get(year, 0),
+                active_weeks=active_weeks.get(year, 0),
+                longest_run=longest.get(year),
+                peak_week_miles=max(wm.values(), default=0.0),
+                races=sorted(races_by_year.get(year, []), key=lambda r: r["date"]),
+                prs_set=prs_by_year.get(year, 0),
+            ),
         ))
     return out
 

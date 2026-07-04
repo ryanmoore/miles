@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Miles · Years</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
+  <link rel="stylesheet" href="/theme.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+</head>
+<body>
+<script src="/nav.js"></script>
+
+<main>
+  <p class="lede">how this year stacks up against every year before it</p>
+  <div id="status">Loading…</div>
+
+  <div id="content" hidden>
+    <section>
+      <h2>Weekly Mileage by Year</h2>
+      <p class="desc">Each line is one year · x-axis is week of year · click a chip or legend entry to select a year</p>
+      <div class="mode-tabs">
+        <button class="mode-tab active" data-mode="weekly">Weekly</button>
+        <button class="mode-tab" data-mode="cumulative">Cumulative</button>
+      </div>
+      <div class="chip-row" id="chip-row"></div>
+      <div class="chart-wrap">
+        <div id="chart-years" style="width:100%;height:100%"></div>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="panel-title">Highlights</h2>
+      <p class="desc">Totals for the selected year</p>
+      <div class="tiles" id="tiles"></div>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Distance</th>
+              <th>Race</th>
+              <th class="r">Time</th>
+              <th>Effort</th>
+            </tr>
+          </thead>
+          <tbody id="body-races"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+  const LABELS = { half: 'Half', marathon: 'Marathon', other: 'Other' };
+
+  function catLabel(c) { return LABELS[c] ?? c; }
+
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g,
+      ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  }
+
+  function td(val, cls = 'r') {
+    if (val == null) return `<td class="dash">—</td>`;
+    return `<td class="${cls}">${val}</td>`;
+  }
+
+  function cumsum(values) {
+    let running = 0;
+    return values.map(v => (running += v));
+  }
+
+  function yearColor(theme, rank) {
+    return rank < theme.series.length ? theme.series[rank] : theme.muted;
+  }
+
+  function renderChips(years, ranks, selectedYear, theme) {
+    const html = years.map(y => {
+      const color = yearColor(theme, ranks.get(y.year));
+      const sel = y.year === selectedYear ? ' selected' : '';
+      return `<button class="chip${sel}" data-year="${y.year}">
+        <span class="dot" style="background:${color}"></span>${y.year}
+      </button>`;
+    });
+    const row = document.getElementById('chip-row');
+    row.innerHTML = html.join('');
+  }
+
+  function renderTiles(h) {
+    const tiles = [
+      ['Total Miles', h.total_miles.toFixed(1)],
+      ['Runs', h.runs],
+      ['Active Weeks', h.active_weeks],
+      ['Longest Run', h.longest_run ? `${h.longest_run.miles.toFixed(1)} mi` : '—', h.longest_run ? h.longest_run.date : null],
+      ['Peak Week', `${h.peak_week_miles.toFixed(1)} mi`],
+      ['PRs Set', h.prs_set],
+    ];
+    document.getElementById('tiles').innerHTML = tiles.map(([label, value, sub]) => `
+      <div class="tile">
+        <div class="tile-label">${label}</div>
+        <div class="tile-value">${value}</div>
+        ${sub ? `<div class="tile-sub">${sub}</div>` : ''}
+      </div>
+    `).join('');
+  }
+
+  function renderRaces(races) {
+    const body = document.getElementById('body-races');
+    if (!races.length) {
+      body.innerHTML = `<tr class="virt"><td colspan="5">No races this year</td></tr>`;
+      return;
+    }
+    const newest = [...races].reverse();
+    body.innerHTML = newest.map(r => {
+      const badge = r.is_pr ? ' <span class="badge">PR</span>' : '';
+      return `<tr class="${r.is_pr ? 'pr' : ''}">
+        ${td(r.date, 'dim')}
+        ${td(catLabel(r.distance_category), '')}
+        <td>${esc(r.name)}${badge}</td>
+        ${td(r.finish_time, 'r bold')}
+        ${td(r.effort, 'dim')}
+      </tr>`;
+    }).join('');
+  }
+
+  function renderPanel(yearRow) {
+    document.getElementById('panel-title').textContent = `${yearRow.year} Highlights`;
+    renderTiles(yearRow.highlights);
+    renderRaces(yearRow.highlights.races);
+  }
+
+  function buildSeries(years, ranks, selectedYear, mode, theme, maxWeek) {
+    return years.map(y => {
+      const rank = ranks.get(y.year);
+      const color = yearColor(theme, rank);
+      const isSelected = y.year === selectedYear;
+
+      const raw = y.weeks.map(w => w.miles);
+      const values = mode === 'cumulative' ? cumsum(raw) : raw;
+      const lastWeek = y.weeks.length ? y.weeks[y.weeks.length - 1].week : 0;
+      const data = Array.from({ length: maxWeek }, (_, i) => {
+        const weekNum = i + 1;
+        return weekNum <= lastWeek ? Math.round(values[weekNum - 1] * 100) / 100 : null;
+      });
+
+      return {
+        name: String(y.year),
+        type: 'line',
+        color,
+        z: isSelected ? 10 : 1,
+        data,
+        connectNulls: false,
+        symbol: 'none',
+        lineStyle: { color, width: isSelected ? 2.5 : 1.25, opacity: isSelected ? 1 : 0.35 },
+        emphasis: { focus: 'series', lineStyle: { width: (isSelected ? 2.5 : 1.25) + 1.5, opacity: 1 } },
+        blur: { lineStyle: { opacity: 0.1 } },
+      };
+    });
+  }
+
+  async function load() {
+    const res = await fetch('/api/years');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  function init(years) {
+    if (!years.length) {
+      document.getElementById('status').textContent =
+        'No runs found — sync some activities first.';
+      return;
+    }
+
+    document.getElementById('status').textContent = `${years.length} years of running`;
+    document.getElementById('content').hidden = false;
+
+    const theme = chartTheme();
+    const sorted = [...years].sort((a, b) => a.year - b.year);
+    // Rank 0 = most recent year, so it claims the first (most prominent) palette slot.
+    const byRecency = [...sorted].sort((a, b) => b.year - a.year);
+    const ranks = new Map(byRecency.map((y, i) => [y.year, i]));
+    const maxWeek = Math.max(...sorted.map(y => y.weeks.length ? y.weeks[y.weeks.length - 1].week : 0), 1);
+
+    let selectedYear = sorted[sorted.length - 1].year;
+    let mode = 'weekly';
+
+    const chart = echarts.init(document.getElementById('chart-years'));
+
+    function fullRender() {
+      renderChips(sorted, ranks, selectedYear, theme);
+      const legendSelected = Object.fromEntries(sorted.map(y => [String(y.year), true]));
+      chart.setOption({
+        animation: false,
+        grid: { top: 24, right: 110, bottom: 40, left: 52 },
+        legend: {
+          type: 'scroll',
+          orient: 'vertical',
+          right: 0,
+          top: 'middle',
+          itemWidth: 18,
+          itemHeight: 3,
+          selected: legendSelected,
+          textStyle: { fontSize: 11, color: theme.textSecondary },
+          pageTextStyle: { color: theme.muted, fontSize: 11 },
+          pageIconSize: 10,
+        },
+        tooltip: {
+          trigger: 'axis',
+          backgroundColor: theme.surface,
+          borderColor: theme.gridline,
+          textStyle: { fontSize: 12, color: theme.text },
+          formatter(params) {
+            const rows = params
+              .filter(p => p.value != null)
+              .sort((a, b) => b.value - a.value)
+              .map(p => `<div style="display:flex;justify-content:space-between;gap:1rem">
+                           <span>${p.marker}${p.seriesName}</span>
+                           <b>${p.value.toFixed(1)} mi</b>
+                         </div>`);
+            return `<div style="font-weight:600;margin-bottom:6px;color:${theme.text}">Week ${params[0].axisValue}</div>${rows.join('')}`;
+          },
+        },
+        xAxis: {
+          type: 'category',
+          data: Array.from({ length: maxWeek }, (_, i) => i + 1),
+          axisLine: { lineStyle: { color: theme.gridline } },
+          axisTick: { show: false },
+          axisLabel: { fontSize: 11, color: theme.muted, interval: 3 },
+          name: 'Week of year',
+          nameLocation: 'middle',
+          nameGap: 28,
+          nameTextStyle: { fontSize: 11, color: theme.muted },
+        },
+        yAxis: {
+          type: 'value',
+          name: mode === 'cumulative' ? 'Cumulative miles' : 'Miles / week',
+          nameLocation: 'middle',
+          nameGap: 44,
+          nameTextStyle: { fontSize: 11, color: theme.muted },
+          axisLine: { show: false },
+          axisTick: { show: false },
+          splitLine: { lineStyle: { color: theme.gridline } },
+          axisLabel: { fontSize: 11, color: theme.muted },
+        },
+        series: buildSeries(sorted, ranks, selectedYear, mode, theme, maxWeek),
+      }, { replaceMerge: ['series'] });
+
+      const panelYear = sorted.find(y => y.year === selectedYear);
+      if (panelYear) renderPanel(panelYear);
+    }
+
+    function selectYear(year) {
+      if (!sorted.some(y => y.year === year)) return;
+      selectedYear = year;
+      fullRender();
+    }
+
+    document.getElementById('chip-row').addEventListener('click', e => {
+      const btn = e.target.closest('.chip');
+      if (btn) selectYear(Number(btn.dataset.year));
+    });
+
+    // Legend clicks otherwise hide series; intercept to select instead and
+    // force everything back to visible.
+    chart.on('legendselectchanged', params => {
+      selectYear(Number(params.name));
+    });
+
+    document.querySelectorAll('.mode-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.mode-tab').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        mode = /** @type {string} */ (btn.dataset.mode);
+        fullRender();
+      });
+    });
+
+    fullRender();
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  load().then(init).catch(err => {
+    document.getElementById('status').textContent = `Error: ${err.message}`;
+  });
+</script>
+</body>
+</html>

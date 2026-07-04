@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,7 +52,7 @@ class AthleteRow(TypedDict):
     updated_at: str | None
 
 
-DB_PATH = Path(__file__).parent.parent / "data" / "activities.db"
+DB_PATH = Path(os.environ.get("MILES_DB", Path(__file__).parent.parent / "data" / "activities.db"))
 
 WORKOUT_TYPE_MAP: dict[int, str] = {
     0: "easy",

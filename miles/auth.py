@@ -50,15 +50,24 @@ def _upsert_env(key: str, value: str) -> None:
 def main() -> None:
     client_id = os.environ.get("STRAVA_CLIENT_ID")
     client_secret = os.environ.get("STRAVA_CLIENT_SECRET")
-    if not client_id or not client_secret:
+    missing = [k for k, v in (("STRAVA_CLIENT_ID", client_id), ("STRAVA_CLIENT_SECRET", client_secret)) if not v]
+    if missing or not client_id or not client_secret:
         raise SystemExit(
-            "Set STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET in .env first.\n"
-            "Get them from https://www.strava.com/settings/api"
+            f"Missing {' and '.join(missing)} in .env — see README.md 'Get Strava API credentials' "
+            "for where to find these on https://www.strava.com/settings/api."
+        )
+
+    try:
+        client_id_int = int(client_id)
+    except ValueError:
+        raise SystemExit(
+            f"STRAVA_CLIENT_ID in .env is not a number ({client_id!r}) — copy it again from "
+            "https://www.strava.com/settings/api, see README.md 'Get Strava API credentials'."
         )
 
     client = Client()
     url = client.authorization_url(
-        client_id=int(client_id),
+        client_id=client_id_int,
         redirect_uri="http://localhost:8765/callback",
         scope=["read", "activity:read_all"],
     )

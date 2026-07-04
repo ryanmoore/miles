@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Miles · Compare</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
+  <link rel="stylesheet" href="/theme.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    h1 {
+      font-size: 1.25rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.25rem;
+    }
+    .subtitle { font-size: 0.8125rem; color: var(--muted); margin-bottom: 1.25rem; }
+
+    #dist-tabs { margin-bottom: 1.25rem; }
+
+    .dist-empty { font-size: 0.8125rem; color: var(--muted); padding: 1rem 0; }
+
+    #chart-wrap { height: 420px; margin-bottom: 1.25rem; }
+
+    /* Table header cells carry a color dot + short name + a small time
+       line underneath, ported from lab/variant-f.js's .vf-name/.vf-time. */
+    th .cmp-name {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--text);
+      text-transform: none;
+      letter-spacing: normal;
+    }
+    th .cmp-time {
+      font-size: 0.6875rem;
+      color: var(--muted);
+      font-weight: 400;
+      margin-top: 0.15rem;
+      text-transform: none;
+      letter-spacing: normal;
+    }
+    td.cmp-best { font-weight: 700; color: var(--good); }
+    .chip[data-capped="true"] { opacity: 0.5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+<script src="/nav.js"></script>
+<script src="/charts.js"></script>
+
+<main>
+  <h1>Compare</h1>
+  <p class="subtitle">build against build, any distance</p>
+
+  <div class="mode-tabs" id="dist-tabs">
+    <button class="mode-tab" data-bucket="5K">5K</button>
+    <button class="mode-tab" data-bucket="10K">10K</button>
+    <button class="mode-tab" data-bucket="Half">Half</button>
+    <button class="mode-tab active" data-bucket="Marathon">Marathon</button>
+  </div>
+
+  <p class="dist-empty" id="status-msg">Loading…</p>
+
+  <section>
+    <p class="desc">Click chips to add or remove a build (max 4) · colors stick to a build while selected</p>
+    <div class="chip-row" id="chips" hidden></div>
+    <div class="chart-wrap" id="chart-wrap" hidden><div id="chart" style="width:100%;height:100%"></div></div>
+  </section>
+
+  <section id="table-section" hidden>
+    <h2>Side by side</h2>
+    <div class="scroll">
+      <table>
+        <thead id="thead"></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+  // -----------------------------------------------------------------------
+  // State: one distance bucket active at a time, data cached per bucket,
+  // selection always resets to a fresh default (PR + most recent) on
+  // switch — ported from lab/variant-f.js's "Comparison workbench".
+  // -----------------------------------------------------------------------
+
+  const BUCKETS = ['5K', '10K', 'Half', 'Marathon'];
+  const cache = new Map(); // bucket -> { builds, weeks }
+
+  let currentBucket = 'Marathon';
+  let combined = [];        // current bucket's builds: real (fastest-first) + virtual
+  let weeksByDate = new Map();
+  let buildWeeks = 12;
+  let selection = new Map(); // date -> slot (0-3)
+
+  // Chart end-label / chip result: sub-hour finishes read as "M:SS" (5K/10K),
+  // else fmt.timeShort's "h:mm" — same convention as races.html's fmtResult.
+  function fmtResult(s) {
+    if (s == null) return '';
+    if (s < 3600) {
+      const m = Math.floor(s / 60);
+      const sec = String(Math.round(s % 60)).padStart(2, '0');
+      return `${m}:${sec}`;
+    }
+    return fmt.timeShort(s);
+  }
+
+  function getEntity(date) { return combined.find(m => m.date === date); }
+
+  function selectedEntries() {
+    return [...selection.entries()].sort((a, b) => a[1] - b[1]);
+  }
+
+  function toggle(date) {
+    if (selection.has(date)) {
+      selection.delete(date);
+    } else {
+      if (selection.size >= 4) return;
+      const used = new Set(selection.values());
+      let slot = 0;
+      while (used.has(slot)) slot++;
+      selection.set(date, slot);
+    }
+    rerender();
+  }
+
+  document.getElementById('chips').addEventListener('click', e => {
+    const btn = e.target.closest('.chip');
+    if (btn) toggle(btn.dataset.date);
+  });
+
+  // -----------------------------------------------------------------------
+  // Chips
+  // -----------------------------------------------------------------------
+
+  function renderChips() {
+    const theme = chartTheme();
+    const palette = [theme.series[0], theme.series[7], theme.series[3], theme.series[4]];
+    const atCap = selection.size >= 4;
+    document.getElementById('chips').innerHTML = combined.map(m => {
+      const sel = selection.has(m.date);
+      const color = sel ? palette[selection.get(m.date)] : 'var(--baseline)';
+      const capped = atCap && !sel;
+      const label = `${fmt.shortName(m.name ?? '', m.date)} · ${fmtResult(m.finish_time_s)}`;
+      return `<button class="chip${sel ? ' selected' : ''}" data-date="${m.date}"
+        ${capped ? 'data-capped="true" title="deselect one first"' : ''}>
+        <span class="dot" style="background:${color}"></span>${label}
+      </button>`;
+    }).join('');
+  }
+
+  // -----------------------------------------------------------------------
+  // Chart
+  // -----------------------------------------------------------------------
+
+  let chart = null;
+
+  function chartSeries(theme, offsets) {
+    const palette = [theme.series[0], theme.series[7], theme.series[3], theme.series[4]];
+    return selectedEntries().map(([date, slot]) => {
+      const m = getEntity(date);
+      const isVirtual = fmt.isVirtual(m);
+      const color = palette[slot];
+      const weekMap = Object.fromEntries((weeksByDate.get(date) || []).map(w => [w.offset, w.miles]));
+      return {
+        name: m.name ?? '',
+        type: 'line',
+        color,
+        data: offsets.map(o => weekMap[o] ?? 0),
+        connectNulls: false,
+        symbol: 'none',
+        lineStyle: { color, width: 2.5, type: isVirtual ? 'dashed' : 'solid' },
+        endLabel: { show: true, formatter: fmt.shortName(m.name ?? '', m.date), fontSize: 11, color: theme.textSecondary, fontWeight: 600 },
+        labelLayout: { moveOverlap: 'shiftY' },
+      };
+    });
+  }
+
+  function renderChart() {
+    const theme = chartTheme();
+    const offsets = Array.from({ length: buildWeeks + 1 }, (_, i) => i - buildWeeks);
+    const labels = offsets.map(o => o === 0 ? 'Race wk' : String(Math.abs(o)));
+
+    chart.setOption({
+      animation: false,
+      grid: { top: 16, right: 140, bottom: 24, left: 58 },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'line', lineStyle: { color: theme.gridline, width: 1 } },
+        backgroundColor: theme.surface,
+        borderColor: theme.gridline,
+        textStyle: { fontSize: 12, color: theme.text },
+        formatter(params) {
+          const lbl = params[0].axisValue;
+          const title = lbl === 'Race wk' ? 'Race week' : `${lbl} week${lbl === '1' ? '' : 's'} before race`;
+          const rows = params
+            .filter(p => p.value > 0)
+            .sort((a, b) => b.value - a.value)
+            .map(p => `<div style="display:flex;justify-content:space-between;gap:1rem">
+                         <span>${p.marker}${p.seriesName}</span>
+                         <b>${p.value.toFixed(1)} mi</b>
+                       </div>`);
+          const visible = rows.slice(0, 8);
+          const extra = rows.length - visible.length;
+          const more = extra > 0
+            ? `<div style="color:${theme.muted};font-size:11px;margin-top:4px">… ${extra} more</div>`
+            : '';
+          return `<div style="font-weight:600;margin-bottom:6px;color:${theme.text}">${title}</div>${visible.join('')}${more}`;
+        },
+      },
+      xAxis: {
+        type: 'category',
+        data: labels,
+        axisLine: { lineStyle: { color: theme.gridline } },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 11, color: theme.muted },
+      },
+      yAxis: {
+        type: 'value',
+        name: 'Miles / week',
+        nameLocation: 'middle',
+        nameGap: 40,
+        nameTextStyle: { fontSize: 11, color: theme.muted },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: theme.gridline } },
+        axisLabel: { fontSize: 11, color: theme.muted },
+      },
+      series: chartSeries(theme, offsets),
+    }, { replaceMerge: ['series'] });
+    staggerEndLabels(chart);
+  }
+
+  // -----------------------------------------------------------------------
+  // Side-by-side table
+  // -----------------------------------------------------------------------
+
+  function metricRow(label, values, higherBetter, formatter, boldAlways, titles) {
+    const nonNull = values.filter(v => v != null);
+    const best = nonNull.length >= 2 ? (higherBetter ? Math.max(...nonNull) : Math.min(...nonNull)) : null;
+    const cells = values.map((v, i) => {
+      if (v == null) return `<td class="r dash">—</td>`;
+      const isBest = best != null && v === best;
+      const cls = ['r', ...(boldAlways ? ['bold'] : []), ...(isBest ? ['cmp-best'] : [])];
+      const title = titles?.[i] ? ` title="${titles[i]}"` : '';
+      return `<td class="${cls.join(' ')}"${title}>${formatter(v)}</td>`;
+    });
+    return `<tr><td>${label}</td>${cells.join('')}</tr>`;
+  }
+
+  function paceClaimRow(label, key, cols) {
+    const claims = cols.map(c => c.m.build?.pace_claims?.[key] ?? null);
+    return metricRow(
+      label,
+      claims.map(c => c?.pace_min_per_mile ?? null),
+      false,
+      v => fmt.pace(v),
+      false,
+      claims.map(c => c ? `${c.workouts} workout${c.workouts === 1 ? '' : 's'}` : null),
+    );
+  }
+
+  function renderTable() {
+    const theme = chartTheme();
+    const palette = [theme.series[0], theme.series[7], theme.series[3], theme.series[4]];
+    const cols = selectedEntries().map(([date, slot]) => ({ m: getEntity(date), slot }));
+
+    document.getElementById('thead').innerHTML = `<tr>
+      <th>Metric</th>
+      ${cols.map(c => `<th class="r">
+        <div class="cmp-name"><span class="dot" style="background:${palette[c.slot]}"></span>${fmt.shortName(c.m.name ?? '', c.m.date)}</div>
+        <div class="cmp-time">${fmt.time(c.m.finish_time_s)}</div>
+      </th>`).join('')}
+    </tr>`;
+
+    const rows = [
+      metricRow('Result', cols.map(c => c.m.finish_time_s ?? null), false, s => fmt.time(s), true),
+      metricRow('Avg mpw', cols.map(c => c.m.build?.avg_mpw ?? null), true, v => v.toFixed(1)),
+      metricRow('Peak week', cols.map(c => c.m.build?.peak_week ?? null), true, v => v.toFixed(1)),
+      metricRow('Peak 3-wk', cols.map(c => c.m.build?.peak_3wk_avg ?? null), true, v => v.toFixed(1)),
+      metricRow('Total miles', cols.map(c => c.m.build?.total_miles ?? null), true, v => v.toFixed(0)),
+      metricRow('Workouts', cols.map(c => c.m.build?.by_type?.workout?.runs ?? null), true, v => String(v)),
+      paceClaimRow('5K work', '5k', cols),
+      paceClaimRow('LT / tempo', 'lt', cols),
+      paceClaimRow('MP work', 'mp', cols),
+      metricRow('Long runs', cols.map(c => c.m.build?.by_type?.long_run?.runs ?? null), true, v => String(v)),
+      metricRow('Long-run pace', cols.map(c => c.m.build?.by_type?.long_run?.avg_pace_min_per_mile ?? null), false, v => fmt.pace(v)),
+      metricRow('Easy HR', cols.map(c => c.m.build?.by_type?.easy?.avg_hr ?? null), false, v => String(Math.round(v))),
+    ];
+    document.getElementById('tbody').innerHTML = rows.join('');
+  }
+
+  function rerender() {
+    renderChips();
+    renderChart();
+    renderTable();
+  }
+
+  // -----------------------------------------------------------------------
+  // Bucket loading + tab routing
+  // -----------------------------------------------------------------------
+
+  function showBucket(bucket, builds, weeks) {
+    const statusEl = document.getElementById('status-msg');
+    const chipsEl = document.getElementById('chips');
+    const chartWrapEl = document.getElementById('chart-wrap');
+    const tableEl = document.getElementById('table-section');
+
+    if (builds.length === 0) {
+      statusEl.hidden = false;
+      statusEl.textContent = `No ${bucket} races yet.`;
+      chipsEl.hidden = true;
+      chartWrapEl.hidden = true;
+      tableEl.hidden = true;
+      return;
+    }
+
+    buildWeeks = builds[0]?.build_weeks ?? 8;
+    const real = builds.filter(m => !fmt.isVirtual(m))
+      .sort((a, b) => (a.finish_time_s ?? Infinity) - (b.finish_time_s ?? Infinity));
+    const virt = builds.filter(fmt.isVirtual);
+    combined = [...real, ...virt];
+    weeksByDate = new Map(weeks.map(w => [w.date, w.weeks]));
+
+    // Fresh default every switch: PR + most recent real build.
+    const pr = real[0];
+    const recent = [...real].sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))[0];
+    selection = new Map();
+    if (pr) selection.set(pr.date, 0);
+    if (recent) selection.set(recent.date, 1);
+
+    statusEl.hidden = true;
+    chipsEl.hidden = false;
+    chartWrapEl.hidden = false;
+    tableEl.hidden = false;
+
+    if (!chart) chart = echarts.init(document.getElementById('chart'));
+    rerender();
+  }
+
+  async function activateBucket(bucket) {
+    document.querySelectorAll('#dist-tabs .mode-tab').forEach(b => b.classList.toggle('active', b.dataset.bucket === bucket));
+    currentBucket = bucket;
+
+    const cached = cache.get(bucket);
+    if (cached) {
+      showBucket(bucket, cached.builds, cached.weeks);
+      return;
+    }
+
+    const statusEl = document.getElementById('status-msg');
+    statusEl.hidden = false;
+    statusEl.textContent = 'Loading…';
+    document.getElementById('chips').hidden = true;
+    document.getElementById('chart-wrap').hidden = true;
+    document.getElementById('table-section').hidden = true;
+
+    let builds, weeks;
+    try {
+      const [bRes, wRes] = await Promise.all([
+        fetch(`/api/distance-builds?bucket=${encodeURIComponent(bucket)}`),
+        fetch(`/api/distance-build-weeks?bucket=${encodeURIComponent(bucket)}`),
+      ]);
+      if (!bRes.ok || !wRes.ok) {
+        statusEl.textContent = `Error loading ${bucket}: HTTP ${!bRes.ok ? bRes.status : wRes.status}`;
+        return;
+      }
+      builds = await bRes.json();
+      weeks = await wRes.json();
+    } catch (err) {
+      statusEl.textContent = `Error loading ${bucket}: ${err.message}`;
+      return;
+    }
+
+    cache.set(bucket, { builds, weeks });
+    if (currentBucket === bucket) showBucket(bucket, builds, weeks);
+  }
+
+  document.querySelectorAll('#dist-tabs .mode-tab').forEach(btn => {
+    btn.addEventListener('click', () => activateBucket(btn.dataset.bucket));
+  });
+
+  window.addEventListener('resize', () => {
+    if (!chart) return;
+    chart.resize();
+    staggerEndLabels(chart);
+  });
+
+  activateBucket(currentBucket);
+</script>
+</body>
+</html>

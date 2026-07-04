@@ -15,6 +15,7 @@
       margin-bottom: 0.25rem;
     }
     .training-view .subtitle { font-size: 0.8125rem; color: var(--muted); margin-bottom: 1.25rem; }
+    .training-view #section-fitness .chart-wrap { height: 300px; }
 
     /* Stat strip — ported from races.html's .dist-view pattern, scoped locally. */
     .training-view .stat-strip {
@@ -60,6 +61,14 @@
   <p class="subtitle" id="subtitle">Loading…</p>
 
   <div class="stat-strip" id="stat-strip" style="display:none"></div>
+
+  <section id="section-fitness" style="display:none">
+    <h2>Fitness</h2>
+    <p class="desc" id="fitness-desc">Monthly 5K-equivalent estimate · solid points are race-confirmed, hollow points are lower-confidence estimates</p>
+    <div class="chart-wrap">
+      <div id="chart-fitness" style="width:100%;height:100%"></div>
+    </div>
+  </section>
 
   <section id="section-chart" style="display:none">
     <h2>Weekly Mileage</h2>
@@ -143,15 +152,37 @@
     return res.json();
   }
 
+  async function loadFitness() {
+    const res = await fetch('/api/fitness-trend');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  // 'YYYY-MM-DD' -> "Mon YYYY"
+  function monthYear(dateStr) {
+    return new Date(dateStr + 'T00:00:00').toLocaleString('en-US', { month: 'short', year: 'numeric' });
+  }
+
+  // Confidence tiers, best -> worst (see fitness.py's Confidence type). The
+  // best tier present in the data renders solid; everything else hollow.
+  const CONFIDENCE_RANK = ['high', 'medium', 'medium-low', 'low'];
+
   function renderEmpty() {
     document.getElementById('subtitle').textContent =
       'No runs found — sync some activities first.';
   }
 
-  function renderStatStrip(data) {
+  function renderStatStrip(data, fitness) {
     const { weeks, builds, races } = data;
     const el = document.getElementById('stat-strip');
     if (!weeks.length) return;
+
+    const latestFitness = fitness.length ? fitness[fitness.length - 1] : null;
+    const fitnessStat = `
+      <div class="stat">
+        <div class="stat-label">Fitness</div>
+        <div class="stat-value">${latestFitness ? fmt.pace(latestFitness.fivek_pace_min_per_mile) : '—'}<span class="stat-sub">${latestFitness ? `5K pace · ${monthYear(latestFitness.date)}` : ''}</span></div>
+      </div>`;
 
     const thisWeek = weeks[weeks.length - 1].miles;
 
@@ -170,6 +201,7 @@
 
     el.style.display = '';
     el.innerHTML = `
+      ${fitnessStat}
       <div class="stat">
         <div class="stat-label">This week</div>
         <div class="stat-value">${thisWeek.toFixed(1)}<span class="stat-sub">mi</span></div>
@@ -225,6 +257,69 @@
       ${td(b.avg_mpw.toFixed(1))}
       ${td(b.workouts_per_week.toFixed(2))}
     </tr>`).join('');
+  }
+
+  function renderFitnessChart(fitness) {
+    if (!fitness.length) return;
+    document.getElementById('section-fitness').style.display = '';
+
+    const theme = chartTheme();
+    const topTier = CONFIDENCE_RANK.find(c => fitness.some(f => f.confidence === c));
+
+    const points = fitness.map(f => ({
+      value: [f.date, f.fivek_pace_min_per_mile],
+      meta: f,
+      itemStyle: f.confidence === topTier
+        ? { color: theme.accent, borderColor: theme.accent }
+        : { color: theme.surface, borderColor: theme.accent, borderWidth: 1.5 },
+    }));
+
+    const chart = echarts.init(document.getElementById('chart-fitness'));
+    chart.setOption({
+      animation: false,
+      grid: { top: 24, right: 24, bottom: 32, left: 52 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: theme.surface,
+        borderColor: theme.gridline,
+        textStyle: { fontSize: 12, color: theme.text },
+        formatter(params) {
+          const p = params[0];
+          const f = p.data.meta;
+          const basis = f.basis ? `<div style="color:${theme.muted};font-size:11px">${f.basis}</div>` : '';
+          return `<div style="font-weight:600;margin-bottom:2px;color:${theme.text}">
+                    ${monthYear(f.date)} · 5K ${fmt.pace(f.fivek_pace_min_per_mile)}/mi · ${f.confidence}
+                  </div>${basis}`;
+        },
+      },
+      xAxis: {
+        type: 'time',
+        axisLine: { lineStyle: { color: theme.gridline } },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 11, color: theme.muted },
+      },
+      yAxis: {
+        type: 'value',
+        inverse: true, // lower pace = faster = up, per races.html's scatter
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: theme.gridline } },
+        axisLabel: { fontSize: 11, color: theme.muted, formatter: fmt.pace },
+        min: v => Math.floor(v.min * 2) / 2 - 0.5,
+        max: v => Math.ceil(v.max * 2) / 2 + 0.5,
+      },
+      series: [{
+        name: '5K-equivalent pace',
+        type: 'line',
+        data: points,
+        color: theme.accent,
+        lineStyle: { color: theme.accent, width: 2 },
+        symbol: 'circle',
+        symbolSize: 7,
+      }],
+    });
+
+    window.addEventListener('resize', () => chart.resize());
   }
 
   function renderChart(data) {
@@ -348,13 +443,14 @@
     window.addEventListener('resize', () => chart.resize());
   }
 
-  load().then(data => {
+  Promise.all([load(), loadFitness().catch(() => [])]).then(([data, fitness]) => {
     if (!data.weeks.length) {
       renderEmpty();
       return;
     }
+    renderFitnessChart(fitness);
     renderChart(data);
-    renderStatStrip(data);
+    renderStatStrip(data, fitness);
     renderPeriods(data.periods);
     renderBuilds(data.builds, data.weeks);
   }).catch(err => {

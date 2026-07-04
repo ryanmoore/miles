@@ -77,10 +77,13 @@
   </div>
 
   <div id="tab-overview" class="tab-panel">
-    <div id="overview-body" hidden>
+    <div id="overview-body" class="dist-view" hidden>
+      <div class="stat-strip" id="overview-stats"></div>
+
       <section>
         <h2>Race Paces Over Time</h2>
         <p class="desc">Each point is a race · faster is up · PRs labeled · casual efforts hollow</p>
+        <div class="chip-row" id="overview-chips"></div>
         <div class="chart-wrap">
           <div id="chart-races" style="width:100%;height:100%"></div>
         </div>
@@ -208,13 +211,19 @@
     return `${m}:${s}`;
   }
 
-  function renderPbTable(rows) {
+  // cat -> fastest race row in that category (excludes 'other' and DNF-ish rows).
+  function computePBs(rows) {
     const byCat = new Map();
     for (const r of rows) {
       if (r.distance_category === 'other' || r.finish_time_s == null) continue;
       const best = byCat.get(r.distance_category);
       if (!best || r.finish_time_s < best.finish_time_s) byCat.set(r.distance_category, r);
     }
+    return byCat;
+  }
+
+  function renderPbTable(rows) {
+    const byCat = computePBs(rows);
     const counts = new Map();
     for (const r of rows) {
       counts.set(r.distance_category, (counts.get(r.distance_category) ?? 0) + 1);
@@ -256,14 +265,61 @@
     });
   }
 
+  function renderOverviewStats(rows) {
+    const byCat = computePBs(rows);
+    const pbStat = (cat, label) => {
+      const r = byCat.get(cat);
+      return `<div class="stat">
+        <div class="stat-label">${label}</div>
+        <div class="stat-value">${r ? r.finish_time : '—'}<span class="stat-sub">${r ? r.date.slice(0, 4) : ''}</span></div>
+      </div>`;
+    };
+    const prs = rows.filter(r => r.is_pr).length;
+    const thisYear = String(new Date().getFullYear());
+    const yearCount = rows.filter(r => (r.date ?? '').slice(0, 4) === thisYear).length;
+
+    document.getElementById('overview-stats').innerHTML = `
+      ${pbStat('5K', '5K PB')}
+      ${pbStat('10K', '10K PB')}
+      ${pbStat('half', 'Half PB')}
+      ${pbStat('marathon', 'Marathon PB')}
+      <div class="stat">
+        <div class="stat-label">Races</div>
+        <div class="stat-value">${rows.length}<span class="stat-sub">${prs} PRs</span></div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">This year</div>
+        <div class="stat-value">${yearCount}<span class="stat-sub">races</span></div>
+      </div>
+    `;
+  }
+
+  // Slot is fixed by canonical CATEGORIES order, not presence order.
+  function categoryColor(cat, theme) {
+    return cat === 'other' ? theme.muted : theme.series[CATEGORIES.indexOf(cat)];
+  }
+
+  function renderOverviewChips(present, theme, chart) {
+    const row = document.getElementById('overview-chips');
+    row.innerHTML = present.map(cat => `
+      <button class="chip selected" data-cat="${esc(catLabel(cat))}">
+        <span class="dot" style="background:${categoryColor(cat, theme)}"></span>${catLabel(cat)}
+      </button>`).join('');
+    row.addEventListener('click', e => {
+      const btn = e.target.closest('.chip');
+      if (!btn) return;
+      btn.classList.toggle('selected');
+      chart.dispatchAction({ type: 'legendToggleSelect', name: btn.dataset.cat });
+    });
+  }
+
   function renderOverviewChart(rows) {
     const theme = chartTheme();
     const present = CATEGORIES.filter(c => rows.some(r => r.distance_category === c));
     if (rows.some(r => r.distance_category === 'other')) present.push('other');
 
     const series = present.map(cat => {
-      // Slot is fixed by canonical order, not presence order.
-      const color = cat === 'other' ? theme.muted : theme.series[CATEGORIES.indexOf(cat)];
+      const color = categoryColor(cat, theme);
       const pts = rows
         .filter(r => r.distance_category === cat && paceDec(r.pace_min_per_mile) != null)
         .map(r => ({
@@ -292,18 +348,8 @@
     const chart = echarts.init(document.getElementById('chart-races'));
     chart.setOption({
       animation: false,
-      grid: { top: 24, right: 120, bottom: 40, left: 56 },
-      legend: {
-        type: 'scroll',
-        orient: 'vertical',
-        right: 0,
-        top: 'middle',
-        itemWidth: 14,
-        itemHeight: 8,
-        textStyle: { fontSize: 11, color: theme.textSecondary },
-        pageTextStyle: { color: theme.muted, fontSize: 11 },
-        pageIconSize: 10,
-      },
+      grid: { top: 24, right: 30, bottom: 40, left: 56 },
+      legend: { show: false, data: series.map(s => s.name) },
       tooltip: {
         trigger: 'item',
         backgroundColor: theme.surface,
@@ -343,6 +389,7 @@
       series,
     });
     window.addEventListener('resize', () => chart.resize());
+    renderOverviewChips(present, theme, chart);
   }
 
   function initOverview(rows) {
@@ -353,6 +400,7 @@
       return;
     }
     document.getElementById('overview-body').hidden = false;
+    renderOverviewStats(rows);
     renderOverviewChart(rows);
     renderPbTable(rows);
     renderRaceTable(rows);

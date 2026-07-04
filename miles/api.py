@@ -331,6 +331,50 @@ def get_weekly_history() -> WeeklyHistory:
     )
 
 
+# source_tier -> short label for what backed the estimate (see fitness.py:
+# tier-1 recency-weighted races, tier-2 workout work-laps, tier-3 training-
+# pace envelope floor).
+_FITNESS_BASIS_BY_TIER: dict[int, str] = {
+    1: "race",
+    2: "workout anchor",
+    3: "training floor",
+}
+
+
+class FitnessTrendPoint(TypedDict):
+    date: str
+    fivek_pace_min_per_mile: float
+    confidence: str
+    basis: str | None
+
+
+@app.get("/api/fitness-trend")
+def get_fitness_trend() -> list[FitnessTrendPoint]:
+    """
+    Monthly fitness checkpoints, oldest first — a cheap read of the derived
+    fitness_checkpoints table (rebuilt each sync; never recomputed here).
+    pace_5k is already a decimal min/mi pace, not a time. date is the first of
+    the checkpoint's month (the table only stores 'YYYY-MM').
+    """
+    conn = _conn()
+    rows = conn.execute("""
+        SELECT month, confidence, source_tier, pace_5k
+        FROM fitness_checkpoints
+        WHERE pace_5k IS NOT NULL
+        ORDER BY month
+    """).fetchall()
+
+    return [
+        FitnessTrendPoint(
+            date=f"{r['month']}-01",
+            fivek_pace_min_per_mile=round(float(r["pace_5k"]), 2),
+            confidence=cast(str, r["confidence"]),
+            basis=_FITNESS_BASIS_BY_TIER.get(r["source_tier"]),
+        )
+        for r in rows
+    ]
+
+
 class RaceRow(TypedDict):
     date: str
     name: str | None

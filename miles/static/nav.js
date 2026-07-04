@@ -3,6 +3,7 @@
 
 const NAV_LINKS = [
   { href: "/races.html", label: "Races" },
+  { href: "/compare.html", label: "Compare" },
   { href: "/training.html", label: "Training" },
   { href: "/years.html", label: "Years" },
 ];

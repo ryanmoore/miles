@@ -129,19 +129,20 @@
     const body = document.getElementById('body-races');
     if (!races.length) {
       body.innerHTML = `<tr class="virt"><td colspan="5">No races this year</td></tr>`;
-      return;
+    } else {
+      const newest = [...races].reverse();
+      body.innerHTML = newest.map(r => {
+        const badge = r.is_pr ? ' <span class="badge">PR</span>' : '';
+        return `<tr class="${r.is_pr ? 'pr' : ''}">
+          ${td(r.date, 'dim')}
+          ${td(catLabel(r.distance_category), '')}
+          <td>${esc(r.name)}${badge}</td>
+          ${td(r.finish_time, 'r bold')}
+          ${td(r.effort, 'dim')}
+        </tr>`;
+      }).join('');
     }
-    const newest = [...races].reverse();
-    body.innerHTML = newest.map(r => {
-      const badge = r.is_pr ? ' <span class="badge">PR</span>' : '';
-      return `<tr class="${r.is_pr ? 'pr' : ''}">
-        ${td(r.date, 'dim')}
-        ${td(catLabel(r.distance_category), '')}
-        <td>${esc(r.name)}${badge}</td>
-        ${td(r.finish_time, 'r bold')}
-        ${td(r.effort, 'dim')}
-      </tr>`;
-    }).join('');
+    makeSortable(body.closest('table'), { col: 0, dir: 'desc' });
   }
 
   function renderPanel(yearRow) {

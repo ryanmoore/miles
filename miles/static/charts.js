@@ -97,3 +97,85 @@ function sparklineSVG(weeksArr, nWeeks, globalMax, isPR) {
   const opacity = isPR ? 0.9 : 0.45;
   return `<svg class="spark" width="${width}" height="20" viewBox="0 0 ${width} 20" style="fill:var(--series-1);fill-opacity:${opacity}"><title>${peak.toFixed(1)} mi peak</title>${bars}</svg>`;
 }
+
+// Click-to-sort table headers. Reads the CURRENT tbody at click time (pages
+// re-render tbodies in place), reorders existing <tr> nodes so row classes/
+// links/handlers survive. Idempotent — safe to call on every re-render.
+// initial: { col, dir } labels the column the renderer already sorted by, so
+// an arrow is visible on load — the cue that headers sort at all. No reorder.
+function makeSortable(tableEl, initial) {
+  if (tableEl.dataset.sortable === '1') return;
+  tableEl.dataset.sortable = '1';
+
+  if (!document.getElementById('sortable-style')) {
+    const style = document.createElement('style');
+    style.id = 'sortable-style';
+    style.textContent = `
+      th.sorted-asc::after { content: ' ▲'; font-size: 0.5625rem; }
+      th.sorted-desc::after { content: ' ▼'; font-size: 0.5625rem; }
+      table[data-sortable] thead th { cursor: pointer; user-select: none; }
+      table[data-sortable] thead th:hover { color: var(--text-secondary); }
+      table[data-sortable] thead th:not(.sorted-asc):not(.sorted-desc):hover::after {
+        content: ' ↕'; font-size: 0.5625rem; color: var(--muted);
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  if (initial) {
+    const th = tableEl.querySelectorAll('thead th')[initial.col];
+    if (th) th.classList.add(initial.dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+  }
+
+  // "—"/empty -> null (always sorts last); H:MM:SS or M:SS (+/- prefix ok)
+  // -> seconds; YYYY-MM-DD stays a string (sorts correctly as-is); numbers
+  // (commas/decimals ok) -> float; anything else -> lowercase string.
+  function parseCell(raw) {
+    const s = raw.trim();
+    if (s === '' || s === '—') return { type: 'null', value: null };
+    const time = s.match(/^([+-])?(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (time) {
+      const sign = time[1] === '-' ? -1 : 1;
+      const [h, m, sec] = time[4] != null ? [time[2], time[3], time[4]] : ['0', time[2], time[3]];
+      return { type: 'num', value: sign * (Number(h) * 3600 + Number(m) * 60 + Number(sec)) };
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return { type: 'str', value: s };
+    if (/^[+-]?\d[\d,]*(\.\d+)?$/.test(s)) return { type: 'num', value: parseFloat(s.replace(/,/g, '')) };
+    return { type: 'str', value: s.toLowerCase() };
+  }
+
+  function cellValue(cell) {
+    return parseCell(cell?.dataset.sort ?? cell?.textContent ?? '');
+  }
+
+  function compare(a, b, dir) {
+    if (a.type === 'null' && b.type === 'null') return 0;
+    if (a.type === 'null') return 1;
+    if (b.type === 'null') return -1;
+    const cmp = a.type === 'num' && b.type === 'num'
+      ? a.value - b.value
+      : (a.value < b.value ? -1 : a.value > b.value ? 1 : 0);
+    return dir * cmp;
+  }
+
+  tableEl.querySelectorAll('thead th').forEach((th, colIndex) => {
+    th.addEventListener('click', () => {
+      const tbody = tableEl.querySelector('tbody');
+      if (!tbody) return;
+      const rows = Array.from(tbody.children);
+      const parsed = rows.map(row => cellValue(row.children[colIndex]));
+
+      let dir;
+      if (th.classList.contains('sorted-asc')) dir = -1;
+      else if (th.classList.contains('sorted-desc')) dir = 1;
+      else dir = parsed.find(p => p.type !== 'null')?.type === 'num' ? -1 : 1;
+
+      rows.map((row, i) => ({ row, val: parsed[i] }))
+        .sort((a, b) => compare(a.val, b.val, dir))
+        .forEach(({ row }) => tbody.appendChild(row));
+
+      tableEl.querySelectorAll('thead th').forEach(t => t.classList.remove('sorted-asc', 'sorted-desc'));
+      th.classList.add(dir === 1 ? 'sorted-asc' : 'sorted-desc');
+    });
+  });
+}

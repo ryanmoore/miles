@@ -90,7 +90,23 @@
   const BUCKETS = ['5K', '10K', 'Half', 'Marathon'];
   const cache = new Map(); // bucket -> { builds, weeks }
 
-  let currentBucket = 'Marathon';
+  // training.html's Builds table links here as #{bucket}:{date} (bucket
+  // lowercase: 5k|10k|half|marathon) or plain #{bucket}. Parsed once at boot;
+  // consumed by the first showBucket() call for a matching bucket, then
+  // cleared so later tab switches fall back to the normal PR+recent default.
+  const HASH_TO_BUCKET = { '5k': '5K', '10k': '10K', half: 'Half', marathon: 'Marathon' };
+
+  function parseHash(hash) {
+    const m = /^#([a-zA-Z0-9]+)(?::(\d{4}-\d{2}-\d{2}))?$/.exec(hash || '');
+    if (!m) return null;
+    const bucket = HASH_TO_BUCKET[m[1].toLowerCase()];
+    if (!bucket) return null;
+    return { bucket, date: m[2] ?? null };
+  }
+
+  let pendingSelection = parseHash(location.hash); // { bucket, date } | null
+
+  let currentBucket = pendingSelection?.bucket ?? 'Marathon';
   let combined = [];        // current bucket's builds: real (fastest-first) + virtual
   let weeksByDate = new Map();
   let buildWeeks = 12;
@@ -106,6 +122,15 @@
       return `${m}:${sec}`;
     }
     return fmt.timeShort(s);
+  }
+
+  // Date and result lead so they survive truncation of long race names —
+  // same convention as races.html's endLabelText.
+  function endLabelText(date, finishS, shortName) {
+    const d = new Date(date + 'T00:00:00');
+    const monYY = `${d.toLocaleString('en-US', { month: 'short' })} '${String(d.getFullYear()).slice(2)}`;
+    const title = shortName.replace(/\s*'\d\d(?=\s|$)/, '');
+    return `${monYY} · ${fmtResult(finishS)} · ${title}`;
   }
 
   function getEntity(date) { return combined.find(m => m.date === date); }
@@ -173,7 +198,7 @@
         connectNulls: false,
         symbol: 'none',
         lineStyle: { color, width: 2.5, type: isVirtual ? 'dashed' : 'solid' },
-        endLabel: { show: true, formatter: fmt.shortName(m.name ?? '', m.date), fontSize: 11, color: theme.textSecondary, fontWeight: 600 },
+        endLabel: { show: true, formatter: endLabelText(m.date, m.finish_time_s, fmt.shortName(m.name ?? '', m.date)), fontSize: 11, color: theme.textSecondary, fontWeight: 600, width: 195, overflow: 'truncate' },
         labelLayout: { moveOverlap: 'shiftY' },
       };
     });
@@ -186,7 +211,7 @@
 
     chart.setOption({
       animation: false,
-      grid: { top: 16, right: 140, bottom: 24, left: 58 },
+      grid: { top: 16, right: 170, bottom: 24, left: 52 },
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'line', lineStyle: { color: theme.gridline, width: 1 } },
@@ -213,6 +238,7 @@
       },
       xAxis: {
         type: 'category',
+        boundaryGap: false,
         data: labels,
         axisLine: { lineStyle: { color: theme.gridline } },
         axisTick: { show: false },
@@ -325,12 +351,27 @@
     combined = [...real, ...virt];
     weeksByDate = new Map(weeks.map(w => [w.date, w.weeks]));
 
-    // Fresh default every switch: PR + most recent real build.
+    // Fresh default every switch: PR + most recent real build — unless a
+    // pending #bucket:date hash names a specific build to open with instead
+    // (consumed once; later tab switches always get the plain default).
     const pr = real[0];
     const recent = [...real].sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))[0];
+    const named = pendingSelection?.bucket === bucket && pendingSelection.date
+      ? combined.find(m => m.date === pendingSelection.date)
+      : null;
+
     selection = new Map();
-    if (pr) selection.set(pr.date, 0);
-    if (recent) selection.set(recent.date, 1);
+    if (named) {
+      selection.set(named.date, 0);
+      // If the named build is itself the bucket PR, use most-recent as the
+      // companion instead of duplicating slot 0.
+      const companion = pr && named.date === pr.date ? recent : pr;
+      if (companion && companion.date !== named.date) selection.set(companion.date, 1);
+    } else {
+      if (pr) selection.set(pr.date, 0);
+      if (recent) selection.set(recent.date, 1);
+    }
+    pendingSelection = null;
 
     statusEl.hidden = true;
     chipsEl.hidden = false;

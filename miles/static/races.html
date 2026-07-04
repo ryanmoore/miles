@@ -56,6 +56,10 @@
     .dist-view tbody td { padding: 0.25rem 0.75rem; font-size: 0.75rem; }
     .dist-view thead th { padding: 0.375rem 0.75rem; font-size: 0.625rem; }
     .dist-view .spark { display: block; }
+
+    /* Cross-link into training.html's matching build row. */
+    .dist-view .entity-link { color: inherit; text-decoration: none; }
+    .dist-view .entity-link:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -404,6 +408,8 @@
     renderOverviewChart(rows);
     renderPbTable(rows);
     renderRaceTable(rows);
+    makeSortable(document.getElementById('body-pbs').closest('table'));
+    makeSortable(document.getElementById('body-races').closest('table'), { col: 0, dir: 'desc' });
   }
 
   // -----------------------------------------------------------------------
@@ -419,6 +425,15 @@
     const m = String(Math.floor((abs % 3600) / 60)).padStart(h ? 2 : 1, '0');
     const sec = String(Math.round(abs % 60)).padStart(2, '0');
     return h ? `${sign}${h}:${m}:${sec}` : `${sign}${m}:${sec}`;
+  }
+
+  // Chart end-label: date and result lead so they survive truncation of long
+  // race names ("Oct '24 · 2:54 · Detro…", not "Detroit Marathon '2…").
+  function endLabelText(date, finishS, shortName) {
+    const d = new Date(date + 'T00:00:00');
+    const monYY = `${d.toLocaleString('en-US', { month: 'short' })} '${String(d.getFullYear()).slice(2)}`;
+    const title = shortName.replace(/\s*'\d\d(?=\s|$)/, '');
+    return `${monYY} · ${fmtResult(finishS)} · ${title}`;
   }
 
   // Chart end-label result: sub-hour finishes read as "M:SS" (5K/10K), else
@@ -551,9 +566,15 @@
       const claim5k = claims['5k'], claimLt = claims.lt, claimMp = claims.mp;
       const delta = !isPR && r.finish_time_s != null && pr?.finish_time_s != null
         ? r.finish_time_s - pr.finish_time_s : null;
+      // Cross-link into the matching training.html build row. Anchored on the
+      // RACE date, not build.start — this page's fixed-window starts differ
+      // from training's detected-build starts, but both know the race date.
+      const nameCell = r.name != null
+        ? `<td><a class="entity-link" href="/training.html#build-${r.date}">${esc(r.name)}</a></td>`
+        : td(r.name, '');
 
       return `<tr class="${rc}">
-        ${td(r.name, '')}
+        ${nameCell}
         ${td(r.date, 'dim')}
         ${td(r.finish_time, 'r bold')}
         ${isPR ? `<td class="r dim">—</td>` : td(fmtDelta(delta), 'r dim')}
@@ -570,6 +591,8 @@
         ${td(easy?.avg_hr != null ? Math.round(easy.avg_hr) : null)}
       </tr>`;
     }).join('');
+
+    makeSortable(container.querySelector('table'), { col: 2, dir: 'asc' });
 
     if (!showChart) return;
 
@@ -655,7 +678,7 @@
           lineStyle: { color, width: lineWidth, opacity: lineOpacity, type: isVirtual ? 'dashed' : 'solid' },
           emphasis: { focus: 'series', lineStyle: { color: emphasisColor, width: lineWidth + 1.5, opacity: 1 } },
           blur:     { lineStyle: { opacity: 0.12 } },
-          ...(highlighted ? { endLabel: { show: true, formatter: () => `${shortName} · ${fmtResult(m.finish_time_s)}`, fontSize: 11, color: theme.textSecondary, fontWeight: 600 } } : {}),
+          ...(highlighted ? { endLabel: { show: true, formatter: () => endLabelText(m.date, m.finish_time_s, shortName), fontSize: 11, color: theme.textSecondary, fontWeight: 600, width: 195, overflow: 'truncate' } } : {}),
           ...(isPR ? prMark : {}),
           ...(isPR && isMarathon ? taper : {}),
         };
@@ -665,7 +688,7 @@
     const chart = echarts.init(container.querySelector(`#chart-${key}`));
     chart.setOption({
       animation: false,
-      grid: { top: 16, right: 140, bottom: 24, left: 44 },
+      grid: { top: 16, right: 170, bottom: 24, left: 36 },
       labelLayout: { moveOverlap: 'shiftY' },
       tooltip: {
         trigger: 'axis',
@@ -694,6 +717,9 @@
       },
       xAxis: {
         type: 'category',
+        // boundaryGap:false ends the lines at the plot edge, so the label
+        // gutter (grid.right) is all usable and names truncate later.
+        boundaryGap: false,
         data: labels,
         axisLine: { lineStyle: { color: theme.gridline } },
         axisTick: { show: false },

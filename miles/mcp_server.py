@@ -452,6 +452,8 @@ def _race_rows(
             ROUND(a.average_heartrate, 1) AS avg_hr,
             CASE WHEN a.workout_type = 0 AND a.run_type_inferred IS NOT NULL
                  THEN 'inferred' ELSE 'strava' END AS run_type_source,
+            a.race_effort,
+            a.effort_ratio,
             a.strava_url
         FROM activities a
         {where}
@@ -489,6 +491,8 @@ def _race_rows(
             "pace_min_per_mile": r["pace_min_per_mile"],
             "avg_hr": r["avg_hr"],
             "run_type_source": r["run_type_source"],
+            "effort": r["race_effort"],
+            "effort_ratio": r["effort_ratio"],
             "is_pr": is_pr,
             "strava_url": r["strava_url"],
         })
@@ -516,6 +520,13 @@ def get_race_history(distance_category: str | None = None, start_date: str | Non
     Each race also carries pre_race_8wk: runs, miles, longest_run_miles, and
     active_weeks over the 8 Monday-aligned weeks before the race's week
     (excluding race week itself) — active week defined as in get_training_periods.
+
+    Each race also carries effort (raced/hard/casual, null when unclassified —
+    no checkpoint prediction was available) and effort_ratio (actual/predicted
+    pace at the time, >1 = slower): how hard the race was actually run judged
+    against the athlete's estimated fitness then plus HR, not just its raw pace.
+    A hard-day race can legitimately read "hard" even when genuinely raced;
+    treat a ratio near a band edge as a close call, not a hard verdict.
     """
     conn = _conn()
     rows = _race_rows(conn, distance_category=distance_category, start_date=start_date)
@@ -583,7 +594,7 @@ def get_personal_bests() -> str:
     Each entry: category, nominal_miles, best ({date, name, finish_time,
     finish_time_s, pace_min_per_mile, activity_id, strava_url}), attempts
     (race count in that category), and progression — every race in the
-    category in date order, each {date, name, finish_time,
+    category in date order, each {date, name, finish_time, effort,
     delta_s_vs_prior_best}. delta_s_vs_prior_best is vs. the best time set
     *before* that race: negative means that race set a new PR (seconds
     faster), positive means seconds behind the standing PR, null for the
@@ -591,10 +602,11 @@ def get_personal_bests() -> str:
     recorded finish time are excluded entirely (missing from attempts too).
     Sorted by nominal distance ascending. Returns [] if no races.
 
-    Caveat: casual-effort races (a 5K jogged with friends) count toward
-    PRs the same as all-out efforts until effort classification exists —
-    cross-check a suspiciously fast or slow PR against its pace before
-    taking it at face value.
+    Caveat: PR math counts every race the same regardless of effort — a
+    casual-effort race (a 5K jogged with friends) still counts toward a PR
+    the same as an all-out one. effort (raced/hard/casual, null when
+    unclassified) is included per progression entry so a suspiciously
+    fast or slow PR can be cross-checked before taking it at face value.
     """
     conn = _conn()
     rows = _race_rows(conn)
@@ -620,6 +632,7 @@ def get_personal_bests() -> str:
                 "date": r["date"],
                 "name": r["name"],
                 "finish_time": r["finish_time"],
+                "effort": r["effort"],
                 "delta_s_vs_prior_best": delta,
             })
             if prior_best_s is None or finish_time_s < prior_best_s:
@@ -650,7 +663,7 @@ _EQUIV_CATEGORIES: tuple[str, ...] = ("5K", "10K", "half", "marathon")
 
 
 @mcp.tool()
-def get_race_equivalents(exponent: float = 1.06) -> str:
+def get_race_equivalents(exponent: float = 1.06, include_casual: bool = False) -> str:
     """
     Cross-distance comparison via Riegel scaling: every race's actual result
     plus predicted-equivalent times at 5K/10K/half/marathon, so "was my recent
@@ -659,15 +672,21 @@ def get_race_equivalents(exponent: float = 1.06) -> str:
     first within each year; `best_ever` is the single best entry overall.
     "other"-category races and races with no recorded finish time are excluded.
 
+    By default, races classified race_effort='casual' (a 5K jogged with
+    friends) are excluded from rankings and best_ever — a casual race isn't a
+    fitness data point. Pass include_casual=True to see everything, e.g. to
+    audit what got excluded. Unclassified races (no checkpoint prediction
+    available) are always included.
+
     Caveats the coach must relay whenever citing this: Riegel assumes
     equivalent training specificity across distances — a marathon-trained
     runner's 5K equivalent may be soft, and vice versa. Recreational athletes
     typically underperform the prediction as distance goes up (endurance,
     not just fitness, gates the longer distances). The exponent is a tunable
     knob, not a physical constant — treat its output as an estimate, not
-    truth. Effort is not yet classified here, so an easy-effort race inflates
-    or deflates its equivalents same as an all-out one; cross-check a
-    suspicious ranking against the race's actual pace before citing it.
+    truth. A race classified "hard" rather than "raced" may still have been a
+    genuine max effort on a bad day — cross-check a suspicious ranking
+    against the race's actual pace and effort before citing it.
     """
     conn = _conn()
     rows = _race_rows(conn)
@@ -677,6 +696,8 @@ def get_race_equivalents(exponent: float = 1.06) -> str:
         category = str(r["distance_category"])
         finish_time_s = r["finish_time_s"]
         if category == "other" or not isinstance(finish_time_s, (int, float)):
+            continue
+        if not include_casual and r["effort"] == "casual":
             continue
         from_m = NOMINAL_METERS[category]
 
@@ -704,6 +725,7 @@ def get_race_equivalents(exponent: float = 1.06) -> str:
             "equivalents": equivalents,
             "is_pr": r["is_pr"],
             "run_type_source": r["run_type_source"],
+            "effort": r["effort"],
         }))
 
     races_by_year: dict[str, list[tuple[float, dict[str, object]]]] = {}
@@ -1843,9 +1865,13 @@ def run_sql(query: str) -> str:
       activity_id, name, sport_type, start_date, workout_type, run_type, run_type_inferred,
       workout_label, distance_m, moving_time_s, elapsed_time_s, total_elevation_gain_m,
       average_speed_mps, max_speed_mps, average_heartrate, max_heartrate,
-      average_cadence, gear_id, strava_url, synced_at, start_lat, start_lng
+      average_cadence, gear_id, strava_url, synced_at, start_lat, start_lng,
+      race_effort, effort_ratio
       (run_type_inferred is inferred for untagged rows; COALESCE with run_type via
-      workout_type=0 for the effective type — see EFFECTIVE_RUN_TYPE_SQL in db.py)
+      workout_type=0 for the effective type — see EFFECTIVE_RUN_TYPE_SQL in db.py.
+      race_effort/effort_ratio are derived, rebuilt each sync — raced/hard/casual
+      judged against the fitness checkpoint for the race's month plus HR; null
+      when no checkpoint prediction was available for that category)
 
     Table: laps  (one row per lap; only workout activities are synced)
       lap_id, activity_id, lap_index, distance_m, moving_time_s, average_speed_mps,

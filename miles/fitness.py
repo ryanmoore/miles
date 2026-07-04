@@ -9,7 +9,7 @@ import statistics
 from datetime import date, timedelta
 from typing import Literal, NotRequired, TypedDict
 
-from .db import effective_run_type_sql
+from .db import effective_run_type_sql, get_athlete
 from .races import NOMINAL_METERS, classify_race_distance, riegel_time
 
 WINDOW_DAYS = 180
@@ -19,6 +19,23 @@ ENVELOPE_RACE_FACTOR = 0.97
 WORKOUT_ANCHOR_MIN_WORK_S = 12 * 60
 WORKOUT_ANCHOR_MIN_REP_S = 150  # sprint/stride reps outpace any race pace; never anchor
 ELEV_GAIN_PER_M_MAX = 0.019  # ~100 ft/mi — hills corrupt pace signals
+
+# Race-effort bands: effort_ratio = actual/predicted pace (>1 = slower than predicted).
+# Soft bands widen the "raced"/"hard" cutoffs for sub-race-signal confidence tiers,
+# where the predicted pace is itself a floor rather than a point estimate.
+EFFORT_RACED_MAX = 1.03
+EFFORT_HARD_MAX = 1.08
+EFFORT_RACED_MAX_SOFT = 1.05
+EFFORT_HARD_MAX_SOFT = 1.12
+HR_CEILING_PCT = 95
+# HR fraction that corroborates a raced effort — lower for half-and-longer races, where
+# average HR for a sustained effort runs lower than it does over a 5K/10K.
+HR_RACED_FRACTION_SHORT = 0.93  # shorter than half
+HR_RACED_FRACTION_LONG = 0.86  # half and longer
+HR_EASY_FRACTION = 0.80
+
+Effort = Literal["raced", "hard", "casual"]
+_SOFT_CONFIDENCE = ("medium-low", "low")
 
 MILE_M = 1609.34
 _RUN_SPORTS = ("Run", "TrailRun", "VirtualRun")
@@ -85,17 +102,19 @@ def _sport_filter(sports: tuple[str, ...]) -> tuple[str, list[str]]:
     return f"sport_type IN ({placeholders})", list(sports)
 
 
-def _tier1_races(conn: sqlite3.Connection, as_of: date) -> _Candidate | None:
+def _tier1_races(conn: sqlite3.Connection, as_of: date, *, exclude_casual: bool = False) -> _Candidate | None:
     """Races in-window with a known distance category and finish time, combined
     by recency-weighted average in pace space."""
     sport_clause, params = _sport_filter(_RUN_SPORTS)
     effective = effective_run_type_sql()
     window_start = (as_of - timedelta(days=WINDOW_DAYS)).isoformat()
+    casual_clause = "AND (race_effort IS NULL OR race_effort != 'casual')" if exclude_casual else ""
     rows = conn.execute(f"""
         SELECT activity_id, name, DATE(start_date) AS date, distance_m, moving_time_s
         FROM activities
         WHERE {sport_clause} AND {effective} = 'race'
           AND DATE(start_date) >= ? AND DATE(start_date) <= ?
+          {casual_clause}
         ORDER BY date
     """, params + [window_start, as_of.isoformat()]).fetchall()
 
@@ -251,10 +270,13 @@ def _tier3_envelope(conn: sqlite3.Connection, as_of: date) -> _Candidate | None:
     }
 
 
-def estimate_fitness(conn: sqlite3.Connection, as_of: date) -> FitnessEstimate | None:
+def estimate_fitness(
+    conn: sqlite3.Connection, as_of: date, *, exclude_casual: bool = False
+) -> FitnessEstimate | None:
     """Best-available fitness estimate as of a date; None when the trailing
-    window has no usable signal at all."""
-    tier1 = _tier1_races(conn, as_of)
+    window has no usable signal at all. exclude_casual drops tier-1 races whose
+    persisted race_effort is 'casual' (the derive-layer refinement pass)."""
+    tier1 = _tier1_races(conn, as_of, exclude_casual=exclude_casual)
     tier2 = _tier2_workout_laps(conn, as_of)
     tier3 = _tier3_envelope(conn, as_of)
     if tier1 is None and tier2 is None and tier3 is None:
@@ -308,3 +330,91 @@ def estimate_fitness(conn: sqlite3.Connection, as_of: date) -> FitnessEstimate |
     if note is not None:
         estimate["note"] = note
     return estimate
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    """Linear-interpolated percentile (0-100)."""
+    s = sorted(values)
+    if len(s) == 1:
+        return s[0]
+    k = (len(s) - 1) * (pct / 100)
+    f = int(k)
+    c = min(f + 1, len(s) - 1)
+    if f == c:
+        return s[f]
+    return s[f] * (c - k) + s[c] * (k - f)
+
+
+def hr_ceiling(conn: sqlite3.Connection, as_of: date) -> float | None:
+    """Athlete's configured max_hr when set; else the HR_CEILING_PCT percentile of
+    max_heartrate over runs in the trailing year before as_of, widening to all
+    history before as_of when fewer than 10 samples. None when there's still no signal."""
+    athlete = get_athlete(conn)
+    if athlete is not None and athlete["max_hr"] is not None:
+        return float(athlete["max_hr"])
+
+    sport_clause, params = _sport_filter(_RUN_SPORTS)
+    window_start = (as_of - timedelta(days=365)).isoformat()
+    rows = conn.execute(f"""
+        SELECT max_heartrate FROM activities
+        WHERE {sport_clause} AND max_heartrate IS NOT NULL
+          AND DATE(start_date) >= ? AND DATE(start_date) < ?
+    """, params + [window_start, as_of.isoformat()]).fetchall()
+    values = [float(r["max_heartrate"]) for r in rows]
+
+    if len(values) < 10:
+        rows = conn.execute(f"""
+            SELECT max_heartrate FROM activities
+            WHERE {sport_clause} AND max_heartrate IS NOT NULL
+              AND DATE(start_date) < ?
+        """, params + [as_of.isoformat()]).fetchall()
+        values = [float(r["max_heartrate"]) for r in rows]
+
+    if not values:
+        return None
+    return _percentile(values, HR_CEILING_PCT)
+
+
+def hr_raced_fraction(category: str) -> float:
+    """HR-ceiling fraction that counts as corroborating a raced effort for this race
+    category — lower for half-and-longer races (see HR_RACED_FRACTION_LONG)."""
+    is_long = NOMINAL_METERS[category] >= NOMINAL_METERS["half"]
+    return HR_RACED_FRACTION_LONG if is_long else HR_RACED_FRACTION_SHORT
+
+
+def classify_race_effort(
+    actual_pace_min_mi: float,
+    predicted_pace_min_mi: float,
+    avg_hr: float | None,
+    hr_ceiling: float | None,
+    confidence: Confidence,
+    category: str,
+) -> tuple[Effort, float]:
+    """How hard a race was actually run vs. the fitness estimate at the time.
+    effort_ratio = actual/predicted (>1 = slower than predicted). Bands widen for
+    medium-low/low confidence estimates, which are floors, not point estimates.
+    HR corroborates when both avg_hr and hr_ceiling are present: near-max HR promotes
+    a casual-by-pace race to hard (fought hard on a bad day) — the bar is
+    hr_raced_fraction(category), lower for half-and-longer races; low HR demotes a
+    raced-by-pace race to hard (fast but not truly maxed), using the universal
+    HR_EASY_FRACTION regardless of distance."""
+    ratio = actual_pace_min_mi / predicted_pace_min_mi
+    soft = confidence in _SOFT_CONFIDENCE
+    raced_max = EFFORT_RACED_MAX_SOFT if soft else EFFORT_RACED_MAX
+    hard_max = EFFORT_HARD_MAX_SOFT if soft else EFFORT_HARD_MAX
+
+    effort: Effort
+    if ratio <= raced_max:
+        effort = "raced"
+    elif ratio <= hard_max:
+        effort = "hard"
+    else:
+        effort = "casual"
+
+    if avg_hr is not None and hr_ceiling is not None and hr_ceiling > 0:
+        if effort == "casual" and avg_hr >= hr_raced_fraction(category) * hr_ceiling:
+            effort = "hard"
+        elif effort == "raced" and avg_hr < HR_EASY_FRACTION * hr_ceiling:
+            effort = "hard"
+
+    return effort, ratio

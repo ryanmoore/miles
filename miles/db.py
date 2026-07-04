@@ -149,6 +149,8 @@ def init_db(conn: sqlite3.Connection) -> None:
         "start_lng REAL",
         "raw_json TEXT",
         "run_type_inferred TEXT",
+        "race_effort TEXT",
+        "effort_ratio REAL",
     ):
         try:
             conn.execute(f"ALTER TABLE activities ADD COLUMN {col}")

@@ -60,7 +60,7 @@ alongside the repo — copy it to `.mcp.json` and set `cwd` to this repo's absol
 ### 5. Try it
 
 ```
-/coach
+/miles
 ```
 
 or ask directly:

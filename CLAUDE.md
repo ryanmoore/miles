@@ -33,6 +33,7 @@ Key files:
 - `miles/mcp_server.py` — MCP tools: `get_weekly_mileage`, `get_activities`, `get_training_block`, `get_marathon_comparison`, `get_workout_laps`, `run_sql`
 - `miles/api.py` — FastAPI endpoints `/api/marathons` and `/api/marathon-weeks`, also serves `miles/static/`
 - `miles/static/index.html` — ECharts line chart (3 tabs: Fastest 5 / Recent 3 / PR vs Recent) + two comparison tables (vanilla JS, no framework)
+- `.claude/commands/miles.md` — `/miles` skill: the running-analyst persona (strictly descriptive, data-calibrated tone, tool routing)
 - `.claude/commands/marathon-analysis.md` — `/marathon-analysis` skill for guided training analysis
 - `screenshot.py` — Playwright visual verification; uses system chromium (`/usr/bin/chromium-browser`)
 
@@ -77,10 +78,10 @@ The chart has three tabs (Fastest 5 / Recent 3 / PR vs Recent) toggling which bu
 
 ## Eval harness
 
-`eval_coach.py` runs a question through the coach agent and saves a full transcript to `eval_results/` (gitignored). Use it to catch regressions after changing MCP tools or the coach prompt.
+`eval_miles.py` runs a question through the `/miles` analyst persona and saves a full transcript to `eval_results/` (gitignored). Use it to catch regressions after changing MCP tools or the persona prompt.
 
 ```bash
-uv run python eval_coach.py "question" --label my-label
+uv run python eval_miles.py "question" --label my-label
 ```
 
 Standard eval questions are tracked in `evals.local.md` (also gitignored).

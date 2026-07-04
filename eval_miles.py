@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Coach eval harness. Runs a question through the coach agent and saves a full transcript.
+Analyst eval harness. Runs a question through the miles analyst and saves a full transcript.
 
 Usage:
-    uv run python eval_coach.py "Your question here"
-    uv run python eval_coach.py "Your question here" --label pace-filter-tweak
+    uv run python eval_miles.py "Your question here"
+    uv run python eval_miles.py "Your question here" --label pace-filter-tweak
 
 Results saved to: eval_results/YYYYMMDD-HHMMSS[-label].md
 """
@@ -16,7 +16,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-COACH_SYSTEM_FILE = Path(".claude/commands/coach.md")
+ANALYST_SYSTEM_FILE = Path(".claude/commands/miles.md")
 RESULTS_DIR = Path("eval_results")
 MCP_PREFIX = "mcp__miles__"
 
@@ -30,13 +30,16 @@ def _fmt_json_block(raw: str) -> str:
 
 
 def run_eval(question: str, label: str | None) -> Path:
-    coach_system = COACH_SYSTEM_FILE.read_text()
+    analyst_system = ANALYST_SYSTEM_FILE.read_text()
 
     cmd = [
         "claude", "-p", question,
-        "--system-prompt", coach_system,
+        "--system-prompt", analyst_system,
         "--output-format", "stream-json",
         "--verbose",
+        # Non-interactive runs can't answer permission prompts; pre-allow the
+        # miles MCP server so every tool is exercisable in evals.
+        "--allowedTools", "mcp__miles",
     ]
 
     print(f"Question: {question}", flush=True)
@@ -104,7 +107,7 @@ def run_eval(question: str, label: str | None) -> Path:
     out_path = RESULTS_DIR / f"{slug}.md"
 
     lines: list[str] = [
-        f"# Coach Eval — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"# Analyst Eval — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
         f"**Label:** {label or '(none)'}",
         "",
@@ -132,7 +135,7 @@ def run_eval(question: str, label: str | None) -> Path:
         lines += ["---", ""]
 
     lines += [
-        "## Coach Response",
+        "## Analyst Response",
         "",
         final_text,
     ]
@@ -142,14 +145,14 @@ def run_eval(question: str, label: str | None) -> Path:
 
 
 def main() -> None:
-    if not COACH_SYSTEM_FILE.exists():
-        print(f"Error: {COACH_SYSTEM_FILE} not found. Run from the miles project root.", file=sys.stderr)
+    if not ANALYST_SYSTEM_FILE.exists():
+        print(f"Error: {ANALYST_SYSTEM_FILE} not found. Run from the miles project root.", file=sys.stderr)
         sys.exit(1)
 
     parser = argparse.ArgumentParser(
-        description="Run a question through the coach and save the transcript."
+        description="Run a question through the miles analyst and save the transcript."
     )
-    parser.add_argument("question", help="The question to ask the coach")
+    parser.add_argument("question", help="The question to ask the analyst")
     parser.add_argument("--label", "-l", help="Short label for this run (e.g. 'pace-filter-v2')")
     args = parser.parse_args()
 

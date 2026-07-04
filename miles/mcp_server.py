@@ -612,7 +612,7 @@ def get_race_equivalents(exponent: float = 1.06, include_casual: bool = False) -
     audit what got excluded. Unclassified races (no checkpoint prediction
     available) are always included.
 
-    Caveats the coach must relay whenever citing this: Riegel assumes
+    Caveats the analyst must relay whenever citing this: Riegel assumes
     equivalent training specificity across distances — a marathon-trained
     runner's 5K equivalent may be soft, and vice versa. Recreational athletes
     typically underperform the prediction as distance goes up (endurance,

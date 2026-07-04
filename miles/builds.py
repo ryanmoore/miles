@@ -9,7 +9,7 @@ Pure function of weekly aggregates, race references, and periods; no SQL, no I/O
 from datetime import date, timedelta
 from typing import TypedDict
 
-from .periods import Period, WeekAgg, _zero_fill
+from .periods import Period, WeekAgg, zero_fill
 
 # Longest a build window can be, regardless of volume history.
 MAX_BUILD_WEEKS = 18
@@ -66,7 +66,7 @@ def _rolling_3wk(miles: list[float]) -> list[float]:
 
 
 def detect_builds(weeks: list[WeekAgg], races: list[RaceRef], periods: list[Period]) -> list[Build]:
-    filled = _zero_fill(weeks)
+    filled = zero_fill(weeks)
     by_monday = {w["monday"]: w for w in filled}
 
     anchors = sorted(

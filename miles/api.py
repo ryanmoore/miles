@@ -10,9 +10,8 @@ from fastapi.staticfiles import StaticFiles
 from . import db
 from .builds import Build, RaceRef, detect_builds
 from .derive import ensure_derived
-from .format import fmt_pace as _fmt_pace
-from .format import fmt_time as _fmt_time
-from .periods import Gap, Period, WeekAgg, _is_active, _zero_fill, detect_periods
+from .format import fmt_pace, fmt_time
+from .periods import Gap, Period, WeekAgg, is_active, zero_fill, detect_periods
 from .races import MARATHON_MAX_M, MARATHON_MIN_M, classify_race_distance, race_rows
 
 app = FastAPI(title="miles")
@@ -147,7 +146,7 @@ def get_marathons(build_weeks: int = _BUILD_WEEKS) -> list[MarathonRow]:
             name=race["name"],
             date=race_date,
             finish_time_s=race["moving_time_s"],
-            finish_time=_fmt_time(race["moving_time_s"]),
+            finish_time=fmt_time(race["moving_time_s"]),
             distance_miles=race["distance_miles"],
             pace_min_per_mile=race["pace_min_per_mile"],
             build=BuildStat(
@@ -234,7 +233,7 @@ def get_marathon_weeks(build_weeks: int = _BUILD_WEEKS) -> list[MarathonWeeks]:
             name=race["name"],
             date=race_date,
             finish_time_s=race["moving_time_s"],
-            finish_time=_fmt_time(race["moving_time_s"]),
+            finish_time=fmt_time(race["moving_time_s"]),
             weeks=[WeekPoint(offset=row["week_offset"], miles=row["miles"]) for row in week_rows],
         ))
 
@@ -288,10 +287,10 @@ def get_weekly_history() -> WeeklyHistory:
         {"monday": r["monday"], "miles": r["miles"] or 0.0, "runs": r["runs"], "workouts": r["workouts"] or 0}
         for r in week_rows
     ]
-    filled_weeks = _zero_fill(weeks)
+    filled_weeks = zero_fill(weeks)
     periods, gaps = detect_periods(weeks)
 
-    race_rows = conn.execute(f"""
+    race_activity_rows = conn.execute(f"""
         SELECT DATE(start_date) AS date, name, distance_m, race_effort
         FROM activities
         WHERE {tc} AND {effective_run_type} = 'race'
@@ -305,7 +304,7 @@ def get_weekly_history() -> WeeklyHistory:
             distance_category=classify_race_distance(r["distance_m"]) or "other",
             effort=r["race_effort"],
         )
-        for r in race_rows
+        for r in race_activity_rows
     ]
     race_refs: list[RaceRef] = [
         {
@@ -314,7 +313,7 @@ def get_weekly_history() -> WeeklyHistory:
             "distance_category": classify_race_distance(r["distance_m"]) or "other",
             "distance_m": r["distance_m"],
         }
-        for r in race_rows
+        for r in race_activity_rows
         if r["distance_m"] is not None
     ]
     builds = detect_builds(weeks, race_refs, periods) if periods else []
@@ -359,7 +358,7 @@ def get_races() -> list[RaceRow]:
             distance_miles=cast(float | None, r["distance_miles"]),
             finish_time_s=cast(int | None, r["finish_time_s"]),
             finish_time=cast(str, r["finish_time"]),
-            pace_min_per_mile=_fmt_pace(pace) if isinstance(pace, (int, float)) else None,
+            pace_min_per_mile=fmt_pace(pace) if isinstance(pace, (int, float)) else None,
             is_pr=cast(bool, r["is_pr"]),
             effort=cast(str | None, r["effort"]),
             activity_id=cast(int, r["activity_id"]),
@@ -474,7 +473,7 @@ def get_years() -> list[YearRow]:
     active_weeks: dict[int, int] = {}
     for r in monday_rows:
         wk: WeekAgg = {"monday": r["monday"], "miles": r["miles"] or 0.0, "runs": r["runs"], "workouts": 0}
-        if _is_active(wk):
+        if is_active(wk):
             yr = date.fromisoformat(r["monday"]).year
             active_weeks[yr] = active_weeks.get(yr, 0) + 1
 

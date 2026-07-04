@@ -9,8 +9,8 @@ from . import db
 from .builds import Build, RaceRef, detect_builds
 from .derive import ensure_derived
 from .fitness import WINDOW_DAYS, estimate_fitness
-from .format import fmt_time
-from .periods import GAP_WEEKS_TO_SPLIT, Period, WeekAgg, _is_active, _sunday, detect_periods
+from .format import fmt_pace, fmt_time
+from .periods import GAP_WEEKS_TO_SPLIT, Period, WeekAgg, is_active, sunday_of, detect_periods
 from .races import (
     MARATHON_MAX_M,
     MARATHON_MIN_M,
@@ -39,21 +39,11 @@ _PACE_KEYS = frozenset({
 })
 
 
-def _pace_str(v: float) -> str:
-    """Convert decimal minutes-per-mile (e.g. 6.56) to MM:SS string (e.g. '6:34')."""
-    mins = int(v)
-    secs = round((v - mins) * 60)
-    if secs == 60:
-        mins += 1
-        secs = 0
-    return f"{mins}:{secs:02d}"
-
-
 def _fmt_paces(obj: object) -> object:
     """Recursively convert known pace keys from decimal float to MM:SS string."""
     if isinstance(obj, dict):
         return {
-            k: (_pace_str(float(v)) if k in _PACE_KEYS and isinstance(v, (int, float)) else _fmt_paces(v))
+            k: (fmt_pace(float(v)) if k in _PACE_KEYS and isinstance(v, (int, float)) else _fmt_paces(v))
             for k, v in obj.items()
         }
     if isinstance(obj, list):
@@ -429,10 +419,6 @@ def get_race_comparison(distance_category: str | None = None, build_weeks: int =
     return json.dumps(_fmt_paces(out))
 
 
-# Shared with the web API; lives in races.py.
-_race_rows = race_rows
-
-
 @mcp.tool()
 def get_race_history(distance_category: str | None = None, start_date: str | None = None) -> str:
     """
@@ -463,7 +449,7 @@ def get_race_history(distance_category: str | None = None, start_date: str | Non
     treat a ratio near a band edge as a close call, not a hard verdict.
     """
     conn = _conn()
-    rows = _race_rows(conn, distance_category=distance_category, start_date=start_date)
+    rows = race_rows(conn, distance_category=distance_category, start_date=start_date)
 
     type_clause, type_params = _run_type_filter()
     for row in rows:
@@ -494,7 +480,7 @@ def get_race_history(distance_category: str | None = None, start_date: str | Non
                 "runs": (wr["runs"] or 0) if wr else 0,
                 "workouts": 0,
             }
-            if _is_active(week):
+            if is_active(week):
                 active_weeks += 1
             d += timedelta(weeks=1)
 
@@ -543,7 +529,7 @@ def get_personal_bests() -> str:
     fast or slow PR can be cross-checked before taking it at face value.
     """
     conn = _conn()
-    rows = _race_rows(conn)
+    rows = race_rows(conn)
 
     by_category: dict[str, list[dict[str, object]]] = {}
     for r in rows:
@@ -554,7 +540,7 @@ def get_personal_bests() -> str:
 
     out: list[dict[str, object]] = []
     for category in sorted(by_category, key=lambda c: NOMINAL_METERS.get(c, float("inf"))):
-        races = by_category[category]  # already ascending by date via _race_rows
+        races = by_category[category]  # already ascending by date via race_rows
         progression: list[dict[str, object]] = []
         prior_best_s: int | None = None
         best_row: dict[str, object] | None = None
@@ -623,7 +609,7 @@ def get_race_equivalents(exponent: float = 1.06, include_casual: bool = False) -
     against the race's actual pace and effort before citing it.
     """
     conn = _conn()
-    rows = _race_rows(conn)
+    rows = race_rows(conn)
 
     entries: list[tuple[float, dict[str, object]]] = []
     for r in rows:
@@ -742,7 +728,7 @@ def get_training_periods(start_date: str | None = None) -> str:
         return json.dumps({"periods": [], "gaps": []})
 
     race_type_clause, race_type_params = _run_type_filter()
-    race_rows = conn.execute(f"""
+    race_activity_rows = conn.execute(f"""
         SELECT DATE(start_date) AS date, name, distance_m,
                ROUND(distance_m / 1609.34, 2) AS distance_miles
         FROM activities
@@ -757,7 +743,7 @@ def get_training_periods(start_date: str | None = None) -> str:
             "distance_category": classify_race_distance(r["distance_m"]) or "other",
             "distance_miles": r["distance_miles"],
         }
-        for r in race_rows
+        for r in race_activity_rows
     ]
     race_refs: list[RaceRef] = [
         {
@@ -766,7 +752,7 @@ def get_training_periods(start_date: str | None = None) -> str:
             "distance_category": classify_race_distance(r["distance_m"]) or "other",
             "distance_m": r["distance_m"],
         }
-        for r in race_rows
+        for r in race_activity_rows
         if r["distance_m"] is not None
     ]
     builds = detect_builds(weeks, race_refs, periods)
@@ -788,7 +774,7 @@ def _longest_inactive_run(weeks: list[WeekAgg]) -> tuple[int, int] | None:
     run_start = 0
     run_len = 0
     for i, week in enumerate(weeks):
-        if _is_active(week):
+        if is_active(week):
             run_len = 0
             continue
         if run_len == 0:
@@ -847,7 +833,7 @@ def get_consistency_report(months: int = 12) -> str:
         fragments included — continuity only, no races/builds attached.
 
     An active week clears periods.ACTIVE_WEEK_MIN_RUNS runs or
-    periods.ACTIVE_WEEK_MIN_MILES miles (periods._is_active).
+    periods.ACTIVE_WEEK_MIN_MILES miles (periods.is_active).
     """
     conn = _conn()
     effective_run_type = db.effective_run_type_sql()
@@ -899,11 +885,11 @@ def get_consistency_report(months: int = 12) -> str:
     # Streak: count back from the current week; if it's not active yet, skip
     # it (not a streak-breaker) and start counting from last week instead.
     idx = len(weeks) - 1
-    if not _is_active(weeks[idx]):
+    if not is_active(weeks[idx]):
         idx -= 1
     streak = 0
     j = idx
-    while j >= 0 and _is_active(weeks[j]):
+    while j >= 0 and is_active(weeks[j]):
         streak += 1
         j -= 1
 
@@ -914,7 +900,7 @@ def get_consistency_report(months: int = 12) -> str:
     if streak == 0:
         gap = 0
         k = idx
-        while k >= 0 and not _is_active(weeks[k]):
+        while k >= 0 and not is_active(weeks[k]):
             gap += 1
             k -= 1
         result["current_gap_weeks"] = gap
@@ -926,7 +912,7 @@ def get_consistency_report(months: int = 12) -> str:
         start_i, length = inactive_run
         result["longest_gap"] = {
             "start": weeks[start_i]["monday"],
-            "end": _sunday(weeks[start_i + length - 1]["monday"]),
+            "end": sunday_of(weeks[start_i + length - 1]["monday"]),
             "weeks": length,
         }
 
@@ -981,7 +967,7 @@ def get_consistency_report(months: int = 12) -> str:
 
     active_weeks_by_month: dict[str, int] = {}
     for w in weeks:
-        if _is_active(w):
+        if is_active(w):
             month = w["monday"][:7]
             active_weeks_by_month[month] = active_weeks_by_month.get(month, 0) + 1
 
@@ -1123,7 +1109,7 @@ def _full_periods_and_builds(conn: sqlite3.Connection) -> tuple[list[Period], li
     if not periods:
         return [], []
 
-    race_rows = conn.execute(f"""
+    race_activity_rows = conn.execute(f"""
         SELECT DATE(start_date) AS date, name, distance_m
         FROM activities
         WHERE {type_clause} AND {effective_run_type} = 'race'
@@ -1137,7 +1123,7 @@ def _full_periods_and_builds(conn: sqlite3.Connection) -> tuple[list[Period], li
             "distance_category": classify_race_distance(r["distance_m"]) or "other",
             "distance_m": r["distance_m"],
         }
-        for r in race_rows
+        for r in race_activity_rows
         if r["distance_m"] is not None
     ]
     builds = detect_builds(weeks, race_refs, periods)
@@ -1147,7 +1133,7 @@ def _full_periods_and_builds(conn: sqlite3.Connection) -> tuple[list[Period], li
 def _window_active_weeks(conn: sqlite3.Connection, race_week_monday: date, build_weeks: int) -> int:
     """
     Count Monday-aligned weeks in [race_week_monday - build_weeks, race_week_monday)
-    meeting the active-week definition (periods._is_active), zero-filling calendar gaps.
+    meeting the active-week definition (periods.is_active), zero-filling calendar gaps.
     """
     window_start = race_week_monday - timedelta(weeks=build_weeks)
     type_clause, type_params = _run_type_filter()
@@ -1174,7 +1160,7 @@ def _window_active_weeks(conn: sqlite3.Connection, race_week_monday: date, build
             "runs": (wr["runs"] or 0) if wr else 0,
             "workouts": 0,
         }
-        if _is_active(week):
+        if is_active(week):
             active += 1
         d += timedelta(weeks=1)
     return active
@@ -1445,7 +1431,7 @@ def get_race_splits(activity_id: int) -> str:
     """
     conn = _conn()
 
-    races = _race_rows(conn, activity_id=activity_id)
+    races = race_rows(conn, activity_id=activity_id)
     if not races:
         exists = conn.execute(
             "SELECT 1 FROM activities WHERE activity_id = ?", [activity_id]
@@ -1755,9 +1741,9 @@ def get_fitness_estimate(as_of: str | None = None) -> str:
     out: dict[str, object] = {
         "as_of": est["as_of"],
         "confidence": est["confidence"],
-        "predicted": {k: _pace_str(v) for k, v in est["predicted"].items()},
+        "predicted": {k: fmt_pace(v) for k, v in est["predicted"].items()},
         "zones": {
-            k: (v if isinstance(v, str) else _pace_str(v))
+            k: (v if isinstance(v, str) else fmt_pace(v))
             for k, v in est["zones"].items()
         },
         "sources": est["sources"],
@@ -1794,7 +1780,7 @@ def get_fitness_trend(months: int = 36) -> str:
             "confidence": r["confidence"],
             "source_tier": r["source_tier"],
             **{
-                key: (_pace_str(float(r[col])) if r[col] is not None else None)
+                key: (fmt_pace(float(r[col])) if r[col] is not None else None)
                 for key, col in (
                     ("pace_5k", "pace_5k"), ("pace_10k", "pace_10k"),
                     ("pace_half", "pace_half"), ("pace_marathon", "pace_marathon"),

@@ -271,7 +271,7 @@
       btn.addEventListener('click', () => {
         document.querySelectorAll('.mode-tab').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        mode = /** @type {string} */ (btn.dataset.mode);
+        mode = btn.dataset.mode;
         fullRender();
       });
     });

@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from typing import Literal, NotRequired, TypedDict
 
 from .db import effective_run_type_sql, get_athlete
+from .format import fmt_pace
 from .races import NOMINAL_METERS, classify_race_distance, riegel_time
 
 WINDOW_DAYS = 180
@@ -79,15 +80,6 @@ class _Candidate(TypedDict):
     newest_date: str
 
 
-def _pace_str(v: float) -> str:
-    mins = int(v)
-    secs = round((v - mins) * 60)
-    if secs == 60:
-        mins += 1
-        secs = 0
-    return f"{mins}:{secs:02d}"
-
-
 def _project(time_s: float, from_m: float) -> dict[str, float]:
     """Riegel-project a performance to every target; paces in decimal min/mi."""
     out: dict[str, float] = {}
@@ -140,7 +132,7 @@ def _tier1_races(conn: sqlite3.Connection, as_of: date, *, exclude_casual: bool 
             "date": race_date,
             "name": r["name"],
             "detail": (
-                f"{category} race at {_pace_str(race_pace)}/mi, "
+                f"{category} race at {fmt_pace(race_pace)}/mi, "
                 f"{age_days}d old, weight {weight:.2f}"
             ),
         })
@@ -217,7 +209,7 @@ def _tier2_workout_laps(conn: sqlite3.Connection, as_of: date) -> _Candidate | N
             "date": session_date,
             "name": row["name"],
             "detail": (
-                f"fastest workout anchor: median work pace {_pace_str(median_pace)}/mi "
+                f"fastest workout anchor: median work pace {fmt_pace(median_pace)}/mi "
                 f"over {work_s // 60} min of work laps, treated as 5K race pace"
             ),
         }],
@@ -262,7 +254,7 @@ def _tier3_envelope(conn: sqlite3.Connection, as_of: date) -> _Candidate | None:
             "name": row["name"],
             "detail": (
                 f"fastest sustained run in window ({int(row['moving_time_s']) // 60} min at "
-                f"{_pace_str(run_pace)}/mi) x {ENVELOPE_RACE_FACTOR} — a floor from training pace, "
+                f"{fmt_pace(run_pace)}/mi) x {ENVELOPE_RACE_FACTOR} — a floor from training pace, "
                 f"not a race result"
             ),
         }],
@@ -285,7 +277,7 @@ def zones_from_predicted(marathon_pace: float, fivek_pace: float) -> dict[str, f
     repetition_pace = repetition_time_s / 60.0
 
     return {
-        "easy_range": f"{_pace_str(marathon_pace + 1.0)}–{_pace_str(marathon_pace + 1.75)}/mi",
+        "easy_range": f"{fmt_pace(marathon_pace + 1.0)}–{fmt_pace(marathon_pace + 1.75)}/mi",
         "marathon": round(marathon_pace, 2),
         "threshold": round(threshold_pace, 2),
         "interval": round(fivek_pace, 2),
@@ -378,7 +370,7 @@ def estimate_fitness(
                 f"Most recent race ({stale['name']}, {stale['date']}) is {newest_age} days old "
                 f"(over {STALE_RACE_DAYS}); a tier-{lower['tier']} training signal "
                 f"({lower['sources'][0]['name']}, {lower['sources'][0]['date']}) predicts a faster 10K "
-                f"({_pace_str(lower['paces']['10K'])}/mi vs {_pace_str(tier1['paces']['10K'])}/mi), "
+                f"({fmt_pace(lower['paces']['10K'])}/mi vs {fmt_pace(tier1['paces']['10K'])}/mi), "
                 f"so the estimate uses the training signal."
             )
     else:

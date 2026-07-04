@@ -50,8 +50,8 @@ def _upsert_env(key: str, value: str) -> None:
 def main() -> None:
     client_id = os.environ.get("STRAVA_CLIENT_ID")
     client_secret = os.environ.get("STRAVA_CLIENT_SECRET")
-    missing = [k for k, v in (("STRAVA_CLIENT_ID", client_id), ("STRAVA_CLIENT_SECRET", client_secret)) if not v]
-    if missing or not client_id or not client_secret:
+    if not client_id or not client_secret:
+        missing = [k for k, v in (("STRAVA_CLIENT_ID", client_id), ("STRAVA_CLIENT_SECRET", client_secret)) if not v]
         raise SystemExit(
             f"Missing {' and '.join(missing)} in .env — see README.md 'Get Strava API credentials' "
             "for where to find these on https://www.strava.com/settings/api."

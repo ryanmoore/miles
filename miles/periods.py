@@ -46,15 +46,15 @@ class Gap(TypedDict):
     weeks: int
 
 
-def _is_active(week: WeekAgg) -> bool:
+def is_active(week: WeekAgg) -> bool:
     return week["runs"] >= ACTIVE_WEEK_MIN_RUNS or week["miles"] >= ACTIVE_WEEK_MIN_MILES
 
 
-def _sunday(monday_iso: str) -> str:
+def sunday_of(monday_iso: str) -> str:
     return (date.fromisoformat(monday_iso) + timedelta(days=6)).isoformat()
 
 
-def _zero_fill(weeks: list[WeekAgg]) -> list[WeekAgg]:
+def zero_fill(weeks: list[WeekAgg]) -> list[WeekAgg]:
     """Fill every calendar week between the first and last given Monday with a zero week."""
     if not weeks:
         return []
@@ -77,8 +77,8 @@ def detect_periods(weeks: list[WeekAgg]) -> tuple[list[Period], list[Gap]]:
     between them. Leading/trailing inactive weeks belong to no period and are
     not reported as gaps (only inter-period stretches are).
     """
-    filled = _zero_fill(weeks)
-    active_idxs = [i for i, w in enumerate(filled) if _is_active(w)]
+    filled = zero_fill(weeks)
+    active_idxs = [i for i, w in enumerate(filled) if is_active(w)]
     if not active_idxs:
         return [], []
 
@@ -97,7 +97,7 @@ def detect_periods(weeks: list[WeekAgg]) -> tuple[list[Period], list[Gap]]:
         weeks_active = len(cluster)
         periods.append({
             "start": filled[first_i]["monday"],
-            "end": _sunday(filled[last_i]["monday"]),
+            "end": sunday_of(filled[last_i]["monday"]),
             "weeks_total": len(span),
             "weeks_active": weeks_active,
             "total_miles": round(total_miles, 1),
@@ -112,7 +112,7 @@ def detect_periods(weeks: list[WeekAgg]) -> tuple[list[Period], list[Gap]]:
         gap_start_i, gap_end_i = prev_cluster[-1] + 1, next_cluster[0] - 1
         gaps.append({
             "start": filled[gap_start_i]["monday"],
-            "end": _sunday(filled[gap_end_i]["monday"]),
+            "end": sunday_of(filled[gap_end_i]["monday"]),
             "weeks": gap_end_i - gap_start_i + 1,
         })
 

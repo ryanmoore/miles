@@ -61,21 +61,20 @@ WORKOUT_TYPE_MAP: dict[int, str] = {
     3: "workout",
 }
 
-# Effective run type: prefer the inferred label over Strava's default "easy" bucket,
-# but only when the athlete never tagged the activity (workout_type == 0 is "unset").
-# Explicit athlete tags (workout_type 1-3) always win.
-EFFECTIVE_RUN_TYPE_SQL: str = (
-    "COALESCE(CASE WHEN workout_type = 0 THEN run_type_inferred END, run_type)"
-)
-
-
 def effective_run_type_sql(alias: str = "") -> str:
-    """Same as EFFECTIVE_RUN_TYPE_SQL, with column names qualified by a table alias (e.g. "a")."""
+    """SQL expression for the effective run type, with column names optionally
+    qualified by a table alias (e.g. "a"). Prefers the inferred label over Strava's
+    default "easy" bucket, but only when the athlete never tagged the activity
+    (workout_type == 0 is "unset"). Explicit athlete tags (workout_type 1-3) always win.
+    """
     prefix = f"{alias}." if alias else ""
     return (
         f"COALESCE(CASE WHEN {prefix}workout_type = 0 THEN {prefix}run_type_inferred END, "
         f"{prefix}run_type)"
     )
+
+
+EFFECTIVE_RUN_TYPE_SQL: str = effective_run_type_sql()
 
 
 def connect(path: Path = DB_PATH) -> sqlite3.Connection:

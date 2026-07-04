@@ -39,10 +39,18 @@ def _run(conn: sqlite3.Connection, full: bool) -> None:
     total = conn.execute("SELECT COUNT(*) FROM activities").fetchone()[0]
     print(f"Done. {len(rows)} new/updated. {total} total in DB.")
 
-    # Lazy lap sync: fetch laps for workout activities that have none yet.
-    unsynced = conn.execute("""
+    # Run derive here (not just at the end) so newly synced rows have run_type_inferred
+    # populated before the lap fetch below queries effective type — otherwise
+    # freshly-inferred races/workouts would be skipped for another sync cycle.
+    counts = derive_all(conn)
+    summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "no changes"
+    print(f"Derive done. {summary}")
+
+    # Lazy lap sync: fetch laps for workout/race activities that have none yet.
+    effective_run_type = db.effective_run_type_sql()
+    unsynced = conn.execute(f"""
         SELECT activity_id, name FROM activities
-        WHERE run_type = 'workout'
+        WHERE {effective_run_type} IN ('workout', 'race')
           AND activity_id NOT IN (SELECT DISTINCT activity_id FROM laps)
         ORDER BY start_date
     """).fetchall()

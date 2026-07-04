@@ -27,6 +27,7 @@ def _conn() -> sqlite3.Connection:
 _PACE_KEYS = frozenset({
     "pace_min_per_mile", "avg_pace_min_per_mile", "avg_pace",
     "avg_rep_pace", "best_rep_pace", "pace_min_mi", "avg_pace_min_mi",
+    "first_half_pace", "second_half_pace",
 })
 
 
@@ -424,11 +425,12 @@ def _race_rows(
     conn: sqlite3.Connection,
     distance_category: str | None = None,
     start_date: str | None = None,
+    activity_id: int | None = None,
 ) -> list[dict[str, object]]:
     """
     All effective-race activities, ascending by date. PR flags are computed over
-    the athlete's full race history first; distance_category/start_date filter
-    the returned rows afterward, so filtering never changes an is_pr verdict.
+    the athlete's full race history first; distance_category/start_date/activity_id
+    filter the returned rows afterward, so filtering never changes an is_pr verdict.
     """
     effective_run_type = db.effective_run_type_sql("a")
     _, sport_params = _run_type_filter()
@@ -471,6 +473,8 @@ def _race_rows(
             continue
         race_date: str = r["date"]
         if start_date is not None and race_date < start_date:
+            continue
+        if activity_id is not None and r["activity_id"] != activity_id:
             continue
 
         out.append({
@@ -1436,6 +1440,133 @@ def get_workout_session(activity_id: int) -> str:
             {"lap_num": i + 1, "lap_type": r["lap_type"], **{k: r[k] for k in keep}}
             for i, r in enumerate(laps)
         ],
+    }))
+
+
+_RACE_SPLITS_META_KEYS = (
+    "date", "name", "distance_category", "distance_miles",
+    "finish_time", "finish_time_s", "pace_min_per_mile", "strava_url",
+)
+
+
+@mcp.tool()
+def get_race_splits(activity_id: int) -> str:
+    """
+    Post-race split analysis: how the effort was paced across the two halves of the
+    race, and where it fell apart (if it did). split_type is negative (back half
+    ≥1% faster), even (within 1%), or positive (back half slower) — the standard
+    three-way pacing verdict. fade_pct > 0 means the athlete slowed in the second half.
+
+    Laps come from the athlete's watch (manual lap presses or Garmin auto-lap),
+    synced by miles-sync once an activity is tagged/inferred as a race — only
+    available after a sync has fetched that race's laps.
+
+    Returns race metadata (date, name, distance_category, distance_miles,
+    finish_time, finish_time_s, pace_min_per_mile, strava_url) plus:
+      laps: [{lap_num, distance_miles, duration_s, pace_min_mi, avg_hr, max_hr,
+              cumulative_time_s}]
+      summary: {first_half_pace, second_half_pace, split_type, fade_pct,
+                fastest_lap, slowest_lap}  (fastest/slowest are lap_num values)
+    Trivial laps (< 200m or < 45s) are excluded before splitting; the straddling
+    lap at the halfway point is apportioned by distance.
+    """
+    conn = _conn()
+
+    races = _race_rows(conn, activity_id=activity_id)
+    if not races:
+        exists = conn.execute(
+            "SELECT 1 FROM activities WHERE activity_id = ?", [activity_id]
+        ).fetchone()
+        if exists is None:
+            return json.dumps({"error": f"Activity {activity_id} not found."})
+        return json.dumps({"error": f"Activity {activity_id} is not a race."})
+    race_meta = {k: races[0][k] for k in _RACE_SPLITS_META_KEYS}
+
+    laps = conn.execute("""
+        SELECT
+            lap_index,
+            distance_m,
+            ROUND(distance_m / 1609.34, 3) AS distance_miles,
+            moving_time_s AS duration_s,
+            CASE WHEN average_speed_mps > 0
+                 THEN ROUND(26.8224 / average_speed_mps, 2)
+                 ELSE NULL END AS pace_min_mi,
+            ROUND(average_heartrate) AS avg_hr,
+            ROUND(max_heartrate) AS max_hr
+        FROM laps
+        WHERE activity_id = ?
+          AND distance_m >= 200 AND moving_time_s >= 45
+          AND average_speed_mps IS NOT NULL AND average_speed_mps > 0
+        ORDER BY lap_index
+    """, [activity_id]).fetchall()
+
+    if not laps:
+        return json.dumps({"error": "No laps synced for this race — run miles-sync."})
+
+    lap_dicts: list[dict[str, object]] = []
+    cumulative_s = 0
+    for i, lap in enumerate(laps):
+        cumulative_s += int(lap["duration_s"])
+        lap_dicts.append({
+            "lap_num": i + 1,
+            "distance_miles": lap["distance_miles"],
+            "duration_s": lap["duration_s"],
+            "pace_min_mi": lap["pace_min_mi"],
+            "avg_hr": lap["avg_hr"],
+            "max_hr": lap["max_hr"],
+            "cumulative_time_s": cumulative_s,
+        })
+
+    total_distance_m = sum(float(lap["distance_m"]) for lap in laps)
+    total_time_s = sum(float(lap["duration_s"]) for lap in laps)
+
+    # Split at half the total distance, apportioning the straddling lap by distance.
+    remaining_half_m = total_distance_m / 2
+    first_half_time_s = 0.0
+    first_half_distance_m = 0.0
+    for lap in laps:
+        if remaining_half_m <= 0:
+            break
+        lap_distance_m = float(lap["distance_m"])
+        lap_duration_s = float(lap["duration_s"])
+        if lap_distance_m <= remaining_half_m:
+            first_half_time_s += lap_duration_s
+            first_half_distance_m += lap_distance_m
+            remaining_half_m -= lap_distance_m
+        else:
+            frac = remaining_half_m / lap_distance_m
+            first_half_time_s += lap_duration_s * frac
+            first_half_distance_m += remaining_half_m
+            remaining_half_m = 0.0
+
+    second_half_time_s = total_time_s - first_half_time_s
+    second_half_distance_m = total_distance_m - first_half_distance_m
+
+    first_half_pace = (first_half_time_s / 60) / (first_half_distance_m / 1609.34)
+    second_half_pace = (second_half_time_s / 60) / (second_half_distance_m / 1609.34)
+    fade_pct = (second_half_pace / first_half_pace - 1) * 100
+    if second_half_pace <= first_half_pace * 0.99:
+        split_type = "negative"
+    elif second_half_pace < first_half_pace * 1.01:
+        split_type = "even"
+    else:
+        split_type = "positive"
+
+    paces = [float(lap["pace_min_mi"]) for lap in laps]
+    fastest_idx = min(range(len(paces)), key=lambda i: paces[i])
+    slowest_idx = max(range(len(paces)), key=lambda i: paces[i])
+
+    return json.dumps(_fmt_paces({
+        **race_meta,
+        "laps": lap_dicts,
+        "summary": {
+            "first_half_pace": round(first_half_pace, 2),
+            "second_half_pace": round(second_half_pace, 2),
+            "split_type": split_type,
+            "fade_pct": round(fade_pct, 1),
+            "fastest_lap": lap_dicts[fastest_idx]["lap_num"],
+            "slowest_lap": lap_dicts[slowest_idx]["lap_num"],
+        },
     }))
 
 

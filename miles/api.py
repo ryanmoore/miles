@@ -8,9 +8,11 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import db
+from .builds import Build, RaceRef, detect_builds
 from .derive import ensure_derived
 from .format import fmt_time as _fmt_time
-from .races import MARATHON_MAX_M, MARATHON_MIN_M
+from .periods import Gap, Period, WeekAgg, _zero_fill, detect_periods
+from .races import MARATHON_MAX_M, MARATHON_MIN_M, classify_race_distance
 
 app = FastAPI(title="miles")
 
@@ -236,6 +238,93 @@ def get_marathon_weeks(build_weeks: int = _BUILD_WEEKS) -> list[MarathonWeeks]:
         ))
 
     return out
+
+
+class HistoryWeek(TypedDict):
+    monday: str
+    miles: float
+    runs: int
+
+
+class RaceMarker(TypedDict):
+    date: str
+    name: str | None
+    distance_category: str
+    effort: str | None
+
+
+class WeeklyHistory(TypedDict):
+    weeks: list[HistoryWeek]
+    periods: list[Period]
+    gaps: list[Gap]
+    builds: list[Build]
+    races: list[RaceMarker]
+
+
+@app.get("/api/weekly-history")
+def get_weekly_history() -> WeeklyHistory:
+    """
+    Every week of running history, zero-filled, plus detected training periods,
+    gaps, race-anchored builds within them, and every race with its effort label.
+    """
+    conn = _conn()
+    effective_run_type = db.effective_run_type_sql()
+    tc, tp = _type_clause()
+
+    week_rows = conn.execute(f"""
+        SELECT
+            DATE(start_date, '-' || ((CAST(strftime('%w', start_date) AS INTEGER) + 6) % 7) || ' days') AS monday,
+            ROUND(SUM(distance_m) / 1609.34, 2) AS miles,
+            COUNT(*) AS runs,
+            SUM(CASE WHEN {effective_run_type} = 'workout' THEN 1 ELSE 0 END) AS workouts
+        FROM activities
+        WHERE {tc}
+        GROUP BY monday
+        ORDER BY monday
+    """, tp).fetchall()
+
+    weeks: list[WeekAgg] = [
+        {"monday": r["monday"], "miles": r["miles"] or 0.0, "runs": r["runs"], "workouts": r["workouts"] or 0}
+        for r in week_rows
+    ]
+    filled_weeks = _zero_fill(weeks)
+    periods, gaps = detect_periods(weeks)
+
+    race_rows = conn.execute(f"""
+        SELECT DATE(start_date) AS date, name, distance_m, race_effort
+        FROM activities
+        WHERE {tc} AND {effective_run_type} = 'race'
+        ORDER BY date
+    """, tp).fetchall()
+
+    races = [
+        RaceMarker(
+            date=r["date"],
+            name=r["name"],
+            distance_category=classify_race_distance(r["distance_m"]) or "other",
+            effort=r["race_effort"],
+        )
+        for r in race_rows
+    ]
+    race_refs: list[RaceRef] = [
+        {
+            "date": r["date"],
+            "name": r["name"],
+            "distance_category": classify_race_distance(r["distance_m"]) or "other",
+            "distance_m": r["distance_m"],
+        }
+        for r in race_rows
+        if r["distance_m"] is not None
+    ]
+    builds = detect_builds(weeks, race_refs, periods) if periods else []
+
+    return WeeklyHistory(
+        weeks=[HistoryWeek(monday=w["monday"], miles=w["miles"], runs=w["runs"]) for w in filled_weeks],
+        periods=periods,
+        gaps=gaps,
+        builds=builds,
+        races=races,
+    )
 
 
 app.mount("/", StaticFiles(directory=str(_STATIC), html=True), name="static")

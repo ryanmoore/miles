@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Miles — Training</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
+  <link rel="stylesheet" href="/theme.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+</head>
+<body>
+<script src="/nav.js"></script>
+
+<main>
+  <p class="lede">every week of training, with detected periods, builds, and races</p>
+  <div id="status">Loading…</div>
+
+  <section id="section-chart" style="display:none">
+    <h2>Weekly Mileage</h2>
+    <p class="desc">Shaded bands are detected training periods (label = avg active mpw) · deeper bands within are race builds · vertical lines are races · drag the slider to change the time range</p>
+    <div class="chart-wrap">
+      <div id="chart-history" style="width:100%;height:100%"></div>
+    </div>
+  </section>
+
+  <section id="section-periods" style="display:none">
+    <h2>Training Periods</h2>
+    <p class="desc">Stretches of consistent running separated by 3+ empty weeks</p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Start</th>
+            <th>End</th>
+            <th class="r">Active / Total Weeks</th>
+            <th class="r">Total Miles</th>
+            <th class="r">Peak Week</th>
+          </tr>
+        </thead>
+        <tbody id="body-periods"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="section-builds" style="display:none">
+    <h2>Builds</h2>
+    <p class="desc">Race-anchored preparation windows detected within periods</p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Race</th>
+            <th>Start</th>
+            <th class="r">Weeks</th>
+            <th>Bounded By</th>
+            <th class="r">Avg mpw</th>
+            <th class="r">Workouts / wk</th>
+          </tr>
+        </thead>
+        <tbody id="body-builds"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+  function td(val, cls = 'r') {
+    if (val == null) return `<td class="dash">—</td>`;
+    return `<td class="${cls}">${val}</td>`;
+  }
+
+  function dayMs(d) { return new Date(d + 'T00:00:00').getTime(); }
+
+  async function load() {
+    const res = await fetch('/api/weekly-history');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  function renderEmpty() {
+    document.getElementById('status').textContent =
+      'No runs found — sync some activities first.';
+  }
+
+  function renderPeriods(periods) {
+    document.getElementById('section-periods').style.display = '';
+    document.getElementById('body-periods').innerHTML = periods.map(p => `<tr>
+      ${td(p.start, '')}
+      ${td(p.end, '')}
+      ${td(`${p.weeks_active} / ${p.weeks_total}`)}
+      ${td(p.total_miles.toFixed(1))}
+      ${td(p.peak_week_miles.toFixed(1))}
+    </tr>`).join('');
+  }
+
+  function renderBuilds(builds) {
+    if (!builds.length) return;
+    document.getElementById('section-builds').style.display = '';
+    document.getElementById('body-builds').innerHTML = builds.map(b => `<tr>
+      ${td(`${b.race.name ?? b.race.distance_category} (${b.race.date})`, '')}
+      ${td(b.start, '')}
+      ${td(b.weeks)}
+      ${td(b.bounded_by, '')}
+      ${td(b.avg_mpw.toFixed(1))}
+      ${td(b.workouts_per_week.toFixed(2))}
+    </tr>`).join('');
+  }
+
+  function renderChart(data) {
+    const theme = chartTheme();
+    const { weeks, periods, builds, races } = data;
+
+    document.getElementById('section-chart').style.display = '';
+    document.getElementById('status').textContent =
+      `${weeks.length} weeks · ${periods.length} periods · ${builds.length} builds · ${races.length} races`;
+
+    const barData = weeks.map(w => [w.monday, w.miles]);
+
+    // Period bands (avg active mpw label, always visible) with build bands
+    // (deeper tint, label appears on hover) drawn on top of them.
+    const periodAreas = periods.map(p => ([
+      {
+        xAxis: p.start,
+        itemStyle: { color: withAlpha(theme.muted, theme.isDark ? 0.14 : 0.09) },
+        label: {
+          show: true, position: 'insideTop', color: theme.muted,
+          fontSize: 10, formatter: `${p.avg_mpw_active.toFixed(1)} mpw`,
+        },
+      },
+      { xAxis: p.end },
+    ]));
+
+    const buildAreas = builds.map(b => ([
+      {
+        xAxis: b.start,
+        itemStyle: { color: withAlpha(theme.accent, theme.isDark ? 0.16 : 0.12) },
+        label: { show: false },
+        emphasis: {
+          label: {
+            show: true, position: 'insideTop', color: theme.accent,
+            fontSize: 10, fontWeight: 600,
+            formatter: `${b.race.name ?? b.race.distance_category} build · ${b.weeks}wk`,
+          },
+        },
+      },
+      { xAxis: b.end },
+    ]));
+
+    const raceLines = races.map(r => {
+      const casual = r.effort === 'casual';
+      const color = casual ? theme.muted : theme.accent;
+      return {
+        xAxis: r.date,
+        lineStyle: { color, width: 1, type: casual ? 'dashed' : 'solid', opacity: casual ? 0.5 : 0.85 },
+        label: {
+          show: true, formatter: r.distance_category, position: 'end',
+          rotate: 90, align: 'left', verticalAlign: 'middle',
+          color, fontSize: 10, opacity: casual ? 0.6 : 1,
+        },
+      };
+    });
+
+    const chart = echarts.init(document.getElementById('chart-history'));
+    const lastDate = weeks.length ? dayMs(weeks[weeks.length - 1].monday) : Date.now();
+    const twoYearsAgo = lastDate - 2 * 365 * 24 * 3600 * 1000;
+    const firstDate = weeks.length ? dayMs(weeks[0].monday) : lastDate;
+
+    chart.setOption({
+      animation: false,
+      grid: { top: 40, right: 36, bottom: 90, left: 52 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: theme.surface,
+        borderColor: theme.gridline,
+        textStyle: { fontSize: 12, color: theme.text },
+        formatter(params) {
+          const p = params[0];
+          return `<div style="font-weight:600;margin-bottom:2px;color:${theme.text}">${p.axisValueLabel}</div>
+                  ${p.value[1].toFixed(1)} mi`;
+        },
+      },
+      xAxis: {
+        type: 'time',
+        axisLine: { lineStyle: { color: theme.gridline } },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 11, color: theme.muted },
+        min: firstDate,
+        max: lastDate,
+      },
+      yAxis: {
+        type: 'value',
+        name: 'Miles',
+        nameLocation: 'middle',
+        nameGap: 40,
+        nameTextStyle: { fontSize: 11, color: theme.muted },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: theme.gridline } },
+        axisLabel: { fontSize: 11, color: theme.muted },
+      },
+      dataZoom: [
+        { type: 'inside', startValue: twoYearsAgo, endValue: lastDate },
+        {
+          type: 'slider', bottom: 12, height: 24,
+          startValue: twoYearsAgo, endValue: lastDate,
+          borderColor: theme.gridline,
+          textStyle: { color: theme.muted, fontSize: 10 },
+          fillerColor: withAlpha(theme.accent, 0.12),
+          handleStyle: { color: theme.baseline },
+        },
+      ],
+      series: [{
+        name: 'Weekly miles',
+        type: 'bar',
+        data: barData,
+        barMaxWidth: 10,
+        itemStyle: { color: theme.series[0], borderRadius: [2, 2, 0, 0] },
+        markArea: { silent: false, data: [...periodAreas, ...buildAreas] },
+        markLine: {
+          silent: false,
+          symbol: ['none', 'none'],
+          data: raceLines,
+        },
+      }],
+    });
+
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  load().then(data => {
+    if (!data.weeks.length) {
+      renderEmpty();
+      return;
+    }
+    renderChart(data);
+    renderPeriods(data.periods);
+    renderBuilds(data.builds);
+  }).catch(err => {
+    document.getElementById('status').textContent = `Error: ${err.message}`;
+  });
+</script>
+</body>
+</html>

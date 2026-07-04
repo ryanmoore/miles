@@ -8,14 +8,15 @@ including ad-hoc `run_sql` queries.
 """
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from .classifier import classify_laps
+from .fitness import estimate_fitness
 from .inference import apply_inference
 
 # Bump whenever any classifier or threshold feeding a derived value changes, so
 # ensure_derived() knows stale rows need a full recompute.
-DERIVE_VERSION = "1"
+DERIVE_VERSION = "3"
 
 # Laps below this floor are never classified (too short/slow to read a speed signal).
 LAP_MIN_DISTANCE_M = 200
@@ -64,6 +65,47 @@ def _type_laps(conn: sqlite3.Connection) -> int:
     return typed
 
 
+# Confidence encodes the winning signal tier one-to-one.
+_TIER_BY_CONFIDENCE: dict[str, int] = {"high": 1, "medium": 1, "medium-low": 2, "low": 3}
+
+
+def _fitness_checkpoints(conn: sqlite3.Connection) -> int:
+    """Rebuild the monthly fitness checkpoints from the first activity month
+    through the current month. Returns rows inserted."""
+    conn.execute("DELETE FROM fitness_checkpoints")
+
+    row = conn.execute("SELECT MIN(DATE(start_date)) AS d FROM activities").fetchone()
+    first: str | None = row["d"] if row is not None else None
+    if first is None:
+        return 0
+
+    today = date.today()
+    year, month = int(first[:4]), int(first[5:7])
+    inserted = 0
+    while (year, month) <= (today.year, today.month):
+        next_month = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+        as_of = min(next_month - timedelta(days=1), today)
+        est = estimate_fitness(conn, as_of)
+        if est is not None:
+            conn.execute("""
+                INSERT INTO fitness_checkpoints
+                    (month, confidence, source_tier, pace_5k, pace_10k, pace_half, pace_marathon)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                f"{year:04d}-{month:02d}",
+                est["confidence"],
+                _TIER_BY_CONFIDENCE[est["confidence"]],
+                est["predicted"]["5K"],
+                est["predicted"]["10K"],
+                est["predicted"]["half"],
+                est["predicted"]["marathon"],
+            ))
+            inserted += 1
+        year, month = next_month.year, next_month.month
+
+    return inserted
+
+
 def derive_all(conn: sqlite3.Connection) -> dict[str, int]:
     """Full recompute of every derived value from raw synced data. Never incremental."""
     counts: dict[str, int] = {}
@@ -73,6 +115,7 @@ def derive_all(conn: sqlite3.Connection) -> dict[str, int]:
         counts[f"inferred_{run_type}"] = n
 
     counts["laps_typed"] = _type_laps(conn)
+    counts["fitness_months"] = _fitness_checkpoints(conn)
 
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(

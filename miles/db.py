@@ -165,6 +165,17 @@ def init_db(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError:
             pass
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS fitness_checkpoints (
+            month         TEXT PRIMARY KEY,
+            confidence    TEXT,
+            source_tier   INTEGER,
+            pace_5k       REAL,
+            pace_10k      REAL,
+            pace_half     REAL,
+            pace_marathon REAL
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS meta (
             key   TEXT PRIMARY KEY,
             value TEXT

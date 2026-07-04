@@ -8,6 +8,7 @@ from mcp.server.fastmcp import FastMCP
 from . import db
 from .builds import Build, RaceRef, detect_builds
 from .derive import ensure_derived
+from .fitness import WINDOW_DAYS, estimate_fitness
 from .format import fmt_time
 from .periods import GAP_WEEKS_TO_SPLIT, Period, WeekAgg, _is_active, _sunday, detect_periods
 from .races import MARATHON_MAX_M, MARATHON_MIN_M, NOMINAL_METERS, classify_race_distance, riegel_time
@@ -1749,6 +1750,90 @@ def get_activity_weather(activity_id: int) -> str:
 
 
 @mcp.tool()
+def get_fitness_estimate(as_of: str | None = None) -> str:
+    """
+    Predicted race paces (5K/10K/half/marathon) and derived training zones as of a
+    date (YYYY-MM-DD, default today), from the best signal in the trailing 180 days:
+    races (confidence high/medium), classified workout laps (medium-low), or the
+    fastest sustained training run scaled to a race-pace envelope (low).
+
+    When quoting this, ALWAYS state `confidence` and cite `sources`. `low` is a
+    floor derived from training paces, not a fitness fact — phrase it as "at
+    least". Predictions assume race-specific training: they get less reliable the
+    further a target distance is from what the athlete recently raced or trained
+    for. A `note` appears when the newest race is stale and a fresher lower-tier
+    signal predicts faster — relay it rather than silently picking a number.
+
+    Zones: easy_range (marathon pace +1:00 to +1:45/mi), marathon, threshold
+    (15K-equivalent), interval (5K), repetition (mile-equivalent). All paces are
+    M:SS per mile. Returns {"error": ...} when there is no signal in the window.
+    """
+    conn = _conn()
+    try:
+        as_of_date = date.fromisoformat(as_of) if as_of else date.today()
+    except ValueError:
+        return json.dumps({"error": f"Invalid as_of date: {as_of!r} (expected YYYY-MM-DD)."})
+
+    est = estimate_fitness(conn, as_of_date)
+    if est is None:
+        return json.dumps({
+            "error": f"No fitness signal in the trailing {WINDOW_DAYS} days before {as_of_date.isoformat()}."
+        })
+
+    out: dict[str, object] = {
+        "as_of": est["as_of"],
+        "confidence": est["confidence"],
+        "predicted": {k: _pace_str(v) for k, v in est["predicted"].items()},
+        "zones": {
+            k: (v if isinstance(v, str) else _pace_str(v))
+            for k, v in est["zones"].items()
+        },
+        "sources": est["sources"],
+    }
+    if "note" in est:
+        out["note"] = est["note"]
+    return json.dumps(out)
+
+
+@mcp.tool()
+def get_fitness_trend(months: int = 36) -> str:
+    """
+    Estimated race-pace trend over time: one checkpoint per calendar month with
+    any fitness signal, read from the fitness_checkpoints table (derived, rebuilt
+    each sync). Each row: month, confidence, source_tier (1 = races, 2 = workout
+    laps, 3 = envelope floor), and predicted 5K/10K/half/marathon paces (M:SS/mi).
+    Use it for "am I fitter than last year?" — expect paces to drift slower after
+    breaks and sharpen toward races. Low-confidence months are floors, not facts.
+    For a full estimate with zones and evidence at an arbitrary date, use
+    get_fitness_estimate.
+    """
+    conn = _conn()
+    cutoff = (date.today() - timedelta(days=months * 30)).strftime("%Y-%m")
+    rows = conn.execute("""
+        SELECT month, confidence, source_tier, pace_5k, pace_10k, pace_half, pace_marathon
+        FROM fitness_checkpoints
+        WHERE month >= ?
+        ORDER BY month
+    """, [cutoff]).fetchall()
+
+    return json.dumps([
+        {
+            "month": r["month"],
+            "confidence": r["confidence"],
+            "source_tier": r["source_tier"],
+            **{
+                key: (_pace_str(float(r[col])) if r[col] is not None else None)
+                for key, col in (
+                    ("pace_5k", "pace_5k"), ("pace_10k", "pace_10k"),
+                    ("pace_half", "pace_half"), ("pace_marathon", "pace_marathon"),
+                )
+            },
+        }
+        for r in rows
+    ])
+
+
+@mcp.tool()
 def run_sql(query: str) -> str:
     """
     Run a read-only SQL SELECT against the database.
@@ -1771,6 +1856,11 @@ def run_sql(query: str) -> str:
     Table: weather  (one row per activity; populated by miles-sync)
       activity_id, fetched_at, temp_c_start, temp_c_end, temp_c_avg, temp_c_max,
       apparent_temp_c_max, humidity_avg, precip_mm, wind_kph_avg, hourly_json
+
+    Table: fitness_checkpoints  (derived, rebuilt each sync — not athlete-entered)
+      month (YYYY-MM), confidence, source_tier (1=races, 2=workout laps, 3=envelope
+      floor), pace_5k, pace_10k, pace_half, pace_marathon (decimal min/mi) — one row
+      per calendar month with any fitness signal; see get_fitness_trend
 
     Table: meta  (key-value; derived-layer bookkeeping, rebuilt each sync)
       key, value — see derive_version, derived_at

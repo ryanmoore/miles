@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Miles · Builds</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
+  <link rel="stylesheet" href="/theme.css">
+  <style>
+    .builds-view h1 {
+      font-size: 1.25rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.25rem;
+    }
+    .builds-view .subtitle { font-size: 0.8125rem; color: var(--muted); margin-bottom: 1.25rem; }
+    .builds-view .builds-empty { font-size: 0.8125rem; color: var(--muted); padding: 1rem 0; }
+
+    /* Stat strip — ported from races.html's .dist-view pattern, scoped locally. */
+    .builds-view .stat-strip {
+      display: flex;
+      flex-wrap: wrap;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+    }
+    .builds-view .stat { padding: 0.625rem 1.25rem; }
+    .builds-view .stat + .stat { border-left: 1px solid var(--border); }
+    .builds-view .stat-label {
+      font-size: 0.625rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 0.1875rem;
+    }
+    .builds-view .stat-value {
+      display: flex;
+      align-items: baseline;
+      gap: 0.375rem;
+      font-size: 1.0625rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--text);
+    }
+    .builds-view .stat-sub { font-size: 0.6875rem; font-weight: 400; color: var(--muted); }
+
+    /* Dense table — ported from races.html's .dist-view density rules, scoped locally. */
+    .builds-view .dense tbody td { padding: 0.25rem 0.75rem; font-size: 0.75rem; }
+    .builds-view .dense thead th { padding: 0.375rem 0.75rem; font-size: 0.625rem; }
+    .builds-view .dense .spark { display: block; }
+
+    /* Cross-links into build.html and compare.html. */
+    .builds-view .entity-link { color: inherit; text-decoration: none; }
+    .builds-view .entity-link:hover { text-decoration: underline; }
+    .builds-view .compare-link { font-size: 0.75rem; color: var(--muted); text-decoration: none; }
+    .builds-view .compare-link:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<script src="/nav.js"></script>
+<script src="/charts.js"></script>
+
+<main class="builds-view">
+  <h1>Builds</h1>
+  <p class="subtitle" id="subtitle">Loading…</p>
+
+  <div class="stat-strip" id="stat-strip" style="display:none"></div>
+
+  <div id="section-builds" style="display:none">
+    <div class="scroll dense">
+      <table>
+        <thead>
+          <tr>
+            <th>Race</th>
+            <th>Start</th>
+            <th class="r">Weeks</th>
+            <th class="r">Shape</th>
+            <th>Bounded by</th>
+            <th class="r">Avg mpw</th>
+            <th class="r">Workouts / wk</th>
+            <th>Compare</th>
+          </tr>
+        </thead>
+        <tbody id="body-builds"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <p class="builds-empty" id="empty" style="display:none">No builds detected yet — builds need a race and enough training around it.</p>
+</main>
+
+<script>
+  function td(val, cls = 'r') {
+    if (val == null) return `<td class="dash">—</td>`;
+    return `<td class="${cls}">${val}</td>`;
+  }
+
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g,
+      ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  }
+
+  // Build's race.distance_category (races.py's classify_race_distance buckets,
+  // e.g. '5K'/'10K'/'15K'/'10M'/'half'/'30K'/'marathon'/'50K'/'other') -> the
+  // four buckets compare.html's tabs know, lowercased for its hash format.
+  // Anything else (15K/10M/30K/50K/other) gets no link. Ported from training.html.
+  const COMPARE_BUCKET = { '5K': '5k', '10K': '10k', half: 'half', marathon: 'marathon' };
+
+  // 'YYYY-MM-DD' + whole-week offsets -> 'YYYY-MM-DD', via Date's own
+  // calendar math (safe across month/DST boundaries, unlike ms arithmetic).
+  // Ported from training.html.
+  function addDays(dateStr, days) {
+    const d = new Date(dateStr + 'T00:00:00');
+    d.setDate(d.getDate() + days);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  // Build's own weeks, sliced from the already-loaded global weekly series
+  // into the {offset, miles} shape sparklineSVG expects (offset -weeks..0).
+  // Ported from training.html.
+  function buildWeeksSeries(build, milesByMonday) {
+    const arr = [];
+    for (let o = -build.weeks; o <= 0; o++) {
+      const monday = addDays(build.start, (o + build.weeks) * 7);
+      arr.push({ offset: o, miles: milesByMonday.get(monday) ?? 0 });
+    }
+    return arr;
+  }
+
+  function raceLabel(race) {
+    return `${race.name ?? race.distance_category} (${race.date})`;
+  }
+
+  function renderStatStrip(builds) {
+    const el = document.getElementById('stat-strip');
+    if (!builds.length) return;
+
+    const years = builds.map(b => Number(b.start.slice(0, 4)));
+    const raceYears = builds.map(b => Number(b.race.date.slice(0, 4)));
+
+    let biggest = builds[0];
+    for (const b of builds) if (b.avg_mpw > biggest.avg_mpw) biggest = b;
+
+    let longest = builds[0];
+    for (const b of builds) if (b.weeks > longest.weeks) longest = b;
+
+    let busiest = builds[0];
+    for (const b of builds) if (b.workouts_per_week > busiest.workouts_per_week) busiest = b;
+
+    let latest = builds[0];
+    for (const b of builds) if (b.race.date > latest.race.date) latest = b;
+
+    el.style.display = '';
+    el.innerHTML = `
+      <div class="stat">
+        <div class="stat-label">Builds</div>
+        <div class="stat-value">${builds.length}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Biggest</div>
+        <div class="stat-value">${biggest.avg_mpw.toFixed(1)}<span class="stat-sub">mpw</span></div>
+        <div class="stat-sub">${esc(fmt.shortName(biggest.race.name ?? biggest.race.distance_category, biggest.race.date))}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Longest</div>
+        <div class="stat-value">${longest.weeks}<span class="stat-sub">wk</span></div>
+        <div class="stat-sub">${esc(fmt.shortName(longest.race.name ?? longest.race.distance_category, longest.race.date))}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Most workouts/wk</div>
+        <div class="stat-value">${busiest.workouts_per_week.toFixed(2)}</div>
+        <div class="stat-sub">${esc(fmt.shortName(busiest.race.name ?? busiest.race.distance_category, busiest.race.date))}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Latest</div>
+        <div class="stat-value">${esc(fmt.shortName(latest.race.name ?? latest.race.distance_category, latest.race.date))}</div>
+        <div class="stat-sub">${latest.race.date}</div>
+      </div>
+    `;
+
+    document.getElementById('subtitle').textContent =
+      `${builds.length} detected builds · ${Math.min(...years)}–${Math.max(...raceYears)}`;
+  }
+
+  function renderBuilds(builds, weeks) {
+    if (!builds.length) {
+      document.getElementById('empty').style.display = '';
+      return;
+    }
+    document.getElementById('section-builds').style.display = '';
+
+    const milesByMonday = new Map(weeks.map(w => [w.monday, w.miles]));
+    // detect_builds() returns builds oldest-first; reverse so the initial
+    // render already reads Start-descending, matching makeSortable's
+    // initial-arrow hint below (it labels the sort, it doesn't apply it).
+    const ordered = [...builds].reverse();
+    const buildSeries = ordered.map(b => buildWeeksSeries(b, milesByMonday));
+    const globalMax = Math.max(0, ...buildSeries.flat().map(w => w.miles));
+
+    document.getElementById('body-builds').innerHTML = ordered.map((b, i) => {
+      const label = raceLabel(b.race);
+      const bucket = COMPARE_BUCKET[b.race.distance_category];
+      const compareCell = bucket
+        ? `<td><a class="compare-link" href="/compare.html#${bucket}:${b.race.date}">vs →</a></td>`
+        : td(null, '');
+      return `<tr data-race="${b.race.date}">
+        <td><a class="entity-link" href="/build.html#${b.race.date}">${esc(label)}</a></td>
+        ${td(b.start, '')}
+        ${td(b.weeks)}
+        <td class="r">${sparklineSVG(buildSeries[i], b.weeks, globalMax, false)}</td>
+        ${td(b.bounded_by, '')}
+        ${td(b.avg_mpw.toFixed(1))}
+        ${td(b.workouts_per_week.toFixed(2))}
+        ${compareCell}
+      </tr>`;
+    }).join('');
+    makeSortable(document.getElementById('body-builds').closest('table'), { col: 1, dir: 'desc' });
+  }
+
+  async function load() {
+    const res = await fetch('/api/weekly-history');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  load().then(data => {
+    const { weeks, builds } = data;
+    if (!builds.length) {
+      document.getElementById('subtitle').textContent = 'No builds detected yet.';
+      document.getElementById('empty').style.display = '';
+      return;
+    }
+    renderStatStrip(builds);
+    renderBuilds(builds, weeks);
+  }).catch(err => {
+    document.getElementById('subtitle').textContent = `Error: ${err.message}`;
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Miles · Build</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
+  <link rel="stylesheet" href="/theme.css">
+  <style>
+    .build-view h1 {
+      font-size: 1.25rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+    }
+    .build-view .build-head { display: flex; align-items: baseline; gap: 0.75rem; margin-bottom: 0.25rem; }
+    .build-view .strava-link { font-size: 0.75rem; font-weight: 500; color: var(--accent); text-decoration: none; }
+    .build-view .strava-link:hover { text-decoration: underline; }
+    .build-view .subtitle { font-size: 0.8125rem; color: var(--muted); margin-bottom: 1.25rem; }
+    .build-view .subtitle:has(+ .window-note) { margin-bottom: 0.375rem; }
+    .build-view .window-note { font-size: 0.75rem; font-style: italic; color: var(--muted); margin-bottom: 1.25rem; }
+    .build-view .build-empty { font-size: 0.8125rem; color: var(--muted); padding: 1rem 0; }
+    .build-view .build-empty a { color: var(--accent); }
+
+    /* Stat strip — ported from races.html's .dist-view pattern, scoped locally. */
+    .build-view .stat-strip {
+      display: flex;
+      flex-wrap: wrap;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+    }
+    .build-view .stat { padding: 0.625rem 1.25rem; }
+    .build-view .stat + .stat { border-left: 1px solid var(--border); }
+    .build-view .stat-label {
+      font-size: 0.625rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 0.1875rem;
+    }
+    .build-view .stat-value {
+      display: flex;
+      align-items: baseline;
+      gap: 0.375rem;
+      font-size: 1.0625rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--text);
+    }
+    .build-view .stat-sub { font-size: 0.6875rem; font-weight: 400; color: var(--muted); }
+
+    /* Calendar — one row per build week, Monday through Sunday columns. */
+    .build-view .cal { border: 1px solid var(--gridline); border-radius: 8px; overflow: hidden; }
+    .build-view .cal-header, .build-view .cal-row {
+      display: grid;
+      grid-template-columns: 110px repeat(7, minmax(0, 1fr));
+    }
+    .build-view .cal-header .cal-hcell {
+      font-size: 0.625rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      text-align: center;
+      padding: 0.375rem 0;
+      background: var(--bg);
+      border-bottom: 1px solid var(--gridline);
+    }
+    .build-view .cal-header .cal-hcell:first-child { background: transparent; border-bottom: none; }
+    .build-view .cal-leader {
+      padding: 0.5rem 0.625rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text);
+      background: var(--bg);
+      border-right: 1px solid var(--gridline);
+      border-top: 1px solid var(--gridline);
+      margin-top: -1px;
+    }
+    .build-view .cal-row:first-child .cal-leader { border-top: none; margin-top: 0; }
+    .build-view .cal-leader .tile-sub { font-size: 0.6875rem; margin-top: 0.125rem; }
+    .build-view .cal-day {
+      min-height: 72px;
+      background: var(--surface);
+      border-top: 1px solid var(--gridline);
+      border-left: 1px solid var(--gridline);
+      margin-top: -1px;
+      margin-left: -1px;
+      position: relative;
+      padding: 0.25rem 0.375rem;
+    }
+    .build-view .cal-row:first-child .cal-day { border-top: none; margin-top: 0; }
+    .build-view .cal-daynum { position: absolute; top: 0.125rem; right: 0.25rem; font-size: 0.625rem; color: var(--muted); }
+    .build-view .cal-run {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      color: var(--text);
+      margin-top: 0.875rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+    }
+    .build-view .cal-run + .cal-run { margin-top: 0.125rem; }
+    .build-view .cal-run.selected {
+      background: var(--pr-bg);
+      border-radius: 4px;
+      margin-left: -0.25rem;
+      margin-right: -0.25rem;
+      padding-left: 0.25rem;
+      padding-right: 0.25rem;
+    }
+    .build-view .cal-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .build-view .cal-day.out { background: var(--bg); }
+    .build-view .cal-day.out .cal-daynum { opacity: 0.4; }
+    .build-view .cal-day.race-day { background: var(--pr-bg); }
+
+    .build-view .cal-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.25rem;
+      align-items: center;
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.75rem;
+    }
+    .build-view .cal-legend .cal-dot { margin-right: 0.3125rem; }
+
+    /* Lap detail panel — opens directly below the calendar when a run is clicked. */
+    .build-view .lap-panel {
+      margin-top: 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.875rem 1.25rem;
+    }
+    .build-view .lap-panel-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 0.75rem;
+    }
+    .build-view .lap-panel-title {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .build-view .lap-panel-actions { display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0; }
+    .build-view .lap-panel-close {
+      border: none;
+      background: none;
+      font-size: 1.125rem;
+      line-height: 1;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 0 0.125rem;
+    }
+    .build-view .lap-panel-close:hover { color: var(--text); }
+    .build-view .lap-panel-empty { font-size: 0.8125rem; color: var(--muted); }
+
+    /* Workout groups — repeated-session comparison tables below the panel. */
+    .build-view .group-block { margin-bottom: 1.75rem; }
+    .build-view .group-block:last-child { margin-bottom: 0; }
+    .build-view .group-heading {
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.01em;
+      margin-bottom: 0.5rem;
+    }
+    .build-view #workout-groups tr.selected td { background: var(--pr-bg); }
+
+    /* Cross-links to other pages that know this build. */
+    .build-view .elsewhere { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+    .build-view .elsewhere-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+    }
+    .build-view .elsewhere-links { display: flex; flex-wrap: wrap; gap: 1.5rem; }
+    .build-view .elsewhere-links a { font-size: 0.8125rem; font-weight: 500; color: var(--accent); text-decoration: none; }
+    .build-view .elsewhere-links a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<script src="/nav.js"></script>
+<script src="/charts.js"></script>
+
+<main class="build-view">
+  <div id="root">Loading…</div>
+</main>
+
+<script>
+  // Distance-category label: matches races.html/years.html's catLabel convention.
+  const LABELS = { half: 'Half', marathon: 'Marathon', other: 'Other' };
+  function catLabel(c) { return LABELS[c] ?? c; }
+
+  // Only these buckets have a compare.html tab; the hash format is
+  // "#{bucket}:{date}" with the bucket lowercased (compare.html's parseHash).
+  const COMPARE_BUCKET = { '5K': '5k', '10K': '10k', half: 'half', marathon: 'marathon' };
+
+  const TYPE_COLOR = {
+    long_run: 'var(--series-1)',
+    workout: 'var(--series-8)',
+    race: 'var(--good)',
+    easy: 'var(--muted)',
+  };
+
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g,
+      ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  }
+
+  function dash(v, suffix = '') {
+    return v != null ? `${v}${suffix}` : '—';
+  }
+
+  // Matches races.html/training.html's td() convention: null always renders
+  // as a right-aligned dash regardless of the requested class.
+  function td(val, cls = 'r', title = '') {
+    if (val == null) return `<td class="dash">—</td>`;
+    const titleAttr = title ? ` title="${esc(title)}"` : '';
+    return `<td class="${cls}"${titleAttr}>${val}</td>`;
+  }
+
+  // seconds -> "8:30" (no forced hour component — lap durations are always short)
+  function fmtDuration(s) {
+    if (s == null) return null;
+    const m = Math.floor(s / 60);
+    const sec = String(Math.round(s % 60)).padStart(2, '0');
+    return `${m}:${sec}`;
+  }
+
+  function shortDate(dateStr) {
+    return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  function addDays(dateStr, n) {
+    const d = new Date(dateStr + 'T00:00:00');
+    d.setDate(d.getDate() + n);
+    return d.toISOString().slice(0, 10);
+  }
+
+  function errorView(message) {
+    return `<p class="build-empty">${esc(message)} <a href="/races.html">Back to races →</a></p>`;
+  }
+
+  function statStrip(race, build) {
+    const claim = (key, label) => {
+      const c = build.pace_claims?.[key];
+      return `<div class="stat" ${c ? `title="${c.workouts} workout(s)"` : ''}>
+        <div class="stat-label">${label}</div>
+        <div class="stat-value">${c ? fmt.pace(c.pace_min_per_mile) : '—'}</div>
+      </div>`;
+    };
+    return `
+      <div class="stat-strip">
+        <div class="stat">
+          <div class="stat-label">Result</div>
+          <div class="stat-value">${race.finish_time}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Avg</div>
+          <div class="stat-value">${build.avg_mpw.toFixed(1)}<span class="stat-sub">mpw</span></div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Peak week</div>
+          <div class="stat-value">${dash(build.peak_week?.toFixed(1))}<span class="stat-sub">mi</span></div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Peak 3-wk</div>
+          <div class="stat-value">${dash(build.peak_3wk_avg?.toFixed(1))}<span class="stat-sub">mi</span></div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Weeks</div>
+          <div class="stat-value">${build.weeks}<span class="stat-sub">${build.source === 'window' ? `${build.weeks}-wk window` : `${build.bounded_by} sub`}</span></div>
+        </div>
+        ${claim('5k', '5K work')}
+        ${claim('lt', 'LT')}
+        ${claim('mp', 'MP')}
+      </div>`;
+  }
+
+  function runLine(r, race) {
+    const color = TYPE_COLOR[r.run_type] ?? 'var(--muted)';
+    const titleParts = [esc(r.name ?? '')];
+    if (r.pace_min_per_mile != null) titleParts.push(`${fmt.pace(r.pace_min_per_mile)}/mi`);
+    if (r.avg_hr != null) titleParts.push(`${r.avg_hr} bpm`);
+    const title = titleParts.join(' · ');
+
+    // Only the anchor race's own activity gets the bold finish-time treatment —
+    // other race-typed runs in the window (e.g. a tune-up 5K mid-build) render
+    // like any other day, with their own distance/pace in the tooltip.
+    if (r.run_type === 'race' && r.id === race.id) {
+      return `<div class="cal-run" title="${title}" data-run-id="${r.id}">
+        <span class="cal-dot" style="background:${color}"></span>
+        <b>${r.distance_mi} mi · ${race.finish_time}</b>
+      </div>`;
+    }
+    const label = r.workout_label ? ` · ${esc(r.workout_label)}` : '';
+    return `<div class="cal-run" title="${title}" data-run-id="${r.id}">
+      <span class="cal-dot" style="background:${color}"></span>
+      <span>${r.distance_mi} mi</span>${label}
+    </div>`;
+  }
+
+  function dayCell(dateStr, raceDate, daysByDate, race) {
+    const inWindow = dateStr <= raceDate;
+    const runs = inWindow ? (daysByDate.get(dateStr) ?? []) : [];
+    const isRaceDay = dateStr === raceDate;
+    const classes = ['cal-day'];
+    if (!inWindow) classes.push('out');
+    if (isRaceDay) classes.push('race-day');
+    const dayNum = Number(dateStr.slice(8, 10));
+    return `<div class="${classes.join(' ')}">
+      <div class="cal-daynum">${dayNum}</div>
+      ${runs.map(r => runLine(r, race)).join('')}
+    </div>`;
+  }
+
+  function weekRow(week, raceDate, daysByDate, race) {
+    const label = week.offset === 0 ? 'Race wk' : `Wk −${Math.abs(week.offset)}`;
+    const days = Array.from({ length: 7 }, (_, i) => addDays(week.monday, i));
+    return `<div class="cal-row">
+      <div class="cal-leader">
+        <div>${label}</div>
+        <div class="tile-sub">${week.miles.toFixed(1)} mi · ${week.runs} runs</div>
+      </div>
+      ${days.map(d => dayCell(d, raceDate, daysByDate, race)).join('')}
+    </div>`;
+  }
+
+  function calendar(data) {
+    const daysByDate = new Map();
+    for (const d of data.days) {
+      if (!daysByDate.has(d.date)) daysByDate.set(d.date, []);
+      daysByDate.get(d.date).push(d);
+    }
+    const weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return `
+      <div class="cal">
+        <div class="cal-header">
+          <div class="cal-hcell"></div>
+          ${weekdayLabels.map(w => `<div class="cal-hcell">${w}</div>`).join('')}
+        </div>
+        ${data.weeks.map(w => weekRow(w, data.race.date, daysByDate, data.race)).join('')}
+      </div>
+      <div class="cal-legend">
+        <span><span class="cal-dot" style="background:var(--muted)"></span>Easy</span>
+        <span><span class="cal-dot" style="background:var(--series-8)"></span>Workout</span>
+        <span><span class="cal-dot" style="background:var(--series-1)"></span>Long run</span>
+        <span><span class="cal-dot" style="background:var(--good)"></span>Race</span>
+      </div>`;
+  }
+
+  // -----------------------------------------------------------------------
+  // Lap detail panel — click any calendar run or workout-group row to open.
+  // -----------------------------------------------------------------------
+
+  let currentData = null;     // last /api/build-detail payload (drives run lookup by id)
+  let selectedRunId = null;
+  const lapCache = new Map(); // activity id -> laps array, fetched lazily
+
+  function lapPanelHeader(run) {
+    const parts = [
+      esc(run.name ?? ''),
+      shortDate(run.date),
+      `${dash(run.distance_mi)} mi`,
+      `${run.pace_min_per_mile != null ? fmt.pace(run.pace_min_per_mile) : '—'}/mi`,
+    ];
+    if (run.avg_hr != null) parts.push(`${run.avg_hr} bpm`);
+    if (run.workout_label) parts.push(esc(run.workout_label));
+    return parts.join(' · ');
+  }
+
+  // Artifact floor matches the backend's work-lap filter (classifier.py's
+  // 200m/45s floor) — dimmed, not hidden, so the full session stays visible.
+  function lapRow(l) {
+    const artifact = l.moving_time_s < 45 || l.distance_mi < 0.13;
+    const isWork = l.lap_type === 'work';
+    const numCls = artifact ? 'r dim' : (isWork ? 'r bold' : 'r');
+    const typeCls = artifact ? 'dim' : (isWork ? 'bold' : '');
+    return `<tr>
+      ${td(l.lap_index, numCls)}
+      ${td(l.distance_mi != null ? l.distance_mi.toFixed(2) : null, numCls)}
+      ${td(fmtDuration(l.moving_time_s), numCls)}
+      ${td(l.pace_min_per_mile != null ? fmt.pace(l.pace_min_per_mile) : null, numCls)}
+      ${td(l.avg_hr, numCls)}
+      ${td(l.lap_type, typeCls)}
+    </tr>`;
+  }
+
+  function lapPanelBody(laps) {
+    if (!laps.length) return `<p class="lap-panel-empty">No laps synced for this run.</p>`;
+    return `<div class="scroll">
+      <table>
+        <thead>
+          <tr><th class="r">#</th><th class="r">Dist</th><th class="r">Time</th><th class="r">Pace</th><th class="r">HR</th><th>Type</th></tr>
+        </thead>
+        <tbody>${laps.map(lapRow).join('')}</tbody>
+      </table>
+    </div>`;
+  }
+
+  function renderLapPanel(run, bodyHtml) {
+    const panel = document.getElementById('lap-panel');
+    panel.hidden = false;
+    panel.innerHTML = `
+      <div class="lap-panel-head">
+        <div class="lap-panel-title">${lapPanelHeader(run)}</div>
+        <div class="lap-panel-actions">
+          <a class="strava-link" href="https://www.strava.com/activities/${run.id}" target="_blank" rel="noopener">Strava ↗</a>
+          <button type="button" class="lap-panel-close" aria-label="Close">×</button>
+        </div>
+      </div>
+      <div class="lap-panel-body">${bodyHtml}</div>`;
+  }
+
+  function highlightSelected(id) {
+    document.querySelectorAll('[data-run-id].selected').forEach(el => el.classList.remove('selected'));
+    document.querySelectorAll(`[data-run-id="${id}"]`).forEach(el => el.classList.add('selected'));
+  }
+
+  function closeLapPanel() {
+    selectedRunId = null;
+    document.querySelectorAll('[data-run-id].selected').forEach(el => el.classList.remove('selected'));
+    const panel = document.getElementById('lap-panel');
+    panel.hidden = true;
+    panel.innerHTML = '';
+  }
+
+  // scrollAfter: true when the click originated in the workout-groups tables
+  // below the panel, so the (already-visible) panel needs to be scrolled into view.
+  async function selectRun(id, scrollAfter) {
+    const run = currentData?.days.find(d => d.id === id);
+    if (!run) return;
+
+    selectedRunId = id;
+    highlightSelected(id);
+
+    let laps = lapCache.get(id);
+    if (laps === undefined) {
+      renderLapPanel(run, '<p class="lap-panel-empty">Loading…</p>');
+      try {
+        const res = await fetch(`/api/activity-laps?id=${id}`);
+        laps = res.ok ? await res.json() : [];
+      } catch {
+        laps = [];
+      }
+      lapCache.set(id, laps);
+      if (selectedRunId !== id) return; // superseded by another click while fetching
+    }
+    renderLapPanel(run, lapPanelBody(laps));
+    if (scrollAfter) document.getElementById('lap-panel').scrollIntoView({ block: 'nearest' });
+  }
+
+  // -----------------------------------------------------------------------
+  // Workout groups — repeated-session comparison, fetched separately.
+  // -----------------------------------------------------------------------
+
+  function groupRow(s, isLongRun) {
+    const nameCell = `<td>${esc(s.name ?? '')}</td>`;
+    if (isLongRun) {
+      return `<tr class="linked" data-run-id="${s.id}">
+        ${td(s.date, 'dim')}
+        ${nameCell}
+        ${td(s.distance_mi)}
+        ${td(s.pace_min_per_mile != null ? fmt.pace(s.pace_min_per_mile) : null)}
+        ${td(s.avg_hr)}
+      </tr>`;
+    }
+    const w = s.work;
+    return `<tr class="linked" data-run-id="${s.id}">
+      ${td(s.date, 'dim')}
+      ${nameCell}
+      ${td(s.distance_mi)}
+      ${td(w ? w.laps : null)}
+      ${td(w ? w.distance_mi : null)}
+      ${td(w && w.pace_min_per_mile != null ? fmt.pace(w.pace_min_per_mile) : null)}
+      ${td(w ? w.avg_hr : null)}
+    </tr>`;
+  }
+
+  function groupSection(group) {
+    const isLongRun = group.label === 'Long runs';
+    const header = isLongRun
+      ? `<tr><th>Date</th><th>Name</th><th class="r">Mi</th><th class="r">Pace</th><th class="r">HR</th></tr>`
+      : `<tr><th>Date</th><th>Name</th><th class="r">Total mi</th><th class="r">Work laps</th><th class="r">Work mi</th><th class="r">Work pace</th><th class="r">HR</th></tr>`;
+    const n = group.sessions.length;
+    return `
+      <div class="group-block">
+        <h3 class="group-heading">${esc(group.label)} · ${n} session${n === 1 ? '' : 's'}</h3>
+        <div class="scroll">
+          <table>
+            <thead>${header}</thead>
+            <tbody>${group.sessions.map(s => groupRow(s, isLongRun)).join('')}</tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
+  async function loadWorkoutGroups(raceDate) {
+    const container = document.getElementById('workout-groups-body');
+    if (!container) return;
+    try {
+      const res = await fetch(`/api/build-workout-groups?race_date=${encodeURIComponent(raceDate)}`);
+      const groups = res.ok ? await res.json() : [];
+      container.innerHTML = groups.length
+        ? groups.map(groupSection).join('')
+        : `<p class="build-empty">No repeated workout sessions in this build.</p>`;
+    } catch (err) {
+      container.innerHTML = `<p class="build-empty">Error loading workout groups: ${esc(err.message)}</p>`;
+    }
+  }
+
+  function elsewhere(race, build) {
+    const bucket = COMPARE_BUCKET[race.distance_category];
+    const compareLink = bucket
+      ? `<a href="/compare.html#${bucket}:${race.date}">Compare this build →</a>`
+      : '';
+    // No detected build row to flash on training.html when the build is a
+    // fixed-window fallback rather than a real detect_builds() anchor.
+    const historyLink = build.source === 'window'
+      ? ''
+      : `<a href="/training.html#build-${race.date}">See in training history →</a>`;
+    if (!compareLink && !historyLink) return '';
+    return `
+      <div class="elsewhere">
+        <div class="elsewhere-label">This build elsewhere</div>
+        <div class="elsewhere-links">
+          ${compareLink}
+          ${historyLink}
+        </div>
+      </div>`;
+  }
+
+  function render(data) {
+    const { race, build } = data;
+    document.title = race.name ? `Miles · ${race.name}` : 'Miles · Build';
+
+    const dateLabel = new Date(race.date + 'T00:00:00').toLocaleDateString('en-US', {
+      month: 'long', day: 'numeric', year: 'numeric',
+    });
+    const subtitleParts = [dateLabel, catLabel(race.distance_category), race.finish_time];
+    if (race.effort) subtitleParts.push(race.effort);
+
+    const windowNote = build.source === 'window'
+      ? `<p class="window-note">Fixed pre-race window — no detected build for this race.</p>`
+      : '';
+
+    document.getElementById('root').innerHTML = `
+      <div class="build-head">
+        <h1>${esc(race.name ?? 'Race')}</h1>
+        <a class="strava-link" href="https://www.strava.com/activities/${race.id}" target="_blank" rel="noopener">Strava ↗</a>
+      </div>
+      <p class="subtitle">${subtitleParts.map(esc).join(' · ')}</p>
+      ${windowNote}
+      ${statStrip(race, build)}
+      ${calendar(data)}
+      <div class="lap-panel" id="lap-panel" hidden></div>
+      <section id="workout-groups">
+        <h2>Workout groups</h2>
+        <p class="desc">Repeated sessions in this build, compared side by side · click a row for its lap detail</p>
+        <div id="workout-groups-body">Loading…</div>
+      </section>
+      ${elsewhere(race, build)}
+    `;
+  }
+
+  async function load() {
+    const root = document.getElementById('root');
+    const m = /^#(\d{4}-\d{2}-\d{2})$/.exec(location.hash);
+    if (!m) {
+      root.innerHTML = errorView('No race selected.');
+      return;
+    }
+    const raceDate = m[1];
+    root.textContent = 'Loading…';
+    currentData = null;
+    selectedRunId = null;
+
+    let res;
+    try {
+      res = await fetch(`/api/build-detail?race_date=${encodeURIComponent(raceDate)}`);
+    } catch (err) {
+      root.innerHTML = errorView(`Error loading build: ${err.message}`);
+      return;
+    }
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        if (body.detail) detail = body.detail;
+      } catch { /* non-JSON error body */ }
+      root.innerHTML = errorView(detail);
+      return;
+    }
+    currentData = await res.json();
+    render(currentData);
+    loadWorkoutGroups(raceDate);
+  }
+
+  // Delegated on #root (never itself replaced, only its innerHTML) so one
+  // listener survives every load()'s full re-render.
+  document.getElementById('root').addEventListener('click', e => {
+    if (e.target.closest('.lap-panel-close')) {
+      closeLapPanel();
+      return;
+    }
+    if (e.target.closest('a')) return; // let Strava/entity links behave normally
+    const target = e.target.closest('[data-run-id]');
+    if (!target) return;
+    const id = Number(target.dataset.runId);
+    selectRun(id, !!target.closest('#workout-groups'));
+  });
+
+  window.addEventListener('hashchange', load);
+  load();
+</script>
+</body>
+</html>

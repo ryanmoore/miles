@@ -115,7 +115,7 @@
 
       <section>
         <h2>All Races</h2>
-        <p class="desc">Newest first · PRs flagged as of the day they were run · click a row to open on Strava</p>
+        <p class="desc">Newest first · PRs flagged as of the day they were run · click a race for its build, ↗ for Strava</p>
         <div class="scroll">
           <table>
             <thead>
@@ -251,10 +251,13 @@
     const html = newest.map(r => {
       const link = r.strava_url ? ` data-url="${esc(r.strava_url)}"` : '';
       const badge = r.is_pr ? ' <span class="badge">PR</span>' : '';
+      // Race name cross-links to its build detail page (anchored on the race
+      // date, per build.html's hash convention); the row-click-to-Strava
+      // behavior below still owns everywhere else in the row.
       return `<tr class="${r.is_pr ? 'pr' : ''}${r.strava_url ? ' linked' : ''}"${link}>
         ${td(r.date, 'dim')}
         ${td(catLabel(r.distance_category), '')}
-        <td>${esc(r.name)}${badge}</td>
+        <td><a class="entity-link" href="/build.html#${r.date}">${esc(r.name)}</a>${badge}</td>
         ${td(r.finish_time, 'r bold')}
         ${td(r.pace_min_per_mile)}
         ${td(r.effort, 'dim')}
@@ -264,6 +267,7 @@
     const body = document.getElementById('body-races');
     body.innerHTML = html.join('');
     body.addEventListener('click', e => {
+      if (e.target.closest('a.entity-link')) return;
       const url = e.target.closest('tr')?.dataset.url;
       if (url) window.open(url, '_blank', 'noopener');
     });
@@ -566,11 +570,11 @@
       const claim5k = claims['5k'], claimLt = claims.lt, claimMp = claims.mp;
       const delta = !isPR && r.finish_time_s != null && pr?.finish_time_s != null
         ? r.finish_time_s - pr.finish_time_s : null;
-      // Cross-link into the matching training.html build row. Anchored on the
-      // RACE date, not build.start — this page's fixed-window starts differ
-      // from training's detected-build starts, but both know the race date.
+      // Cross-link into the build's own detail page. Anchored on the RACE
+      // date, not build.start — this page's fixed-window starts differ from
+      // the detected-build starts build.html uses, but both know the race date.
       const nameCell = r.name != null
-        ? `<td><a class="entity-link" href="/training.html#build-${r.date}">${esc(r.name)}</a></td>`
+        ? `<td><a class="entity-link" href="/build.html#${r.date}">${esc(r.name)}</a></td>`
         : td(r.name, '');
 
       return `<tr class="${rc}">

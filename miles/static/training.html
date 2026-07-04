@@ -17,6 +17,39 @@
     .training-view .subtitle { font-size: 0.8125rem; color: var(--muted); margin-bottom: 1.25rem; }
     .training-view #section-fitness .chart-wrap { height: 300px; }
 
+    /* Evidence drill-down panel — opens under the Fitness chart on point click. */
+    .training-view .evidence-panel {
+      margin-top: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    }
+    .training-view .evidence-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .training-view .evidence-heading { font-size: 0.8125rem; font-weight: 600; color: var(--text); }
+    .training-view .evidence-pin-note { font-size: 0.6875rem; color: var(--muted); margin-top: 0.125rem; }
+    .training-view .evidence-note { font-size: 0.75rem; color: var(--muted); font-style: italic; margin-top: 0.25rem; }
+    .training-view .evidence-close {
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--muted);
+      font-size: 0.875rem;
+      line-height: 1;
+      padding: 0.125rem 0.5rem;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .training-view .evidence-close:hover { background: var(--gridline); }
+    .training-view .evidence-panel .scroll { border: none; border-radius: 0; box-shadow: none; }
+
     /* Stat strip — ported from races.html's .dist-view pattern, scoped locally. */
     .training-view .stat-strip {
       display: flex;
@@ -71,9 +104,39 @@
 
   <section id="section-fitness" style="display:none">
     <h2>Fitness</h2>
-    <p class="desc" id="fitness-desc">Monthly 5K-equivalent estimate · solid points are race-confirmed, hollow points are lower-confidence estimates</p>
+    <p class="desc" id="fitness-desc">Monthly predicted race pace · solid points are race-confirmed · hover a point for the evidence behind it, click to pin</p>
+    <div class="mode-tabs" id="fitness-tabs">
+      <button class="mode-tab active" data-dist="5k">5K</button>
+      <button class="mode-tab" data-dist="10k">10K</button>
+      <button class="mode-tab" data-dist="half">Half</button>
+      <button class="mode-tab" data-dist="marathon">Marathon</button>
+    </div>
     <div class="chart-wrap">
       <div id="chart-fitness" style="width:100%;height:100%"></div>
+    </div>
+    <div class="evidence-panel" id="fitness-evidence" style="display:none">
+      <div class="evidence-header">
+        <div>
+          <div class="evidence-heading" id="evidence-heading"></div>
+          <div class="evidence-pin-note" id="evidence-pin-note" style="display:none">pinned · click chart to unpin</div>
+          <div class="evidence-note" id="evidence-note" style="display:none"></div>
+        </div>
+        <button class="evidence-close" id="evidence-close" aria-label="Close evidence panel">×</button>
+      </div>
+      <div class="scroll dense">
+        <table>
+          <thead>
+            <tr>
+              <th>Kind</th>
+              <th>Date</th>
+              <th>What</th>
+              <th class="r">Weight</th>
+              <th class="r">5K-eq pace</th>
+            </tr>
+          </thead>
+          <tbody id="evidence-body"></tbody>
+        </table>
+      </div>
     </div>
   </section>
 
@@ -170,8 +233,8 @@
     return res.json();
   }
 
-  async function loadFitness() {
-    const res = await fetch('/api/fitness-trend');
+  async function loadFitnessFull() {
+    const res = await fetch('/api/fitness-trend-full');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   }
@@ -195,11 +258,12 @@
     const el = document.getElementById('stat-strip');
     if (!weeks.length) return;
 
+    // Canonical anchor stat — always 5K, regardless of the chart's distance toggle.
     const latestFitness = fitness.length ? fitness[fitness.length - 1] : null;
     const fitnessStat = `
       <div class="stat">
         <div class="stat-label">Fitness</div>
-        <div class="stat-value">${latestFitness ? fmt.pace(latestFitness.fivek_pace_min_per_mile) : '—'}<span class="stat-sub">${latestFitness ? `5K pace · ${monthYear(latestFitness.date)}` : ''}</span></div>
+        <div class="stat-value">${latestFitness ? fmt.pace(latestFitness.paces['5k']) : '—'}<span class="stat-sub">${latestFitness ? `5K pace · ${monthYear(latestFitness.date)}` : ''}</span></div>
       </div>`;
 
     const thisWeek = weeks[weeks.length - 1].miles;
@@ -301,23 +365,104 @@
 
   window.addEventListener('hashchange', focusBuildFromHash);
 
-  function renderFitnessChart(fitness) {
-    if (!fitness.length) return;
-    document.getElementById('section-fitness').style.display = '';
+  const DIST_LABEL = { '5k': '5K', '10k': '10K', half: 'Half', marathon: 'Marathon' };
 
-    const theme = chartTheme();
-    const topTier = CONFIDENCE_RANK.find(c => fitness.some(f => f.confidence === c));
+  let fitnessData = [];      // full /api/fitness-trend-full response, set once at load
+  let fitnessDist = '5k';    // selected distance tab
+  let fitnessSelected = null; // checkpoint date currently shown in the evidence panel (hover or pin)
+  let fitnessPinned = false;  // true once a click has frozen fitnessSelected against further hover updates
+  let fitnessHoverTimer = null; // debounce handle for hover-driven evidence lookups
+  let fitnessChart = null;
+  const evidenceCache = new Map(); // 'YYYY-MM' -> /api/fitness-evidence response
 
-    const points = fitness.map(f => ({
-      value: [f.date, f.fivek_pace_min_per_mile],
+  // Builds the chart's data points for the current distance + selection state.
+  // Re-run on every distance-tab switch and every hover/pin/deselect change.
+  // Symbol only enlarges for a *pinned* point — plain hover keeps normal sizes
+  // so sweeping across the line doesn't jitter every marker.
+  function fitnessPoints(theme) {
+    const topTier = CONFIDENCE_RANK.find(c => fitnessData.some(f => f.confidence === c));
+    return fitnessData.map(f => ({
+      value: [f.date, f.paces[fitnessDist]],
       meta: f,
+      symbolSize: fitnessPinned && f.date === fitnessSelected ? 11 : 7,
       itemStyle: f.confidence === topTier
         ? { color: theme.accent, borderColor: theme.accent }
         : { color: theme.surface, borderColor: theme.accent, borderWidth: 1.5 },
     }));
+  }
 
-    const chart = echarts.init(document.getElementById('chart-fitness'));
-    chart.setOption({
+  function renderEvidence(evidence) {
+    document.getElementById('evidence-heading').textContent =
+      `Why ${monthYear(`${evidence.month}-01`)} reads ${fmt.pace(evidence.fivek_pace)} (${evidence.confidence})`;
+    document.getElementById('evidence-pin-note').style.display = fitnessPinned ? '' : 'none';
+
+    const noteEl = document.getElementById('evidence-note');
+    noteEl.style.display = evidence.note ? '' : 'none';
+    if (evidence.note) noteEl.textContent = evidence.note;
+
+    document.getElementById('evidence-body').innerHTML = evidence.contributors.map(c => {
+      const kindLabel = c.kind.charAt(0).toUpperCase() + c.kind.slice(1);
+      const what = `<a class="entity-link" href="https://www.strava.com/activities/${c.activity_id}" target="_blank" rel="noopener">${esc(c.detail)}</a>`;
+      return `<tr>
+        <td>${kindLabel}</td>
+        <td>${c.date}</td>
+        <td>${what}</td>
+        ${td(c.weight != null ? c.weight.toFixed(2) : null)}
+        ${td(c.fivek_equiv_pace != null ? fmt.pace(c.fivek_equiv_pace) : null)}
+      </tr>`;
+    }).join('');
+  }
+
+  async function showEvidence(month) {
+    const panel = document.getElementById('fitness-evidence');
+    panel.style.display = '';
+    document.getElementById('evidence-heading').textContent = 'Loading…';
+    document.getElementById('evidence-note').style.display = 'none';
+    document.getElementById('evidence-body').innerHTML = '';
+
+    let evidence = evidenceCache.get(month);
+    if (!evidence) {
+      try {
+        const res = await fetch(`/api/fitness-evidence?month=${encodeURIComponent(month)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        evidence = await res.json();
+        evidenceCache.set(month, evidence);
+      } catch (err) {
+        document.getElementById('evidence-heading').textContent = `Error loading evidence: ${err.message}`;
+        return;
+      }
+    }
+    renderEvidence(evidence);
+  }
+
+  // Shows a checkpoint's evidence. `pin` explicitly sets the pinned flag —
+  // false for hover (live-updating), true for a direct point click.
+  function showFitnessPoint(dateStr, theme, pin) {
+    fitnessSelected = dateStr;
+    fitnessPinned = pin;
+    fitnessChart.setOption({ series: [{ data: fitnessPoints(theme) }] });
+    showEvidence(dateStr.slice(0, 7));
+  }
+
+  // Blank-canvas click: freezes hover on whatever's currently shown, or (if
+  // already pinned) releases it back to live hover-updating. No-op if
+  // nothing has been shown yet.
+  function toggleFitnessPin(theme) {
+    if (!fitnessSelected) return;
+    fitnessPinned = !fitnessPinned;
+    fitnessChart.setOption({ series: [{ data: fitnessPoints(theme) }] });
+    document.getElementById('evidence-pin-note').style.display = fitnessPinned ? '' : 'none';
+  }
+
+  function initFitnessChart(fitness) {
+    if (!fitness.length) return;
+    fitnessData = fitness;
+    document.getElementById('section-fitness').style.display = '';
+
+    const theme = chartTheme();
+
+    fitnessChart = echarts.init(document.getElementById('chart-fitness'));
+    fitnessChart.setOption({
       animation: false,
       grid: { top: 24, right: 24, bottom: 32, left: 52 },
       tooltip: {
@@ -330,7 +475,7 @@
           const f = p.data.meta;
           const basis = f.basis ? `<div style="color:${theme.muted};font-size:11px">${f.basis}</div>` : '';
           return `<div style="font-weight:600;margin-bottom:2px;color:${theme.text}">
-                    ${monthYear(f.date)} · 5K ${fmt.pace(f.fivek_pace_min_per_mile)}/mi · ${f.confidence}
+                    ${monthYear(f.date)} · ${DIST_LABEL[fitnessDist]} ${fmt.pace(f.paces[fitnessDist])}/mi · ${f.confidence}
                   </div>${basis}`;
         },
       },
@@ -351,9 +496,9 @@
         max: v => Math.ceil(v.max * 2) / 2 + 0.5,
       },
       series: [{
-        name: '5K-equivalent pace',
+        name: 'Predicted pace',
         type: 'line',
-        data: points,
+        data: fitnessPoints(theme),
         color: theme.accent,
         lineStyle: { color: theme.accent, width: 2 },
         symbol: 'circle',
@@ -361,7 +506,55 @@
       }],
     });
 
-    window.addEventListener('resize', () => chart.resize());
+    // Hover shows evidence live (debounced so sweeping across points doesn't
+    // spam fetches) unless the panel is currently pinned.
+    fitnessChart.on('mouseover', params => {
+      if (params.componentType !== 'series' || fitnessPinned) return;
+      const dateStr = params.data.meta.date;
+      clearTimeout(fitnessHoverTimer);
+      fitnessHoverTimer = setTimeout(() => showFitnessPoint(dateStr, theme, false), 150);
+    });
+
+    // Cancel a pending hover lookup when the pointer leaves a point — the
+    // panel itself is left showing so it never flickers away mid-read.
+    fitnessChart.on('mouseout', params => {
+      if (params.componentType !== 'series') return;
+      clearTimeout(fitnessHoverTimer);
+    });
+
+    // Direct point click always pins that point's month.
+    fitnessChart.on('click', params => {
+      if (params.componentType !== 'series') return;
+      showFitnessPoint(params.data.meta.date, theme, true);
+    });
+
+    // Click anywhere else on the canvas toggles pin on whatever's currently
+    // shown — easier than clicking precisely on a point. Skip clicks that
+    // already hit a graphic element (zr.target set); the series click
+    // handler above owns those.
+    fitnessChart.getZr().on('click', event => {
+      if (event.target) return;
+      toggleFitnessPin(theme);
+    });
+
+    document.querySelectorAll('#fitness-tabs .mode-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#fitness-tabs .mode-tab').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        fitnessDist = btn.dataset.dist;
+        fitnessChart.setOption({ series: [{ data: fitnessPoints(theme) }] });
+      });
+    });
+
+    document.getElementById('evidence-close').addEventListener('click', () => {
+      clearTimeout(fitnessHoverTimer);
+      document.getElementById('fitness-evidence').style.display = 'none';
+      fitnessSelected = null;
+      fitnessPinned = false;
+      fitnessChart.setOption({ series: [{ data: fitnessPoints(theme) }] });
+    });
+
+    window.addEventListener('resize', () => fitnessChart.resize());
   }
 
   function renderChart(data) {
@@ -485,12 +678,12 @@
     window.addEventListener('resize', () => chart.resize());
   }
 
-  Promise.all([load(), loadFitness().catch(() => [])]).then(([data, fitness]) => {
+  Promise.all([load(), loadFitnessFull().catch(() => [])]).then(([data, fitness]) => {
     if (!data.weeks.length) {
       renderEmpty();
       return;
     }
-    renderFitnessChart(fitness);
+    initFitnessChart(fitness);
     renderChart(data);
     renderStatStrip(data, fitness);
     renderPeriods(data.periods);

@@ -142,7 +142,7 @@
 
   <section id="section-chart" style="display:none">
     <h2>Weekly Mileage</h2>
-    <p class="desc">Shaded bands are detected training periods (label = avg active mpw) · deeper bands within are race builds · vertical lines are races · drag the slider to change the time range</p>
+    <p class="desc">Shaded bands are detected training periods (label = avg active mpw) · deeper bands within are race builds · vertical lines are races · wide zoom shows a 4-week rolling average, zoom in for weekly bars</p>
     <div class="chart-wrap">
       <div id="chart-history" style="width:100%;height:100%"></div>
     </div>
@@ -566,6 +566,38 @@
     window.addEventListener('resize', () => fitnessChart.resize());
   }
 
+  const WEEK_MS = 7 * 24 * 3600 * 1000;
+  const WIDE_ZOOM_SPAN_MS = 130 * WEEK_MS; // beyond this many weeks, bars alias into noise
+
+  // Calendar-complete Mondays between the first and last active week, missing
+  // weeks filled with 0 miles — bar mode skips these, line mode needs them so
+  // the rolling average actually dips across gaps instead of interpolating.
+  function fullWeeksFrom(weeks) {
+    if (!weeks.length) return [];
+    const byMonday = new Map(weeks.map(w => [w.monday, w.miles]));
+    const lastMonday = weeks[weeks.length - 1].monday;
+    const out = [];
+    // Step by calendar date, not fixed ms — a fixed 7*24h step drifts an hour
+    // at DST transitions and lands on the wrong date.
+    const d = new Date(weeks[0].monday + 'T00:00:00');
+    while (true) {
+      const monday = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      out.push({ monday, miles: byMonday.get(monday) ?? 0 });
+      if (monday >= lastMonday) break;
+      d.setDate(d.getDate() + 7);
+    }
+    return out;
+  }
+
+  // Trailing 4-week mean (current week + prior 3), for the zoomed-out line.
+  function rollingAvg(fullWeeks) {
+    return fullWeeks.map((w, i) => {
+      const slice = fullWeeks.slice(Math.max(0, i - 3), i + 1);
+      const mean = slice.reduce((s, x) => s + x.miles, 0) / slice.length;
+      return [w.monday, Math.round(mean * 10) / 10];
+    });
+  }
+
   function renderChart(data) {
     const theme = chartTheme();
     const { weeks, periods, builds, races } = data;
@@ -575,6 +607,7 @@
       `${weeks.length} weeks · ${periods.length} periods · ${builds.length} builds · ${races.length} races`;
 
     const barData = weeks.map(w => [w.monday, w.miles]);
+    const rollData = rollingAvg(fullWeeksFrom(weeks));
 
     // Period bands (avg active mpw label, always visible) with build bands
     // (deeper tint, label appears on hover) drawn on top of them.
@@ -625,6 +658,37 @@
     const twoYearsAgo = lastDate - 2 * 365 * 24 * 3600 * 1000;
     const firstDate = weeks.length ? dayMs(weeks[0].monday) : lastDate;
 
+    // Bar mode below the wide-zoom threshold, line (rolling avg) above it —
+    // same markArea/markLine attached either way so bands/race lines persist.
+    function seriesFor(mode) {
+      const markArea = { silent: false, data: [...periodAreas, ...buildAreas] };
+      const markLine = { silent: false, symbol: ['none', 'none'], data: raceLines };
+      if (mode === 'bar') {
+        return [{
+          name: 'Weekly miles',
+          type: 'bar',
+          data: barData,
+          barMaxWidth: 10,
+          itemStyle: { color: theme.series[0], borderRadius: [2, 2, 0, 0] },
+          markArea,
+          markLine,
+        }];
+      }
+      return [{
+        name: '4-wk avg',
+        type: 'line',
+        data: rollData,
+        showSymbol: false,
+        lineStyle: { width: 1.5, color: theme.series[0] },
+        itemStyle: { color: theme.series[0] },
+        markArea,
+        markLine,
+        z: 3,
+      }];
+    }
+
+    let currentMode = (lastDate - Math.max(twoYearsAgo, firstDate)) > WIDE_ZOOM_SPAN_MS ? 'line' : 'bar';
+
     chart.setOption({
       animation: false,
       grid: { top: 40, right: 36, bottom: 90, left: 52 },
@@ -635,8 +699,8 @@
         textStyle: { fontSize: 12, color: theme.text },
         formatter(params) {
           const p = params[0];
-          return `<div style="font-weight:600;margin-bottom:2px;color:${theme.text}">${p.axisValueLabel}</div>
-                  ${p.value[1].toFixed(1)} mi`;
+          const label = currentMode === 'bar' ? `${p.value[1].toFixed(1)} mi` : `4-wk avg · ${p.value[1].toFixed(1)} mi`;
+          return `<div style="font-weight:600;margin-bottom:2px;color:${theme.text}">${p.axisValueLabel}</div>${label}`;
         },
       },
       xAxis: {
@@ -669,19 +733,16 @@
           handleStyle: { color: theme.baseline },
         },
       ],
-      series: [{
-        name: 'Weekly miles',
-        type: 'bar',
-        data: barData,
-        barMaxWidth: 10,
-        itemStyle: { color: theme.series[0], borderRadius: [2, 2, 0, 0] },
-        markArea: { silent: false, data: [...periodAreas, ...buildAreas] },
-        markLine: {
-          silent: false,
-          symbol: ['none', 'none'],
-          data: raceLines,
-        },
-      }],
+      series: seriesFor(currentMode),
+    });
+
+    chart.on('datazoom', () => {
+      const dz = chart.getOption().dataZoom[0];
+      const span = dz.endValue - dz.startValue;
+      const mode = span > WIDE_ZOOM_SPAN_MS ? 'line' : 'bar';
+      if (mode === currentMode) return;
+      currentMode = mode;
+      chart.setOption({ series: seriesFor(mode) }, { replaceMerge: ['series'] });
     });
 
     window.addEventListener('resize', () => chart.resize());

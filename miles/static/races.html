@@ -115,7 +115,7 @@
 
       <section>
         <h2>All Races</h2>
-        <p class="desc">Newest first · PRs flagged as of the day they were run · click a race for its build, ↗ for Strava</p>
+        <p class="desc">Newest first · PRs flagged as of the day they were run · click a race for its build, ↗ for Strava · green = still standing</p>
         <div class="scroll">
           <table>
             <thead>
@@ -247,14 +247,23 @@
   }
 
   function renderRaceTable(rows) {
+    // Current PBs (fastest per category, computed once) tell a current PR
+    // apart from a race that was merely a PR the day it was run and has
+    // since been beaten — both carry is_pr, but only the former is "current".
+    const currentPBs = computePBs(rows);
     const newest = [...rows].reverse();
     const html = newest.map(r => {
       const link = r.strava_url ? ` data-url="${esc(r.strava_url)}"` : '';
-      const badge = r.is_pr ? ' <span class="badge">PR</span>' : '';
+      const isCurrentPR = currentPBs.get(r.distance_category) === r;
+      const badge = isCurrentPR
+        ? ' <span class="badge">PR</span>'
+        : r.is_pr
+          ? ' <span class="badge" style="background:var(--muted)" title="PR when run — since beaten">PR then</span>'
+          : '';
       // Race name cross-links to its build detail page (anchored on the race
       // date, per build.html's hash convention); the row-click-to-Strava
       // behavior below still owns everywhere else in the row.
-      return `<tr class="${r.is_pr ? 'pr' : ''}${r.strava_url ? ' linked' : ''}"${link}>
+      return `<tr class="${isCurrentPR ? 'pr' : ''}${r.strava_url ? ' linked' : ''}"${link}>
         ${td(r.date, 'dim')}
         ${td(catLabel(r.distance_category), '')}
         <td><a class="entity-link" href="/build.html#${r.date}">${esc(r.name)}</a>${badge}</td>

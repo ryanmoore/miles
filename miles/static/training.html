@@ -178,7 +178,7 @@
             <th>Start</th>
             <th class="r">Weeks</th>
             <th class="r">Shape</th>
-            <th>Bounded By</th>
+            <th title="What set the window's start">Bounded By</th>
             <th class="r">Avg mpw</th>
             <th class="r">Workouts / wk</th>
           </tr>
@@ -190,9 +190,10 @@
 </main>
 
 <script>
-  function td(val, cls = 'r') {
+  function td(val, cls = 'r', title = '') {
     if (val == null) return `<td class="dash">—</td>`;
-    return `<td class="${cls}">${val}</td>`;
+    const titleAttr = title ? ` title="${title}"` : '';
+    return `<td class="${cls}"${titleAttr}>${val}</td>`;
   }
 
   function esc(s) {
@@ -205,6 +206,14 @@
   // four buckets compare.html's tabs know, lowercased for its hash format.
   // Anything else (15K/10M/30K/50K/other) gets no link.
   const COMPARE_BUCKET = { '5K': '5k', '10K': '10k', half: 'half', marathon: 'marathon' };
+
+  // builds.py's bounded_by reasons, in the athlete's terms (see detect_builds).
+  const BOUNDED_BY_TITLE = {
+    ramp: 'Window trimmed to where weekly mileage began ramping up',
+    cap: 'Window hit the 18-week max build length',
+    prior_race: 'Window starts just after the previous anchor race',
+    period_start: 'Training period began here — no earlier weeks to include',
+  };
 
   function dayMs(d) { return new Date(d + 'T00:00:00').getTime(); }
 
@@ -342,7 +351,7 @@
         ${td(b.start, '')}
         ${td(b.weeks)}
         <td class="r">${sparklineSVG(buildSeries[i], b.weeks, globalMax, false)}</td>
-        ${td(b.bounded_by, '')}
+        ${td(b.bounded_by, '', BOUNDED_BY_TITLE[b.bounded_by] ?? '')}
         ${td(b.avg_mpw.toFixed(1))}
         ${td(b.workouts_per_week.toFixed(2))}
       </tr>`;

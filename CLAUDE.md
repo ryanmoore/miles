@@ -21,7 +21,7 @@ uv run pyright      # type check
 Strava API → miles-sync → SQLite (data/activities.db)
                                ↓
               miles-mcp  (MCP server over stdio, Claude Code integration)
-              miles-api  (FastAPI on :8000 + vanilla JS UI)
+              miles-api  (FastAPI on :8000 + vanilla JS UI: Races · Builds · Compare · Training · Years)
 ```
 
 Key files:
@@ -31,14 +31,17 @@ Key files:
 - `miles/fitness.py` — dated fitness estimates (`estimate_fitness`, monthly `fitness_checkpoints` table): tier-1 recency-weighted races (Riegel), tier-2 workout work-laps anchored as 5K pace, tier-3 training-pace envelope floor; every estimate carries a confidence level
 - `miles/periods.py` — splits history into training periods at 3+ inactive weeks
 - `miles/builds.py` — race-anchored build detection (18-week cap, ramp floor, prior-race bound)
+- `miles/distance_builds.py` — generalizes `/api/marathons`/`/api/marathon-weeks` to every race distance (5K/10K/Half/Marathon/50K/Other), each with its own build-window length; Monday-aligned like all build windows
+- `miles/build_paces.py` — per-build 5K/LT/MP pace claims: classifies each work lap by its pace ratio against the fitness-estimate 5K baseline at build start, name/tag keyword overrides (MP, LT/tempo/threshold) win first
+- `miles/fitness_api.py` — fitness-trend-full (all-distance pace projections per checkpoint) and fitness-evidence (recomputed evidence trail for one checkpoint) backing the Training page's Fitness chart
 - `miles/derive.py` — `derive_all`: full recompute of all derived values + `meta` version stamp; runs at end of every sync, self-heals on version mismatch when tools connect. Derived values are rebuildable — raw synced rows are ground truth
 - `miles/classifier.py` — keyword-based `workout_label` classifier (extend `WORKOUT_LABEL_PATTERNS` to add new types) and `classify_laps`, which types each lap as warmup/work/recovery/float/cooldown/steady via positional work-block detection (speed gap split + HR-guarded edge trim)
 - `miles/mcp_server.py` — 20 MCP tools (table in README): training periods/consistency, race history/PRs/equivalents/splits, fitness estimates, workout laps, `run_sql` escape hatch
-- `miles/api.py` — FastAPI endpoints `/api/marathons`, `/api/marathon-weeks`, `/api/races`, `/api/weekly-history`, `/api/years`; also serves `miles/static/`
-- `miles/static/` — vanilla JS, no framework: `index.html` (marathon build chart + tables), `races.html`, `training.html`, `years.html`; `theme.css` + `nav.js` shared across pages
+- `miles/api.py` — FastAPI endpoints `/api/marathons`, `/api/marathon-weeks`, `/api/weekly-history`, `/api/build-detail`, `/api/activity-laps`, `/api/build-workout-groups`, `/api/fitness-trend`, `/api/races`, `/api/years`; mounts the `distance_builds.py` and `fitness_api.py` routers; also serves `miles/static/`
+- `miles/static/` — vanilla JS, no framework. `races.html` is the landing page (`/` redirects here): Overview tab plus a per-distance tab (5K/10K/Half/Marathon/50K/Other) for each, each with a stat strip, 3-mode chart, and dense sortable tables. `builds.html` indexes every detected build; `build.html#{race-date}` is the drill-down (stat strip, weekly calendar, lap panel, workout-group comparisons; falls back to a fixed distance-bucket window for races without a detected build). `compare.html` is a build-vs-build workbench (max 4, per distance-bucket). `training.html` has a stat strip and a per-distance Fitness chart with hover/click-to-pin evidence. `years.html` is year-over-year volume. `design-lab.html` + `static/lab/*.js` are a kept-around design playground, not a shipped page. `theme.css` (tokens + shared table/tab/nav classes) and `nav.js` (header nav: Races · Builds · Compare · Training · Years; `chartTheme()` for ECharts) are shared by every page; `charts.js` holds shared `fmt`/color/`staggerEndLabels`/`sparklineSVG`/`makeSortable` helpers
 - `.claude/commands/miles.md` — `/miles` skill: the running-analyst persona (strictly descriptive, data-calibrated tone, tool routing)
 - `.claude/commands/marathon-analysis.md` — `/marathon-analysis` skill for guided training analysis
-- `screenshot.py` — Playwright visual verification; uses system chromium (`/usr/bin/chromium-browser`)
+- `screenshot.py` — visual verification; launches system chromium directly and connects Playwright over CDP (see Development notes)
 
 ## Data model
 
@@ -67,19 +70,19 @@ Range: `>= build_start AND <= race_date` (includes race day in week 0).
 
 Laps use the athlete's manual lap button or Garmin auto-lap (1-mile splits). Filter out artifact laps (`moving_time_s < 30` or `distance_m < 0.02`) when analyzing rep data.
 
-`classify_laps` (classifier.py) assigns per-lap types, persisted to `laps.lap_type` by the derive step (`derive.py` is its only caller; the lap MCP tools read the column); `compare_workouts_by_build` stats cover `work` laps only. Known limitations: laps under the 200m/45s floor are never classified (drops hill sprints / 150–200m reps entirely), and uphill reps invert the pace signal so they classify as `float`, not `work`.
+`classify_laps` (classifier.py) assigns per-lap types, persisted to `laps.lap_type` by the derive step (`derive.py` is its only caller; the lap MCP tools read the column); `compare_workouts_by_build` stats cover `work` laps only. Laps under the 200m/45s floor classify as `recovery` when sandwiched inside a detected work block, else stay null. Known limitations: sub-floor laps never classify as `work` (drops hill sprints / 150–200m reps as reps), and uphill reps invert the pace signal so they classify as `float`, not `work`.
 
 ## Development notes
 
-`miles-api` runs uvicorn with `reload=True` — edits to `api.py` or `static/index.html` take effect on browser refresh. Do not kill or restart the server.
+`miles-api` runs uvicorn with `reload=True` — edits to `api.py` or any `static/*.html` take effect on browser refresh. Do not kill or restart the server.
 
 `miles/static/theme.css` is the token source (colors, chart palette, type, shared table/tab/nav classes) for every static page — new pages link it rather than redefining styles. `nav.js` injects the shared header and exposes `chartTheme()` for ECharts pages.
 
 ECharts chart container must be `<div>`, not `<canvas>` — ECharts manages its own canvas internally.
 
-The chart has three tabs (Fastest 5 / Recent 3 / PR vs Recent) toggling which builds are highlighted. Set `animation: false` on the ECharts instance — draw animations cause screenshot artifacts.
+Each races.html distance tab's build chart has three modes (Fastest / Recent 3 / PR vs latest) toggling which builds are highlighted. Set `animation: false` on ECharts instances — draw animations cause screenshot artifacts.
 
-**`screenshot.py`:** requires `uv add --dev playwright` + `sudo apt install -y chromium-browser`. Run with `uv run python screenshot.py` while `miles-api` is running.
+**`screenshot.py`:** run with `uv run python screenshot.py` while `miles-api` is running (needs the `playwright` dev dependency and a system chromium). Browser automation here launches chromium as a subprocess and attaches over CDP — reuse that pattern rather than `p.chromium.launch()`.
 
 ## Eval harness
 

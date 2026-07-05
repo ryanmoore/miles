@@ -21,6 +21,13 @@
     .build-view .build-empty { font-size: 0.8125rem; color: var(--muted); padding: 1rem 0; }
     .build-view .build-empty a { color: var(--accent); }
 
+    /* On-page contents line — jump links to the sections below. */
+    .build-view .contents-line a { color: inherit; text-decoration: none; }
+    .build-view .contents-line a:hover { text-decoration: underline; color: var(--text); }
+    .build-view #section-calendar, .build-view #workout-groups, .build-view .group-heading {
+      scroll-margin-top: 1rem;
+    }
+
     /* Stat strip — ported from races.html's .dist-view pattern, scoped locally. */
     .build-view .stat-strip {
       display: flex;
@@ -70,7 +77,7 @@
     }
     .build-view .cal-header .cal-hcell:first-child { background: transparent; border-bottom: none; }
     .build-view .cal-leader {
-      padding: 0.5rem 0.625rem;
+      padding: 0.3125rem 0.625rem;
       display: flex;
       flex-direction: column;
       justify-content: center;
@@ -85,14 +92,14 @@
     .build-view .cal-row:first-child .cal-leader { border-top: none; margin-top: 0; }
     .build-view .cal-leader .tile-sub { font-size: 0.6875rem; margin-top: 0.125rem; }
     .build-view .cal-day {
-      min-height: 72px;
+      min-height: 52px;
       background: var(--surface);
       border-top: 1px solid var(--gridline);
       border-left: 1px solid var(--gridline);
       margin-top: -1px;
       margin-left: -1px;
       position: relative;
-      padding: 0.25rem 0.375rem;
+      padding: 0.1875rem 0.375rem;
     }
     .build-view .cal-row:first-child .cal-day { border-top: none; margin-top: 0; }
     .build-view .cal-daynum { position: absolute; top: 0.125rem; right: 0.25rem; font-size: 0.625rem; color: var(--muted); }
@@ -104,13 +111,14 @@
       font-weight: 600;
       font-variant-numeric: tabular-nums;
       color: var(--text);
-      margin-top: 0.875rem;
+      line-height: 1.1;
+      margin-top: 0.6875rem;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
       cursor: pointer;
     }
-    .build-view .cal-run + .cal-run { margin-top: 0.125rem; }
+    .build-view .cal-run + .cal-run { margin-top: 0.0625rem; }
     .build-view .cal-run.selected {
       background: var(--pr-bg);
       border-radius: 4px;
@@ -167,6 +175,10 @@
     }
     .build-view .lap-panel-close:hover { color: var(--text); }
     .build-view .lap-panel-empty { font-size: 0.8125rem; color: var(--muted); }
+
+    /* Dense table treatment, matching races.html's .dist-view pattern. */
+    .build-view .lap-panel thead th { padding: 0.375rem 0.75rem; font-size: 0.625rem; }
+    .build-view .lap-panel tbody td { padding: 0.25rem 0.75rem; font-size: 0.75rem; }
 
     /* Workout groups — repeated-session comparison tables below the panel. */
     .build-view .group-block { margin-bottom: 1.75rem; }
@@ -256,6 +268,19 @@
 
   function errorView(message) {
     return `<p class="build-empty">${esc(message)} <a href="/races.html">Back to races →</a></p>`;
+  }
+
+  // Slug used both for a group heading's id and the contents-line link to it.
+  function groupAnchor(label) {
+    return `group-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+  }
+
+  // "Calendar · Workout groups · {group label}...", rebuilt once workout
+  // groups have loaded so their labels can be appended as their own jump links.
+  function contentsLine(groupLabels) {
+    const links = ['<a href="#section-calendar">Calendar</a>', '<a href="#workout-groups">Workout groups</a>'];
+    for (const label of groupLabels) links.push(`<a href="#${groupAnchor(label)}">${esc(label)}</a>`);
+    return `<p class="desc contents-line" id="contents-line">${links.join(' · ')}</p>`;
   }
 
   function statStrip(race, build) {
@@ -442,9 +467,10 @@
     panel.innerHTML = '';
   }
 
-  // scrollAfter: true when the click originated in the workout-groups tables
-  // below the panel, so the (already-visible) panel needs to be scrolled into view.
-  async function selectRun(id, scrollAfter) {
+  // Every click that opens the panel (calendar run or group-table row) scrolls
+  // it into view — 'nearest' so it's a no-op when already visible, since the
+  // panel sits directly below the calendar.
+  async function selectRun(id) {
     const run = currentData?.days.find(d => d.id === id);
     if (!run) return;
 
@@ -464,7 +490,7 @@
       if (selectedRunId !== id) return; // superseded by another click while fetching
     }
     renderLapPanel(run, lapPanelBody(laps));
-    if (scrollAfter) document.getElementById('lap-panel').scrollIntoView({ block: 'nearest' });
+    document.getElementById('lap-panel').scrollIntoView({ block: 'nearest' });
   }
 
   // -----------------------------------------------------------------------
@@ -480,6 +506,7 @@
         ${td(s.distance_mi)}
         ${td(s.pace_min_per_mile != null ? fmt.pace(s.pace_min_per_mile) : null)}
         ${td(s.avg_hr)}
+        ${td(s.temp_f)}
       </tr>`;
     }
     const w = s.work;
@@ -491,18 +518,19 @@
       ${td(w ? w.distance_mi : null)}
       ${td(w && w.pace_min_per_mile != null ? fmt.pace(w.pace_min_per_mile) : null)}
       ${td(w ? w.avg_hr : null)}
+      ${td(s.temp_f)}
     </tr>`;
   }
 
   function groupSection(group) {
     const isLongRun = group.label === 'Long runs';
     const header = isLongRun
-      ? `<tr><th>Date</th><th>Name</th><th class="r">Mi</th><th class="r">Pace</th><th class="r">HR</th></tr>`
-      : `<tr><th>Date</th><th>Name</th><th class="r">Total mi</th><th class="r">Work laps</th><th class="r">Work mi</th><th class="r">Work pace</th><th class="r">HR</th></tr>`;
+      ? `<tr><th>Date</th><th>Name</th><th class="r">Mi</th><th class="r">Pace</th><th class="r">HR</th><th class="r">°F</th></tr>`
+      : `<tr><th>Date</th><th>Name</th><th class="r">Total mi</th><th class="r">Work laps</th><th class="r">Work mi</th><th class="r">Work pace</th><th class="r">HR</th><th class="r">°F</th></tr>`;
     const n = group.sessions.length;
     return `
       <div class="group-block">
-        <h3 class="group-heading">${esc(group.label)} · ${n} session${n === 1 ? '' : 's'}</h3>
+        <h3 class="group-heading" id="${groupAnchor(group.label)}">${esc(group.label)} · ${n} session${n === 1 ? '' : 's'}</h3>
         <div class="scroll">
           <table>
             <thead>${header}</thead>
@@ -521,6 +549,8 @@
       container.innerHTML = groups.length
         ? groups.map(groupSection).join('')
         : `<p class="build-empty">No repeated workout sessions in this build.</p>`;
+      const contentsEl = document.getElementById('contents-line');
+      if (contentsEl) contentsEl.outerHTML = contentsLine(groups.map(g => g.label));
     } catch (err) {
       container.innerHTML = `<p class="build-empty">Error loading workout groups: ${esc(err.message)}</p>`;
     }
@@ -569,7 +599,10 @@
       <p class="subtitle">${subtitleParts.map(esc).join(' · ')}</p>
       ${windowNote}
       ${statStrip(race, build)}
-      ${calendar(data)}
+      ${contentsLine([])}
+      <div id="section-calendar">
+        ${calendar(data)}
+      </div>
       <div class="lap-panel" id="lap-panel" hidden></div>
       <section id="workout-groups">
         <h2>Workout groups</h2>
@@ -624,7 +657,7 @@
     const target = e.target.closest('[data-run-id]');
     if (!target) return;
     const id = Number(target.dataset.runId);
-    selectRun(id, !!target.closest('#workout-groups'));
+    selectRun(id);
   });
 
   window.addEventListener('hashchange', load);

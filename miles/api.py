@@ -1,4 +1,5 @@
 import sqlite3
+import click
 import uvicorn
 from datetime import date, timedelta
 from pathlib import Path
@@ -1113,5 +1114,9 @@ app.include_router(fitness_api_router)
 app.mount("/", StaticFiles(directory=str(_STATIC), html=True), name="static")
 
 
-def main() -> None:
-    uvicorn.run("miles.api:app", host="127.0.0.1", port=8000, reload=True)
+@click.command()
+@click.option("--host", default="127.0.0.1", help="Host to bind to.")
+@click.option("--port", default=8000, type=int, help="Port to bind to.")
+@click.option("--reload/--no-reload", default=True, help="Enable auto-reload on code changes.")
+def main(host: str, port: int, reload: bool) -> None:
+    uvicorn.run("miles.api:app", host=host, port=port, reload=reload)

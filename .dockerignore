@@ -1,0 +1,11 @@
+.venv/
+data/
+eval_results/
+roadmap/
+.git/
+.claude/
+*.png
+__pycache__/
+*.pyc
+.env
+.mcp.json

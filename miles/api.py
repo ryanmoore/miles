@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .build_paces import PaceClaim, pace_claims
+from .classifier import LAP_MIN_DISTANCE_M, LAP_MIN_MOVING_TIME_S
 from .distance_builds import (
     Bucket,
     router as distance_builds_router,
@@ -1058,6 +1059,50 @@ def get_years() -> list[YearRow]:
                 prs_set=prs_by_year.get(year, 0),
             ),
         ))
+    return out
+
+
+_HR_BUCKET_WIDTH = 5
+_PACE_BUCKET_WIDTH_S = 20
+
+
+class HrPacePoint(TypedDict):
+    year: int
+    hr_bucket: int  # bpm, bucket lower bound
+    pace_bucket: int  # seconds/mile, bucket lower bound
+
+
+@app.get("/api/hr-pace-heatmap")
+def get_hr_pace_heatmap() -> list[HrPacePoint]:
+    """
+    One point per lap (avg HR, avg pace), bucketed into a 5bpm x 20s/mi grid.
+    Excludes trivial laps (< 200m or < 45s) and laps missing HR. Returns raw
+    points, not pre-aggregated cells, so the client can combine any set of
+    selected years.
+    """
+    conn = _conn()
+    tc, tp = _type_clause()
+    rows = conn.execute(f"""
+        SELECT
+            CAST(strftime('%Y', a.start_date) AS INTEGER) AS year,
+            l.average_heartrate AS hr,
+            l.distance_m AS distance_m,
+            l.moving_time_s AS moving_time_s
+        FROM laps l
+        JOIN activities a ON a.activity_id = l.activity_id
+        WHERE {tc}
+          AND l.average_heartrate IS NOT NULL
+          AND l.distance_m >= {LAP_MIN_DISTANCE_M}
+          AND l.moving_time_s >= {LAP_MIN_MOVING_TIME_S}
+    """, tp).fetchall()
+
+    out: list[HrPacePoint] = []
+    for r in rows:
+        miles = r["distance_m"] / 1609.34
+        pace_s_per_mile = r["moving_time_s"] / miles
+        hr_bucket = int(r["hr"] // _HR_BUCKET_WIDTH) * _HR_BUCKET_WIDTH
+        pace_bucket = int(pace_s_per_mile // _PACE_BUCKET_WIDTH_S) * _PACE_BUCKET_WIDTH_S
+        out.append(HrPacePoint(year=r["year"], hr_bucket=hr_bucket, pace_bucket=pace_bucket))
     return out
 
 

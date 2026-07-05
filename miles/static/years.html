@@ -71,6 +71,15 @@
         </table>
       </div>
     </section>
+
+    <section id="hr-pace-section" hidden>
+      <h2>Heart Rate vs. Pace</h2>
+      <p class="desc">Each lap is one point · darker cells = more laps in that HR/pace bucket · line is the median pace per HR bucket · click chips to toggle years, multiple can be active</p>
+      <div class="chip-row" id="chip-row-hr"></div>
+      <div class="chart-wrap">
+        <div id="chart-hr-pace" style="width:100%;height:100%"></div>
+      </div>
+    </section>
   </div>
 </main>
 
@@ -202,6 +211,188 @@
     return res.json();
   }
 
+  async function loadHrPace() {
+    const res = await fetch('/api/hr-pace-heatmap');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  const HR_BUCKET_WIDTH = 5;
+  const PACE_BUCKET_WIDTH_S = 20;
+
+  function paceBucketLabel(bucketS) {
+    const m = Math.floor(bucketS / 60);
+    const s = String(bucketS % 60).padStart(2, '0');
+    return `${m}:${s}`;
+  }
+
+  // Contiguous range (not just observed values) so category-axis index math stays in sync with pixel position.
+  function bucketRange(values, width) {
+    const min = Math.min(...values), max = Math.max(...values);
+    const out = [];
+    for (let v = min; v <= max; v += width) out.push(v);
+    return out;
+  }
+
+  function initHrPace(points, theme) {
+    const section = document.getElementById('hr-pace-section');
+    if (!points.length) return;
+    section.hidden = false;
+
+    const allYears = [...new Set(points.map(p => p.year))].sort((a, b) => a - b);
+    const byRecency = [...allYears].sort((a, b) => b - a);
+    const ranks = new Map(byRecency.map((y, i) => [y, i]));
+    const pointsByYear = new Map(allYears.map(y => [y, points.filter(p => p.year === y)]));
+    let selected = new Set([allYears[allYears.length - 1]]);
+
+    const chart = echarts.init(document.getElementById('chart-hr-pace'));
+
+    function renderChips() {
+      const html = allYears.map(y => {
+        const color = yearColor(theme, ranks.get(y));
+        const sel = selected.has(y) ? ' selected' : '';
+        return `<button class="chip${sel}" data-year="${y}">
+          <span class="dot" style="background:${color}"></span>${y}
+        </button>`;
+      });
+      document.getElementById('chip-row-hr').innerHTML = html.join('');
+    }
+
+    function render() {
+      renderChips();
+      const activePoints = allYears.filter(y => selected.has(y)).flatMap(y => pointsByYear.get(y));
+
+      if (!activePoints.length) {
+        chart.setOption({
+          title: { text: 'No lap HR/pace data for the selected year(s)', left: 'center', top: 'middle', textStyle: { fontSize: 13, color: theme.muted, fontWeight: 400 } },
+          xAxis: { show: false }, yAxis: { show: false }, series: [],
+        }, { replaceMerge: ['series'] });
+        return;
+      }
+
+      const hrBuckets = bucketRange(activePoints.map(p => p.hr_bucket), HR_BUCKET_WIDTH);
+      const paceBuckets = bucketRange(activePoints.map(p => p.pace_bucket), PACE_BUCKET_WIDTH_S);
+      const hrIndex = new Map(hrBuckets.map((b, i) => [b, i]));
+      const paceIndex = new Map(paceBuckets.map((b, i) => [b, i]));
+
+      const counts = new Map();
+      const pacesByHr = new Map();
+      for (const p of activePoints) {
+        const key = `${p.hr_bucket}:${p.pace_bucket}`;
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+        if (!pacesByHr.has(p.hr_bucket)) pacesByHr.set(p.hr_bucket, []);
+        pacesByHr.get(p.hr_bucket).push(p.pace_bucket);
+      }
+
+      // Normalized per HR column, not globally.
+      const maxCountByHr = new Map();
+      for (const [key, count] of counts) {
+        const hr = Number(key.split(':')[0]);
+        maxCountByHr.set(hr, Math.max(maxCountByHr.get(hr) ?? 0, count));
+      }
+      const heatData = [...counts.entries()].map(([key, count]) => {
+        const [hr, pace] = key.split(':').map(Number);
+        return { value: [hrIndex.get(hr), paceIndex.get(pace), count / maxCountByHr.get(hr)], rawCount: count };
+      });
+
+      function median(sortedSubset) {
+        const arr = [...sortedSubset].sort((a, b) => a - b);
+        const mid = Math.floor(arr.length / 2);
+        return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+      }
+      // Fractional index: median can land between two bucket ticks.
+      const lineData = [...pacesByHr.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([hr, paces]) => [hrIndex.get(hr), (median(paces) - paceBuckets[0]) / PACE_BUCKET_WIDTH_S]);
+
+      chart.setOption({
+        animation: false,
+        grid: { top: 24, right: 24, bottom: 48, left: 64 },
+        tooltip: {
+          backgroundColor: theme.surface,
+          borderColor: theme.gridline,
+          textStyle: { fontSize: 12, color: theme.text },
+          formatter(p) {
+            if (p.seriesName === 'Laps') {
+              const hr = hrBuckets[p.value[0]];
+              const pace = paceBuckets[p.value[1]];
+              const count = p.data.rawCount;
+              return `<div style="font-weight:600;margin-bottom:4px;color:${theme.text}">${hr}–${hr + HR_BUCKET_WIDTH} bpm</div>
+                <div>Pace ${paceBucketLabel(pace)}–${paceBucketLabel(pace + PACE_BUCKET_WIDTH_S)} /mi</div>
+                <div><b>${count}</b> lap${count === 1 ? '' : 's'} · ${Math.round(p.value[2] * 100)}% of this HR bucket's peak</div>`;
+            }
+            const hr = hrBuckets[p.value[0]];
+            return `<div style="font-weight:600;color:${theme.text}">${hr}–${hr + HR_BUCKET_WIDTH} bpm</div>
+              <div>Median pace ${fmt.pace((paceBuckets[0] + p.value[1] * PACE_BUCKET_WIDTH_S) / 60)} /mi</div>`;
+          },
+        },
+        xAxis: {
+          type: 'category',
+          data: hrBuckets.map(b => b),
+          axisLabel: { fontSize: 11, color: theme.muted, formatter: v => v },
+          axisLine: { lineStyle: { color: theme.gridline } },
+          axisTick: { show: false },
+          splitLine: { show: false },
+          name: 'Heart rate (bpm)',
+          nameLocation: 'middle',
+          nameGap: 32,
+          nameTextStyle: { fontSize: 11, color: theme.muted },
+        },
+        yAxis: {
+          type: 'category',
+          data: paceBuckets.map(paceBucketLabel),
+          inverse: true, // faster (lower) pace reads as "up", per training.html's scatter
+          axisLabel: { fontSize: 11, color: theme.muted },
+          axisLine: { show: false },
+          axisTick: { show: false },
+          splitLine: { show: false },
+          name: 'Pace (min/mi)',
+          nameLocation: 'middle',
+          nameGap: 48,
+          nameTextStyle: { fontSize: 11, color: theme.muted },
+        },
+        series: [
+          {
+            name: 'Laps',
+            type: 'scatter',
+            symbol: 'circle',
+            symbolSize: value => 6 + value[2] * 18,
+            data: heatData,
+            itemStyle: { color: withAlpha(theme.accent, theme.isDark ? 0.75 : 0.65), borderColor: theme.surface, borderWidth: 1 },
+            emphasis: { itemStyle: { borderColor: theme.text, borderWidth: 1.5 } },
+          },
+          {
+            name: 'Median pace',
+            type: 'line',
+            data: lineData,
+            symbol: 'circle',
+            symbolSize: 6,
+            connectNulls: true,
+            lineStyle: { color: theme.series[5], width: 2.5 },
+            itemStyle: { color: theme.series[5] },
+            z: 10,
+          },
+        ],
+      }, { replaceMerge: ['series'] });
+    }
+
+    document.getElementById('chip-row-hr').addEventListener('click', e => {
+      const btn = e.target.closest('.chip');
+      if (!btn) return;
+      const year = Number(btn.dataset.year);
+      if (!allYears.includes(year)) return;
+      if (selected.has(year)) {
+        if (selected.size > 1) selected.delete(year);
+      } else {
+        selected.add(year);
+      }
+      render();
+    });
+
+    render();
+    window.addEventListener('resize', () => chart.resize());
+  }
+
   function init(years) {
     if (!years.length) {
       document.getElementById('subtitle').textContent =
@@ -302,7 +493,11 @@
     window.addEventListener('resize', () => { chart.resize(); staggerEndLabels(chart); });
   }
 
-  load().then(init).catch(err => {
+  load().then(years => {
+    init(years);
+    const theme = chartTheme();
+    loadHrPace().then(hrPaceYears => initHrPace(hrPaceYears, theme));
+  }).catch(err => {
     document.getElementById('subtitle').textContent = `Error: ${err.message}`;
   });
 </script>

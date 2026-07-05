@@ -8,7 +8,7 @@ Strava activity sync and MCP server for querying running data.
 
 ```bash
 uv run miles-auth   # one-time OAuth setup
-uv run miles-sync   # sync activities from Strava (--full to ignore last sync date)
+uv run miles-sync   # sync activities from Strava (--full to ignore last sync date; --extra to backfill laps for all runs, resumable daily)
 uv run miles-mcp    # start MCP server (stdio)
 uv run miles-api    # start web UI on http://localhost:8000
 uv run miles-derive # rebuild derived values (run_type_inferred, laps.lap_type); no API calls

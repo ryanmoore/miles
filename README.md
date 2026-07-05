@@ -40,6 +40,8 @@ first sync of a long history:
   this is normal, not a hang. A decade of daily running can take several windows back to back.
 - Re-run the same command any time afterwards for an incremental sync (only new activities).
   Use `--full` to ignore the last sync date and re-fetch everything.
+- Use `--extra` to gradually backfill laps for every run (not just workouts/races), most
+  important first — resumable, so rerun daily until the queue is empty.
 - The first interactive sync asks once for your max heart rate (Enter to skip). Set it later —
   or set a personal long-run distance floor — with `uv run miles-sync --max-hr 185` /
   `--long-run-floor 14` (updates the profile, rebuilds derived values, and exits; no Strava calls).

@@ -20,7 +20,71 @@ def _wait_for_rate_limit() -> None:
     time.sleep(wait)
 
 
-def _run(conn: sqlite3.Connection, full: bool) -> None:
+def _extra_lap_backfill(conn: sqlite3.Connection, extra_limit: int) -> None:
+    """Backfill laps for all remaining runs, long runs first then newest-first.
+    Resumable: each activity is stamped and committed individually, and a fresh
+    generator is built for the remaining ids after a rate-limit interruption.
+    """
+    effective_run_type = db.effective_run_type_sql()
+    remaining_ids = [
+        row["activity_id"]
+        for row in conn.execute(f"""
+            SELECT activity_id FROM activities
+            WHERE sport_type IN ('Run', 'TrailRun', 'VirtualRun')
+              AND laps_synced_at IS NULL
+            ORDER BY CASE WHEN {effective_run_type} = 'long_run' THEN 0 ELSE 1 END,
+                     start_date DESC
+        """).fetchall()
+    ]
+    total_remaining = len(remaining_ids)
+    print(f"Extra backfill: {total_remaining} remaining, fetching up to {extra_limit} this run...")
+
+    todo_ids = remaining_ids[:extra_limit]
+    batch_size = len(todo_ids)
+    fetched = 0
+    lap_total = 0
+    # Nonzero start: the first 429 always waits out the 15-min window; only a
+    # 429 after a fruitless full-window wait means the daily cap.
+    successes_since_429 = 1
+
+    while todo_ids:
+        processed_in_attempt = 0
+        try:
+            for activity_id, laps in strava_client.get_activity_laps_batch(todo_ids):
+                if laps:
+                    db.upsert_laps(conn, laps)
+                    lap_total += len(laps)
+                conn.execute(
+                    "UPDATE activities SET laps_synced_at = datetime('now') WHERE activity_id = ?",
+                    (activity_id,),
+                )
+                conn.commit()
+                fetched += 1
+                successes_since_429 += 1
+                processed_in_attempt += 1
+                if fetched % 25 == 0:
+                    print(f"  {fetched}/{batch_size} fetched, {lap_total} laps...")
+            todo_ids = []
+        except Fault as e:
+            if e.response is not None and e.response.status_code == 429:
+                todo_ids = todo_ids[processed_in_attempt:]
+                if successes_since_429 == 0:
+                    remaining_after = total_remaining - fetched
+                    print(
+                        f"Daily API limit reached — {remaining_after} activities left; "
+                        "rerun 'miles-sync --extra' tomorrow."
+                    )
+                    break
+                _wait_for_rate_limit()
+                successes_since_429 = 0
+            else:
+                raise
+
+    remaining_after = total_remaining - fetched
+    print(f"Extra backfill: {fetched} fetched this run, {remaining_after} remaining.")
+
+
+def _run(conn: sqlite3.Connection, full: bool, extra: bool, extra_limit: int = 900) -> None:
     after = None if full else db.last_synced_date(conn)
     if after:
         print(f"Incremental sync: fetching activities after {after}")
@@ -47,11 +111,19 @@ def _run(conn: sqlite3.Connection, full: bool) -> None:
     print(f"Derive done. {summary}")
 
     # Lazy lap sync: fetch laps for workout/race activities that have none yet.
+    # Backstamp anything already fetched by a prior sync so it's never refetched.
+    conn.execute("""
+        UPDATE activities SET laps_synced_at = datetime('now')
+        WHERE laps_synced_at IS NULL
+          AND activity_id IN (SELECT DISTINCT activity_id FROM laps)
+    """)
+    conn.commit()
+
     effective_run_type = db.effective_run_type_sql()
     unsynced = conn.execute(f"""
         SELECT activity_id, name FROM activities
         WHERE {effective_run_type} IN ('workout', 'race')
-          AND activity_id NOT IN (SELECT DISTINCT activity_id FROM laps)
+          AND laps_synced_at IS NULL
         ORDER BY start_date
     """).fetchall()
 
@@ -65,6 +137,11 @@ def _run(conn: sqlite3.Connection, full: bool) -> None:
             if laps:
                 db.upsert_laps(conn, laps)
                 lap_total += len(laps)
+            conn.execute(
+                "UPDATE activities SET laps_synced_at = datetime('now') WHERE activity_id = ?",
+                (activity_id,),
+            )
+            conn.commit()
             name: str | None = names.get(activity_id)
             if name:
                 label = classify_workout(name)
@@ -136,6 +213,9 @@ def _run(conn: sqlite3.Connection, full: bool) -> None:
 
         print(f"Weather done. {fetched_w} new records.")
 
+    if extra:
+        _extra_lap_backfill(conn, extra_limit)
+
     # Recompute all derived values (inferred run types, lap types, ...) from raw synced rows.
     counts = derive_all(conn)
     summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "no changes"
@@ -144,9 +224,11 @@ def _run(conn: sqlite3.Connection, full: bool) -> None:
 
 @click.command()
 @click.option("--full", is_flag=True, help="Ignore last sync date and fetch everything.")
+@click.option("--extra", is_flag=True, help="Backfill laps for all remaining runs, most important first (resumable; rerun daily until complete).")
+@click.option("--extra-limit", type=int, default=900, help="Max lap fetches per --extra invocation.")
 @click.option("--max-hr", type=int, default=None, help="Set max heart rate and exit (no Strava calls).")
 @click.option("--long-run-floor", type=float, default=None, help="Set long-run distance floor in miles and exit (no Strava calls).")
-def main(full: bool, max_hr: int | None, long_run_floor: float | None) -> None:
+def main(full: bool, extra: bool, extra_limit: int, max_hr: int | None, long_run_floor: float | None) -> None:
     conn = db.connect()
     db.init_db(conn)
 
@@ -177,7 +259,7 @@ def main(full: bool, max_hr: int | None, long_run_floor: float | None) -> None:
 
     while True:
         try:
-            _run(conn, full)
+            _run(conn, full, extra, extra_limit)
             break
         except Fault as e:
             if e.response is not None and e.response.status_code == 429:

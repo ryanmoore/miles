@@ -152,6 +152,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         "race_effort TEXT",
         "effort_ratio REAL",
         "dominant_intensity TEXT",
+        "laps_synced_at TEXT",
     ):
         try:
             conn.execute(f"ALTER TABLE activities ADD COLUMN {col}")

@@ -5,7 +5,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal, TypedDict, cast
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db
@@ -30,6 +31,8 @@ app = FastAPI(title="miles")
 _BUILD_WEEKS = 12
 _RUN_TYPES = ("Run", "TrailRun", "VirtualRun")
 _STATIC = Path(__file__).parent / "static"
+_WORKBOOKS = Path("data/workbooks")
+_WORKBOOKS.mkdir(parents=True, exist_ok=True)
 
 # Inverse of distance_builds.py's Bucket -> category map, so build-detail can
 # find a race's fixed-window bucket from race_rows()'s distance_category.
@@ -1107,10 +1110,26 @@ def get_hr_pace_heatmap() -> list[HrPacePoint]:
     return out
 
 
+@app.get("/api/workbooks")
+def list_workbooks() -> list[str]:
+    return sorted(p.name for p in _WORKBOOKS.glob("*.html"))
+
+
+@app.post("/api/workbooks/upload")
+async def upload_workbook(file: UploadFile = File(...)) -> JSONResponse:
+    if not file.filename or not file.filename.endswith(".html"):
+        raise HTTPException(status_code=400, detail="Only .html files are accepted")
+    dest = _WORKBOOKS / Path(file.filename).name
+    content = await file.read()
+    dest.write_bytes(content)
+    return JSONResponse({"name": dest.name})
+
+
 # Must precede the catch-all static mount below.
 app.include_router(distance_builds_router)
 app.include_router(fitness_api_router)
 
+app.mount("/workbooks", StaticFiles(directory=str(_WORKBOOKS)), name="workbooks")
 app.mount("/", StaticFiles(directory=str(_STATIC), html=True), name="static")
 
 

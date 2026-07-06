@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Miles · Workbook</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
+  <link rel="stylesheet" href="/theme.css">
+  <style>
+    body {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    /* site-header is injected by nav.js; flex-shrink keeps it from collapsing */
+    .site-header { flex-shrink: 0; }
+
+    #list-view {
+      flex: 1;
+      padding: 2rem;
+    }
+
+    #viewer-view {
+      display: none;
+      flex-direction: column;
+    }
+
+    #viewer-bar {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.5rem 1.5rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8125rem;
+    }
+
+    #viewer-bar button {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.2rem 0.6rem;
+      cursor: pointer;
+      color: var(--text);
+      font-size: 0.8125rem;
+    }
+    #viewer-bar button:hover { background: var(--gridline); }
+
+    #viewer-title {
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    #workbook-frame {
+      width: 100%;
+      border: none;
+      display: block;
+      overflow: hidden;
+    }
+
+    /* List view styles */
+    .page-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 1.5rem;
+    }
+
+    h1 {
+      font-size: 1.25rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+    }
+
+    #upload-btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+      padding: 0.35rem 0.85rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      letter-spacing: 0.01em;
+    }
+    #upload-btn:hover { opacity: 0.88; }
+
+    #file-input { display: none; }
+
+    #upload-status {
+      font-size: 0.8125rem;
+      color: var(--muted);
+      margin-bottom: 1rem;
+      min-height: 1.2em;
+    }
+
+    .file-list {
+      list-style: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .file-list li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.65rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .file-list li:last-child { border-bottom: none; }
+    .file-list li:hover { background: var(--gridline); }
+
+    .file-name {
+      font-size: 0.9375rem;
+      color: var(--text);
+      cursor: pointer;
+      flex: 1;
+    }
+    .file-name:hover { color: var(--accent); }
+
+    .empty-state {
+      color: var(--muted);
+      font-size: 0.9rem;
+      padding: 2rem 0;
+    }
+  </style>
+</head>
+<body>
+  <script src="/nav.js"></script>
+
+  <div id="list-view">
+    <div class="page-header">
+      <h1>Workbook</h1>
+      <button id="upload-btn">+ Upload</button>
+      <input type="file" id="file-input" accept=".html">
+    </div>
+    <div id="upload-status"></div>
+    <ul class="file-list" id="file-list"></ul>
+    <p class="empty-state" id="empty-state" style="display:none">No workbooks yet. Upload an HTML file to get started.</p>
+  </div>
+
+  <div id="viewer-view">
+    <div id="viewer-bar">
+      <button id="back-btn">Back</button>
+      <span id="viewer-title"></span>
+    </div>
+    <iframe id="workbook-frame" sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
+  </div>
+
+  <script>
+    const listView = document.getElementById("list-view");
+    const viewerView = document.getElementById("viewer-view");
+    const fileList = document.getElementById("file-list");
+    const emptyState = document.getElementById("empty-state");
+    const uploadBtn = document.getElementById("upload-btn");
+    const fileInput = document.getElementById("file-input");
+    const uploadStatus = document.getElementById("upload-status");
+    const backBtn = document.getElementById("back-btn");
+    const viewerTitle = document.getElementById("viewer-title");
+    const frame = document.getElementById("workbook-frame");
+
+    async function loadList() {
+      const res = await fetch("/api/workbooks");
+      const files = await res.json();
+      fileList.innerHTML = "";
+      if (files.length === 0) {
+        emptyState.style.display = "";
+        return;
+      }
+      emptyState.style.display = "none";
+      for (const name of files) {
+        const li = document.createElement("li");
+        const span = document.createElement("span");
+        span.className = "file-name";
+        span.textContent = name;
+        span.addEventListener("click", () => openWorkbook(name));
+        li.appendChild(span);
+        fileList.appendChild(li);
+      }
+    }
+
+    let frameResizeObserver = null;
+
+    function fitFrame() {
+      try {
+        const doc = frame.contentDocument;
+        if (!doc) return;
+        frame.style.height = doc.documentElement.scrollHeight + "px";
+      } catch (_) {}
+    }
+
+    function openWorkbook(name) {
+      viewerTitle.textContent = name;
+      frame.style.height = "0px";
+      frame.src = "/workbooks/" + encodeURIComponent(name);
+      listView.style.display = "none";
+      viewerView.style.display = "flex";
+
+      frame.addEventListener("load", function onLoad() {
+        frame.removeEventListener("load", onLoad);
+        fitFrame();
+        if (frameResizeObserver) frameResizeObserver.disconnect();
+        try {
+          frameResizeObserver = new ResizeObserver(fitFrame);
+          frameResizeObserver.observe(frame.contentDocument.documentElement);
+        } catch (_) {}
+      });
+    }
+
+    backBtn.addEventListener("click", () => {
+      if (frameResizeObserver) { frameResizeObserver.disconnect(); frameResizeObserver = null; }
+      frame.src = "";
+      frame.style.height = "0px";
+      viewerView.style.display = "none";
+      listView.style.display = "";
+      window.scrollTo(0, 0);
+    });
+
+    uploadBtn.addEventListener("click", () => fileInput.click());
+
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      fileInput.value = "";
+      uploadStatus.textContent = "Uploading…";
+      const form = new FormData();
+      form.append("file", file);
+      try {
+        const res = await fetch("/api/workbooks/upload", { method: "POST", body: form });
+        if (!res.ok) {
+          const err = await res.json();
+          uploadStatus.textContent = "Error: " + (err.detail || res.statusText);
+          return;
+        }
+        const data = await res.json();
+        uploadStatus.textContent = "Uploaded " + data.name;
+        await loadList();
+      } catch (e) {
+        uploadStatus.textContent = "Upload failed: " + e.message;
+      }
+    });
+
+    loadList();
+  </script>
+</body>
+</html>

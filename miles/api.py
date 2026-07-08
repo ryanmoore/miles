@@ -1,5 +1,7 @@
+import logging
 import sqlite3
 import click
+import subprocess as _subprocess
 import uvicorn
 from datetime import date, timedelta
 from pathlib import Path
@@ -27,6 +29,10 @@ from .periods import Gap, Period, WeekAgg, is_active, zero_fill, detect_periods
 from .races import MARATHON_MAX_M, MARATHON_MIN_M, classify_race_distance, race_rows
 
 app = FastAPI(title="miles")
+
+_logger = logging.getLogger(__name__)
+_sync_proc: _subprocess.Popen[bytes] | None = None
+_REPO_ROOT = Path(__file__).parent.parent
 
 _BUILD_WEEKS = 12
 _RUN_TYPES = ("Run", "TrailRun", "VirtualRun")
@@ -1123,6 +1129,46 @@ async def upload_workbook(file: UploadFile = File(...)) -> JSONResponse:
     content = await file.read()
     dest.write_bytes(content)
     return JSONResponse({"name": dest.name})
+
+
+class SyncTriggerResponse(TypedDict):
+    status: str
+
+
+class SyncStatusResponse(TypedDict):
+    status: str
+    returncode: int | None
+
+
+@app.post("/api/sync")
+def trigger_sync() -> SyncTriggerResponse:
+    global _sync_proc
+    if _sync_proc is not None and _sync_proc.poll() is None:
+        return SyncTriggerResponse(status="running")
+    try:
+        _sync_proc = _subprocess.Popen(
+            ["uv", "run", "miles-sync", "--extra"],
+            cwd=_REPO_ROOT,
+            stdout=_subprocess.DEVNULL,
+            stderr=_subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        _logger.error("uv not found on PATH; cannot start miles-sync")
+        raise HTTPException(status_code=500, detail="sync command not found")
+    return SyncTriggerResponse(status="started")
+
+
+@app.get("/api/sync/status")
+def sync_status() -> SyncStatusResponse:
+    if _sync_proc is None:
+        return SyncStatusResponse(status="idle", returncode=None)
+    rc = _sync_proc.poll()
+    if rc is None:
+        return SyncStatusResponse(status="running", returncode=None)
+    if rc != 0 and _sync_proc.stderr is not None:
+        err = _sync_proc.stderr.read().decode(errors="replace")
+        _logger.warning("miles-sync exited with code %d: %s", rc, err)
+    return SyncStatusResponse(status="done", returncode=rc)
 
 
 # Must precede the catch-all static mount below.

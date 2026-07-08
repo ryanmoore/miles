@@ -95,6 +95,26 @@ body {
 }
 .site-header nav a:hover { color: var(--text-secondary); }
 .site-header nav a.active { color: var(--accent); font-weight: 600; }
+.sync-btn {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--muted);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.sync-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-secondary);
+}
+.sync-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 main { max-width: 1600px; margin: 0 auto; padding: 1.5rem 2rem; }
 

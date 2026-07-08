@@ -34,6 +34,57 @@ function renderNav() {
   }
   header.appendChild(nav);
 
+  // --- sync button ---
+  const syncBtn = document.createElement("button");
+  syncBtn.className = "sync-btn";
+  syncBtn.title = "Sync from Strava";
+  syncBtn.textContent = "↻ Sync";
+
+  async function startSync() {
+    syncBtn.disabled = true;
+    syncBtn.textContent = "↻ Syncing…";
+    try {
+      const res = await fetch("/api/sync", { method: "POST" });
+      const data = await res.json();
+      if (data.status === "running" || data.status === "started") {
+        pollSync();
+      } else {
+        resetSync("↻ Sync");
+      }
+    } catch {
+      syncBtn.textContent = "✗ Error";
+      setTimeout(() => resetSync("↻ Sync"), 3000);
+    }
+  }
+
+  async function pollSync() {
+    try {
+      const res = await fetch("/api/sync/status");
+      const data = await res.json();
+      if (data.status === "running") {
+        setTimeout(pollSync, 3000);
+      } else if (data.returncode === 0) {
+        syncBtn.textContent = "✓ Done";
+        setTimeout(() => { location.reload(); }, 2000);
+      } else {
+        syncBtn.textContent = "✗ Error";
+        setTimeout(() => resetSync("↻ Sync"), 3000);
+      }
+    } catch {
+      syncBtn.textContent = "✗ Error";
+      setTimeout(() => resetSync("↻ Sync"), 3000);
+    }
+  }
+
+  function resetSync(label) {
+    syncBtn.disabled = false;
+    syncBtn.textContent = label;
+  }
+
+  syncBtn.addEventListener("click", startSync);
+  header.insertBefore(syncBtn, nav);
+  // --- end sync button ---
+
   document.body.insertBefore(header, document.body.firstChild);
 }
 

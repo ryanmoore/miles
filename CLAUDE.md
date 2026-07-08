@@ -21,7 +21,7 @@ uv run pyright      # type check
 Strava API → miles-sync → SQLite (data/activities.db)
                                ↓
               miles-mcp  (MCP server over stdio, Claude Code integration)
-              miles-api  (FastAPI on :8000 + vanilla JS UI: Races · Builds · Compare · Training · Years)
+              miles-api  (FastAPI on :8000 + vanilla JS UI: Races · Builds · Compare · Training · Years · Plan)
 ```
 
 Key files:
@@ -36,10 +36,14 @@ Key files:
 - `miles/fitness_api.py` — fitness-trend-full (all-distance pace projections per checkpoint) and fitness-evidence (recomputed evidence trail for one checkpoint) backing the Training page's Fitness chart
 - `miles/derive.py` — `derive_all`: full recompute of all derived values + `meta` version stamp; runs at end of every sync, self-heals on version mismatch when tools connect. Derived values are rebuildable — raw synced rows are ground truth
 - `miles/classifier.py` — keyword-based `workout_label` classifier (extend `WORKOUT_LABEL_PATTERNS` to add new types) and `classify_laps`, which types each lap as warmup/work/recovery/float/cooldown/steady via positional work-block detection (speed gap split + HR-guarded edge trim)
-- `miles/mcp_server.py` — 20 MCP tools (table in README): training periods/consistency, race history/PRs/equivalents/splits, fitness estimates, workout laps, `run_sql` escape hatch
+- `miles/mcp_server.py` — 26 MCP tools (table in README): training periods/consistency, race history/PRs/equivalents/splits, fitness estimates, workout laps, `run_sql` escape hatch, and the training-plan read/write tools (the only non-read tools; used by `/miles-plan`)
+- `miles/plan.py` — training-plan ground truth: immutable versioned snapshots (`create_plan`/`add_version`, no UPDATE path), zone targets frozen at authoring via `estimate_fitness`, contemporaneous `current_version_for_week` (version 1 floor rule), race auto-complete on sync. Plan tables are athlete-authored — exempt from `derive_all` rebuilds
+- `miles/plan_adherence.py` — derived week-level adherence (on/close/off bands, pattern-only flags — never single misses), scored against the version that governed each week; rebuilt by `derive_all` for active+completed plans
+- `miles/plan_api.py` — `/api/plan`, `/api/plan-adherence`, `/api/plan-progression`, `/api/plan-retrospective`, versions/diff endpoints backing plan.html
 - `miles/api.py` — FastAPI endpoints `/api/marathons`, `/api/marathon-weeks`, `/api/weekly-history`, `/api/build-detail`, `/api/activity-laps`, `/api/build-workout-groups`, `/api/fitness-trend`, `/api/races`, `/api/years`, `/api/hr-pace-heatmap`; mounts the `distance_builds.py` and `fitness_api.py` routers; also serves `miles/static/`
-- `miles/static/` — vanilla JS, no framework. `races.html` is the landing page (`/` redirects here): Overview tab plus a per-distance tab (5K/10K/Half/Marathon/50K/Other) for each, each with a stat strip, 3-mode chart, and dense sortable tables. `builds.html` indexes every detected build; `build.html#{race-date}` is the drill-down (stat strip, weekly calendar, lap panel, workout-group comparisons; falls back to a fixed distance-bucket window for races without a detected build). `compare.html` is a build-vs-build workbench (max 4, per distance-bucket). `training.html` has a stat strip and a per-distance Fitness chart with hover/click-to-pin evidence. `years.html` is year-over-year volume plus an HR-vs-pace lap scatter (see below). `design-lab.html` + `static/lab/*.js` are a kept-around design playground, not a shipped page. `theme.css` (tokens + shared table/tab/nav classes) and `nav.js` (header nav: Races · Builds · Compare · Training · Years; `chartTheme()` for ECharts) are shared by every page; `charts.js` holds shared `fmt`/color/`staggerEndLabels`/`sparklineSVG`/`makeSortable` helpers
+- `miles/static/` — vanilla JS, no framework. `races.html` is the landing page (`/` redirects here): Overview tab plus a per-distance tab (5K/10K/Half/Marathon/50K/Other) for each, each with a stat strip, 3-mode chart, and dense sortable tables. `builds.html` indexes every detected build; `build.html#{race-date}` is the drill-down (stat strip, weekly calendar, lap panel, workout-group comparisons; falls back to a fixed distance-bucket window for races without a detected build). `compare.html` is a build-vs-build workbench (max 4, per distance-bucket). `training.html` has a stat strip and a per-distance Fitness chart with hover/click-to-pin evidence. `years.html` is year-over-year volume plus an HR-vs-pace lap scatter (see below). `plan.html` is the training plan vs reality (stat strip, planned-vs-actual weekly chart with adherence bands + flag shading, weekly calendar, easy-HR/workout-pace progression charts, version history with diffs; renders a race retrospective for a completed plan, an empty state when no plan exists). `design-lab.html` + `static/lab/*.js` are a kept-around design playground, not a shipped page. `theme.css` (tokens + shared table/tab/nav classes) and `nav.js` (header nav: Races · Builds · Compare · Training · Years · Plan; `chartTheme()` for ECharts) are shared by every page; `charts.js` holds shared `fmt`/color/`staggerEndLabels`/`sparklineSVG`/`makeSortable` helpers
 - `.claude/commands/miles.md` — `/miles` skill: the running-analyst persona (strictly descriptive, data-calibrated tone, tool routing)
+- `.claude/commands/miles-plan.md` — `/miles-plan` skill: the planner persona — the only thing that prescribes; drafts/revises plans in conversation, writes only on explicit approval (design record: `adr/0001-training-plans-as-versioned-ground-truth.md`)
 - `.claude/commands/marathon-analysis.md` — `/marathon-analysis` skill for guided training analysis
 - `screenshot.py` — visual verification; launches system chromium directly and connects Playwright over CDP (see Development notes)
 
@@ -104,6 +108,6 @@ All code must pass `uv run pyright` with zero errors. Follow these practices:
 
 - Annotate all function parameters and return types.
 - Use `X | None` instead of `Optional[X]`.
-- Use `TypedDict` for structured dicts that cross function boundaries (see `ActivityRow` in `db.py`).
+- Use `TypedDict` for structured dicts that cross function boundaries (see `ActivityRow` in `db.py`). Import it from `typing_extensions`, never `typing` — pydantic rejects `typing.TypedDict` in FastAPI response models on Python 3.11, and TypedDicts flow between modules, so this applies everywhere.
 - Use `isinstance` for type narrowing, not `hasattr`.
 - Avoid `Any`; if a library type is imprecise, use `cast` or a narrow `assert` at the boundary.

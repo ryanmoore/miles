@@ -2,6 +2,7 @@ import json
 import sqlite3
 import statistics
 from datetime import date, timedelta
+from typing import Literal, cast
 
 from mcp.server.fastmcp import FastMCP
 
@@ -11,6 +12,19 @@ from .derive import ensure_derived
 from .fitness import WINDOW_DAYS, estimate_fitness
 from .format import fmt_pace, fmt_time
 from .periods import GAP_WEEKS_TO_SPLIT, Period, WeekAgg, is_active, sunday_of, detect_periods
+from .plan import (
+    DayInput,
+    DayTarget,
+    PlanValidationError,
+    WeekInput,
+    add_log_entry,
+    add_version,
+    create_plan,
+    current_version_for_week,
+    diff_versions,
+    get_active_plan,
+    get_version,
+)
 from .races import (
     MARATHON_MAX_M,
     MARATHON_MIN_M,
@@ -35,7 +49,7 @@ def _conn() -> sqlite3.Connection:
 _PACE_KEYS = frozenset({
     "pace_min_per_mile", "avg_pace_min_per_mile", "avg_pace",
     "avg_rep_pace", "best_rep_pace", "pace_min_mi", "avg_pace_min_mi",
-    "first_half_pace", "second_half_pace",
+    "first_half_pace", "second_half_pace", "pace_lo", "pace_hi",
 })
 
 
@@ -1791,6 +1805,565 @@ def get_fitness_trend(months: int = 36) -> str:
     ])
 
 
+# --- Plan tools -------------------------------------------------------------
+#
+# Plans are athlete-authored ground truth (plans/plan_versions/plan_weeks/
+# plan_days/plan_log) — the first write surface in miles. Every write is a
+# thin wrapper over miles/plan.py, which owns all validation; these tools only
+# shape the response and catch PlanValidationError into a friendly {"error":
+# ...} naming the offending week/day/field. Never let a raw exception escape —
+# a broad except is the last-resort net for genuinely malformed input.
+
+# Sanity-warning thresholds (advisory only, never block a write). Tunable.
+WARN_WEEK1_MULT = 1.3   # week-1 target vs. recent 4-week average mileage
+WARN_RAMP_PCT = 0.10    # week-over-week mileage ramp considered aggressive
+WARN_RAMP_MIN_WEEKS = 3  # consecutive ramp weeks needed before warning
+
+
+def _monday_of(d: date) -> date:
+    return d - timedelta(days=d.weekday())
+
+
+def _recent_avg_weekly_miles(conn: sqlite3.Connection, as_of: date, num_weeks: int = 4) -> float | None:
+    """Average mileage over the num_weeks Monday-aligned weeks completed
+    strictly before as_of's week, zero-filled. None if the athlete has no
+    activities at all (vs. a real 0.0 average during a genuine break)."""
+    if conn.execute("SELECT 1 FROM activities LIMIT 1").fetchone() is None:
+        return None
+    this_monday = _monday_of(as_of)
+    window_start = this_monday - timedelta(weeks=num_weeks)
+    type_clause, type_params = _run_type_filter()
+    rows = conn.execute(f"""
+        SELECT
+            DATE(start_date, '-' || ((CAST(strftime('%w', start_date) AS INTEGER) + 6) % 7) || ' days') AS monday,
+            ROUND(SUM(distance_m) / 1609.34, 2) AS miles
+        FROM activities
+        WHERE {type_clause} AND DATE(start_date) >= ? AND DATE(start_date) < ?
+        GROUP BY monday
+    """, type_params + [window_start.isoformat(), this_monday.isoformat()]).fetchall()
+    by_monday = {r["monday"]: (r["miles"] or 0.0) for r in rows}
+    total = sum(by_monday.get((window_start + timedelta(weeks=i)).isoformat(), 0.0) for i in range(num_weeks))
+    return round(total / num_weeks, 1)
+
+
+def _all_time_peak_week_miles(conn: sqlite3.Connection) -> float | None:
+    """Max Monday-aligned weekly mileage across the athlete's full history, or
+    None if there are no activities."""
+    type_clause, type_params = _run_type_filter()
+    row = conn.execute(f"""
+        SELECT MAX(weekly_miles) AS peak FROM (
+            SELECT
+                DATE(start_date, '-' || ((CAST(strftime('%w', start_date) AS INTEGER) + 6) % 7) || ' days') AS monday,
+                SUM(distance_m) / 1609.34 AS weekly_miles
+            FROM activities
+            WHERE {type_clause}
+            GROUP BY monday
+        )
+    """, type_params).fetchone()
+    return round(row["peak"], 1) if row is not None and row["peak"] is not None else None
+
+
+def _sanity_warnings(conn: sqlite3.Connection, weeks: list[WeekInput], as_of: date) -> list[str]:
+    """Advisory (never rejecting) warnings on a draft/revised plan's weeks,
+    computed against the activities table: week-1 target vs. recent volume,
+    peak week vs. all-time peak, and sustained aggressive ramp. Thresholds are
+    the WARN_* module constants above."""
+    warnings: list[str] = []
+    if not weeks:
+        return warnings
+    sorted_weeks = sorted(weeks, key=lambda w: w["week_start"])
+
+    week1 = sorted_weeks[0]
+    recent_avg = _recent_avg_weekly_miles(conn, as_of)
+    if recent_avg is not None and recent_avg > 0 and week1["target_miles"] > WARN_WEEK1_MULT * recent_avg:
+        warnings.append(
+            f"week 1 ({week1['week_start']}) targets {week1['target_miles']} mi, "
+            f"{week1['target_miles'] / recent_avg:.1f}x the recent 4-week average of {recent_avg} mi"
+        )
+
+    peak_week = max(sorted_weeks, key=lambda w: w["target_miles"])
+    all_time_peak = _all_time_peak_week_miles(conn)
+    if all_time_peak is not None and peak_week["target_miles"] > all_time_peak:
+        warnings.append(
+            f"peak week ({peak_week['week_start']}, {peak_week['target_miles']} mi) exceeds the "
+            f"athlete's all-time peak week ({all_time_peak} mi)"
+        )
+
+    ramp_flags = [False] + [
+        prev["target_miles"] > 0
+        and (cur["target_miles"] - prev["target_miles"]) / prev["target_miles"] > WARN_RAMP_PCT
+        for prev, cur in zip(sorted_weeks, sorted_weeks[1:])
+    ]
+    i = 1
+    while i < len(ramp_flags):
+        if not ramp_flags[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(ramp_flags) and ramp_flags[j]:
+            j += 1
+        if j - i >= WARN_RAMP_MIN_WEEKS:
+            warnings.append(
+                f"{j - i} consecutive weeks ramp mileage >{WARN_RAMP_PCT * 100:.0f}%/wk "
+                f"({sorted_weeks[i - 1]['week_start']} to {sorted_weeks[j - 1]['week_start']})"
+            )
+        i = j
+
+    return warnings
+
+
+def _day_with_target(d: db.PlanDayRow) -> dict[str, object]:
+    """A plan_days row with target_json parsed into a nested `target` dict
+    (so _fmt_paces can format its pace_lo/pace_hi) instead of a raw JSON string."""
+    out: dict[str, object] = dict(d)
+    target_json = out.pop("target_json", None)
+    out["target"] = json.loads(cast(str, target_json)) if target_json else None
+    return out
+
+
+def _week_input_from_row(w: db.PlanWeekRow) -> WeekInput:
+    """Converts a stored plan_weeks row back into add_version's WeekInput shape
+    — used to snapshot a past week unchanged onto a new version."""
+    out: WeekInput = {
+        "week_start": w["week_start"],
+        "target_miles": w["target_miles"],
+        "target_workouts": w["target_workouts"],
+        "phase": w["phase"],
+    }
+    if w["target_long_run_miles"] is not None:
+        out["target_long_run_miles"] = w["target_long_run_miles"]
+    if w["note"] is not None:
+        out["note"] = w["note"]
+    return out
+
+
+def _day_input_from_row(d: db.PlanDayRow) -> DayInput:
+    """Converts a stored plan_days row back into add_version's DayInput shape.
+    target_json (already frozen — concrete pace_lo/pace_hi, if any) round-trips
+    as an explicit-pace target, so _freeze_day_target never re-resolves it."""
+    out: DayInput = {"date": d["date"], "slot": d["slot"], "seq": d["seq"]}
+    if d["title"] is not None:
+        out["title"] = d["title"]
+    if d["target_miles"] is not None:
+        out["target_miles"] = d["target_miles"]
+    if d["target_json"] is not None:
+        out["target"] = cast(DayTarget, json.loads(d["target_json"]))
+    return out
+
+
+def _plan_start_monday(conn: sqlite3.Connection, plan_id: int) -> date | None:
+    """The plan's first week (from version 1, which always governs from the
+    plan's start regardless of its own created_at), or None if v1 has no weeks
+    (shouldn't happen for an active plan)."""
+    row = conn.execute("""
+        SELECT MIN(pw.week_start) AS d
+        FROM plan_weeks pw JOIN plan_versions pv ON pv.version_id = pw.version_id
+        WHERE pv.plan_id = ? AND pv.version_n = 1
+    """, [plan_id]).fetchone()
+    return date.fromisoformat(row["d"]) if row is not None and row["d"] is not None else None
+
+
+@mcp.tool()
+def create_training_plan(
+    title: str,
+    race_date: str,
+    distance_bucket: str,
+    weeks: list[WeekInput],
+    days: list[DayInput],
+    goal_time_s: int | None = None,
+) -> str:
+    """
+    Creates a new training plan (plans row) plus its first version (version 1)
+    from a full weeks/days payload. Fails if an active plan already exists —
+    call abandon_plan on it first (v1 allows only one active plan).
+
+    weeks: list of {week_start (Monday, YYYY-MM-DD), target_miles,
+      target_workouts, phase (base|sharpen|peak|taper|race),
+      target_long_run_miles?, note?}. Must be contiguous Mondays ending at the
+      race week (Monday of race_date's week).
+    days: list of {date, slot (easy|workout|long|rest|race), seq? (default 1;
+      2+ = doubles), title?, target_miles?, target?}. target is a DayTarget:
+      {reps?, rep_distance_m?, pace_lo?, pace_hi?, zone_name?, hr_lo?, hr_hi?}.
+      A zone_name with no explicit pace_lo/pace_hi resolves against a live
+      fitness estimate as of today and freezes; if no fitness estimate is
+      computable the whole call is rejected (never stored unresolved) —
+      provide explicit pace_lo/pace_hi instead.
+
+    Returns {"plan": ..., "version": ..., "weeks": [...], "days": [...],
+    "warnings": [...]} on success, or {"error": "..."} naming the offending
+    week/day/field on any validation failure — never a traceback.
+
+    warnings (advisory, never block creation): week-1 target > 1.3x the
+    athlete's recent 4-week average mileage; peak week target exceeds the
+    athlete's all-time peak week; 3+ consecutive weeks ramping mileage
+    >10%/week. Relay these to the athlete rather than silently proceeding.
+    """
+    conn = _conn()
+    try:
+        try:
+            plan_id = create_plan(
+                conn, title=title, race_date=race_date, distance_bucket=distance_bucket,
+                goal_time_s=goal_time_s,
+            )
+        except PlanValidationError as e:
+            return json.dumps({"error": str(e)})
+
+        try:
+            version_id = add_version(conn, plan_id, weeks=weeks, days=days, note=None, author="agent")
+        except PlanValidationError as e:
+            # Validation in add_version runs before any INSERT, so nothing but
+            # the plans row itself needs cleaning up to restore "no active plan".
+            conn.execute("DELETE FROM plans WHERE plan_id = ?", [plan_id])
+            conn.commit()
+            return json.dumps({"error": str(e)})
+        except Exception as e:
+            # Malformed (non-PlanValidationError) input can still blow up inside
+            # add_version's iteration over weeks/days — same cleanup applies so a
+            # junk payload never leaves a stray active plan with no versions.
+            conn.execute("DELETE FROM plans WHERE plan_id = ?", [plan_id])
+            conn.commit()
+            return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+        bundle = get_version(conn, version_id)
+        assert bundle is not None
+        result = {
+            "plan": get_active_plan(conn),
+            "version": bundle["version"],
+            "weeks": bundle["weeks"],
+            "days": [_day_with_target(d) for d in bundle["days"]],
+            "warnings": _sanity_warnings(conn, weeks, date.today()),
+        }
+        return json.dumps(_fmt_paces(result))
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
+@mcp.tool()
+def revise_training_plan(
+    note: str,
+    weeks: list[WeekInput],
+    days: list[DayInput],
+) -> str:
+    """
+    Writes a new version onto the active plan from a full weeks/days payload
+    (same shape as create_training_plan) — a revision is always a complete new
+    snapshot, never a partial patch. Requires a non-empty `note` explaining why.
+
+    Past-week protection: any week whose Monday is on or before the start of
+    this week — already governing or already in progress — is silently
+    snapshotted unchanged from whichever version actually governed it at the
+    time, regardless of what this payload proposed for that week/its days.
+    This makes rewriting history to look adherent structurally impossible.
+    Revised targets only take effect from next Monday onward. The response's
+    `past_weeks_preserved` lists which week_starts were overridden this way.
+
+    Returns {"plan": ..., "version": ..., "weeks": [...], "days": [...],
+    "past_weeks_preserved": [...], "warnings": [...]} on success, or
+    {"error": "..."} naming the offending week/day/field — never a traceback.
+    See create_training_plan for the warnings heuristics.
+    """
+    conn = _conn()
+    try:
+        if not note or not note.strip():
+            return json.dumps({"error": "revise_training_plan requires a non-empty note"})
+
+        p = get_active_plan(conn)
+        if p is None:
+            return json.dumps({"error": "no active plan"})
+        plan_id = p["plan_id"]
+
+        this_monday = _monday_of(date.today())
+        plan_start = _plan_start_monday(conn, plan_id)
+
+        past_mondays: list[date] = []
+        if plan_start is not None:
+            m = plan_start
+            while m <= this_monday:
+                past_mondays.append(m)
+                m += timedelta(weeks=1)
+        past_isos = {m.isoformat() for m in past_mondays}
+
+        final_weeks: list[WeekInput] = []
+        final_days: list[DayInput] = []
+        past_weeks_preserved: list[str] = []
+
+        for m in past_mondays:
+            governing = current_version_for_week(conn, plan_id, m)
+            if governing is None:
+                continue  # shouldn't happen once v1 exists and m >= plan_start
+            iso = m.isoformat()
+            week_row = next((w for w in governing["weeks"] if w["week_start"] == iso), None)
+            if week_row is not None:
+                final_weeks.append(_week_input_from_row(week_row))
+                past_weeks_preserved.append(iso)
+            week_end = (m + timedelta(days=6)).isoformat()
+            final_days.extend(
+                _day_input_from_row(day_row)
+                for day_row in governing["days"]
+                if iso <= day_row["date"] <= week_end
+            )
+
+        for w in weeks:
+            if w["week_start"] not in past_isos:
+                final_weeks.append(w)
+
+        def _week_start_iso(date_str: str) -> str | None:
+            try:
+                dt = date.fromisoformat(date_str)
+            except ValueError:
+                return None
+            return _monday_of(dt).isoformat()
+
+        for d in days:
+            wk = _week_start_iso(d.get("date", ""))
+            if wk is None or wk not in past_isos:
+                final_days.append(d)
+
+        try:
+            version_id = add_version(
+                conn, plan_id, weeks=final_weeks, days=final_days, note=note, author="agent",
+            )
+        except PlanValidationError as e:
+            return json.dumps({"error": str(e)})
+
+        bundle = get_version(conn, version_id)
+        assert bundle is not None
+        result = {
+            "plan": get_active_plan(conn),
+            "version": bundle["version"],
+            "weeks": bundle["weeks"],
+            "days": [_day_with_target(d) for d in bundle["days"]],
+            "past_weeks_preserved": sorted(past_weeks_preserved),
+            "warnings": _sanity_warnings(conn, final_weeks, date.today()),
+        }
+        return json.dumps(_fmt_paces(result))
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
+@mcp.tool()
+def get_training_plan(version_n: int | None = None, compare_to: int | None = None) -> str:
+    """
+    Reads the active plan: a specific version_n, or the latest version by
+    default. Always includes `versions` (version_n, created_at, note, author
+    for every version) and `governing_version_n` — the version_n that
+    currently governs this week per the contemporaneous-version rule (may lag
+    behind the latest version_n right after a mid-week revision; it takes
+    effect next Monday).
+
+    compare_to: optional version_n to diff against the returned version —
+    added/removed/changed weeks and days, via plan.diff_versions (computed on
+    the fly, never stored). Surfaced as result["diff"] when given.
+
+    Returns {"error": "no active plan"} if there is none, or {"error": ...}
+    naming the missing version_n / compare_to.
+    """
+    conn = _conn()
+    try:
+        p = get_active_plan(conn)
+        if p is None:
+            return json.dumps({"error": "no active plan"})
+        plan_id = p["plan_id"]
+
+        version_rows = conn.execute(
+            "SELECT version_id, version_n, created_at, note, author FROM plan_versions "
+            "WHERE plan_id = ? ORDER BY version_n", [plan_id],
+        ).fetchall()
+        if not version_rows:
+            return json.dumps({"error": f"plan {plan_id} has no versions"})
+        version_index = {int(r["version_n"]): int(r["version_id"]) for r in version_rows}
+
+        target_n = version_n if version_n is not None else max(version_index)
+        if target_n not in version_index:
+            return json.dumps({"error": f"version_n {target_n} does not exist for plan {plan_id}"})
+        bundle = get_version(conn, version_index[target_n])
+        assert bundle is not None
+
+        governing = current_version_for_week(conn, plan_id, _monday_of(date.today()))
+
+        result: dict[str, object] = {
+            "plan": p,
+            "version": bundle["version"],
+            "weeks": bundle["weeks"],
+            "days": [_day_with_target(d) for d in bundle["days"]],
+            "versions": [
+                {
+                    "version_n": int(r["version_n"]), "created_at": r["created_at"],
+                    "note": r["note"], "author": r["author"],
+                }
+                for r in version_rows
+            ],
+            "governing_version_n": governing["version"]["version_n"] if governing else None,
+        }
+
+        if compare_to is not None:
+            if compare_to not in version_index:
+                return json.dumps({"error": f"compare_to version_n {compare_to} does not exist for plan {plan_id}"})
+            result["diff"] = diff_versions(conn, version_index[compare_to], version_index[target_n])
+
+        return json.dumps(_fmt_paces(result))
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
+@mcp.tool()
+def log_plan_adjustment(
+    log_date: str,
+    action: str,
+    reason: str | None = None,
+    plan_id: int | None = None,
+) -> str:
+    """
+    Records day-level reality ("skipped Tue, slept badly", "moved LT to Thu")
+    without touching the plan or bumping a version — plan_log is annotation
+    only; week-scoped adherence scoring already absorbs in-week moves.
+
+    log_date: YYYY-MM-DD. action: skipped | moved | modified | note.
+    plan_id defaults to the active plan.
+
+    Returns {"log_id": ...} on success, or {"error": ...} naming the offending
+    field — never a traceback.
+    """
+    conn = _conn()
+    try:
+        if plan_id is None:
+            p = get_active_plan(conn)
+            if p is None:
+                return json.dumps({"error": "no active plan"})
+            plan_id = p["plan_id"]
+        try:
+            log_id = add_log_entry(
+                conn, plan_id, log_date=log_date,
+                action=cast(Literal["skipped", "moved", "modified", "note"], action),
+                reason=reason,
+            )
+        except PlanValidationError as e:
+            return json.dumps({"error": str(e)})
+        return json.dumps({"log_id": log_id})
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
+@mcp.tool()
+def abandon_plan(reason: str, plan_id: int | None = None) -> str:
+    """
+    Flips a plan's status to 'abandoned' and records the reason in plan_log
+    (action='note'). plan_id defaults to the active plan. Frees up "one active
+    plan at a time" so a new plan can be created via create_training_plan.
+
+    reason is required and must be non-empty.
+
+    Returns {"plan": {...}} on success, or {"error": ...} — no active plan,
+    plan not found, plan already not active, or an empty reason.
+    """
+    conn = _conn()
+    try:
+        if not reason or not reason.strip():
+            return json.dumps({"error": "abandon_plan requires a non-empty reason"})
+
+        if plan_id is None:
+            p = get_active_plan(conn)
+            if p is None:
+                return json.dumps({"error": "no active plan"})
+            plan_id = p["plan_id"]
+        else:
+            row = conn.execute("SELECT plan_id, status FROM plans WHERE plan_id = ?", [plan_id]).fetchone()
+            if row is None:
+                return json.dumps({"error": f"plan {plan_id} does not exist"})
+            if row["status"] != "active":
+                return json.dumps({"error": f"plan {plan_id} is not active (status={row['status']!r})"})
+
+        conn.execute("UPDATE plans SET status = 'abandoned' WHERE plan_id = ?", [plan_id])
+        conn.commit()
+        try:
+            add_log_entry(conn, plan_id, log_date=date.today().isoformat(), action="note", reason=f"plan abandoned: {reason}")
+        except PlanValidationError as e:
+            return json.dumps({"error": str(e)})
+
+        updated = conn.execute(
+            "SELECT plan_id, title, race_date, distance_bucket, goal_time_s, status, created_at "
+            "FROM plans WHERE plan_id = ?", [plan_id],
+        ).fetchone()
+        return json.dumps({"plan": dict(updated)})
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
+@mcp.tool()
+def get_plan_adherence() -> str:
+    """
+    Weekly adherence for the active plan's completed weeks (week's Sunday
+    before today) — the judgment layer over get_training_plan's plain
+    numbers. Each week is scored against the plan version that governed it
+    at the time (version_n_used), never today's plan even if it's been
+    revised since — rewriting history to look adherent is structurally
+    impossible.
+
+    Each week: mileage_ratio (actual/target), actual_miles, actual_workouts,
+    long_run_done (true/false/null — null means that week had no long-run
+    target, not that it was missed), workout_pace_delta_s (seconds/mile
+    outside the frozen workout pace range once +/-10s/mi slack is applied;
+    positive = slower, 0 = within range, null = no comparable workout data
+    that week), and band (on | close | off — the week's overall read; a
+    close-mileage week that also hit its workout count is a normal week of
+    marathon training, not a miss).
+
+    `flags`: pattern-level callouts ONLY — never raised for a single day or
+    a single week. A flag means 2+ *consecutive* completed weeks shared a
+    real shortfall: mileage off-low, mileage off-high (sustained overshoot
+    is as flag-worthy as undershoot — it's an injury-risk signal, not
+    virtue), workout count short, or a missed long run. Relay flags in that
+    pattern language ("workouts 1 of 2 in each of the last two weeks"), not
+    as a verdict on any single week. `flags` here is empty unless a pattern
+    is active as of the most recent completed week — treat silence as the
+    normal, expected state, not as an incomplete read.
+
+    `headline`: "N of M weeks on plan" — counts on+close bands together as
+    "on plan" (see band note above). Lead with this number over flags.
+
+    Returns {"error": "no active plan"} or {"error": "no completed weeks
+    yet"} (a brand-new plan whose first week hasn't finished) as applicable.
+    """
+    conn = _conn()
+    try:
+        p = get_active_plan(conn)
+        if p is None:
+            return json.dumps({"error": "no active plan"})
+
+        rows = conn.execute("""
+            SELECT week_start, version_n_used, actual_miles, actual_workouts,
+                   long_run_done, mileage_ratio, workout_pace_delta_s, band, flags_json
+            FROM plan_adherence WHERE plan_id = ? ORDER BY week_start
+        """, [p["plan_id"]]).fetchall()
+        if not rows:
+            return json.dumps({"error": "no completed weeks yet"})
+
+        weeks = [
+            {
+                "week_start": r["week_start"],
+                "version_n_used": r["version_n_used"],
+                "actual_miles": r["actual_miles"],
+                "actual_workouts": r["actual_workouts"],
+                "long_run_done": bool(r["long_run_done"]) if r["long_run_done"] is not None else None,
+                "mileage_ratio": r["mileage_ratio"],
+                "workout_pace_delta_s": r["workout_pace_delta_s"],
+                "band": r["band"],
+            }
+            for r in rows
+        ]
+        on_or_close = sum(1 for r in rows if r["band"] in ("on", "close"))
+        last_flags = json.loads(rows[-1]["flags_json"]) if rows[-1]["flags_json"] else []
+
+        result = {
+            "weeks": weeks,
+            "flags": last_flags,
+            "headline": f"{on_or_close} of {len(rows)} weeks on plan",
+        }
+        return json.dumps(_fmt_paces(result))
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
 @mcp.tool()
 def run_sql(query: str) -> str:
     """
@@ -1840,6 +2413,49 @@ def run_sql(query: str) -> str:
       max_hr, long_run_floor_miles, updated_at — set via `miles-sync --max-hr` /
       `--long-run-floor`, or the one-time interactive prompt on first sync. Either
       field may be NULL if never set.
+
+    Plan tables — athlete-authored ground truth, like activities: NOT derived,
+    exempt from derive_all rebuilds. Write access is via create_training_plan /
+    revise_training_plan / log_plan_adjustment / abandon_plan (see those tools);
+    read access to the current plan is better served by get_training_plan, but
+    all six tables are queryable here for ad-hoc questions and history.
+
+    Table: plans
+      plan_id, title, race_date, distance_bucket, goal_time_s, status
+      (active|completed|abandoned), created_at. At most one row has status='active'.
+
+    Table: plan_versions  (append-only; there is no UPDATE path — a revision is
+      always a brand new version_id with a full new set of weeks/days)
+      version_id, plan_id, version_n, created_at, note (why this revision),
+      author (agent|manual)
+
+    Table: plan_weeks  (PK: version_id, week_start)
+      version_id, week_start (Monday), target_miles, target_workouts,
+      target_long_run_miles (nullable), phase (base|sharpen|peak|taper|race), note
+
+    Table: plan_days  (PK: version_id, date, seq; seq 1 normally, 2+ = doubles)
+      version_id, date, seq, slot (easy|workout|long|rest|race), title,
+      target_miles (nullable), target_json (nullable — JSON-encoded DayTarget:
+      reps, rep_distance_m, pace_lo/pace_hi (decimal min/mi), zone_name, hr_lo/
+      hr_hi, all optional; frozen at authoring — never re-resolves on read)
+
+    Table: plan_log  (day-level reality; doesn't touch the plan or bump a version)
+      log_id, plan_id, date, action (skipped|moved|modified|note), reason, created_at
+
+    Table: plan_adherence  (DERIVED — rebuilt from scratch by derive_all and
+      versioned by DERIVE_VERSION like fitness_checkpoints; one row per
+      completed week of the active plan; empty when there's no active plan
+      or it hasn't reached a completed week yet. Prefer get_plan_adherence
+      for normal reads — it also surfaces pattern flags.)
+      plan_id, week_start, version_n_used (the plan version this week was
+      scored against — see plan.current_version_for_week), actual_miles,
+      actual_workouts, long_run_done (0/1/NULL — NULL means no long-run
+      target that week, not a miss), mileage_ratio (actual/target),
+      workout_pace_delta_s (seconds/mile outside the frozen workout pace
+      range with +/-10s/mi slack; positive = slower, 0 = within range,
+      NULL = no comparable workout data), band ('on'|'close'|'off'),
+      flags_json (pattern-level flags active as of that week, JSON list or
+      NULL — see get_plan_adherence for the semantics)
     """
     stripped = query.strip().upper().lstrip("(")
     if not (stripped.startswith("SELECT") or stripped.startswith("WITH")):

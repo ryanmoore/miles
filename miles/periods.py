@@ -7,7 +7,7 @@ Pure function of weekly aggregates; no SQL, no I/O, fully deterministic.
 """
 
 from datetime import date, timedelta
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 # A week counts as active if it clears either threshold.
 ACTIVE_WEEK_MIN_RUNS = 2

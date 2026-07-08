@@ -5,13 +5,15 @@ import subprocess as _subprocess
 import uvicorn
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Literal, TypedDict, cast
+from typing import Literal, cast
+
+from typing_extensions import TypedDict
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import db
+from . import db, plan
 from .build_paces import PaceClaim, pace_claims
 from .classifier import LAP_MIN_DISTANCE_M, LAP_MIN_MOVING_TIME_S
 from .distance_builds import (
@@ -22,6 +24,7 @@ from .distance_builds import (
     _DISTANCE_CATEGORY,
 )
 from .fitness_api import router as fitness_api_router
+from .plan_api import router as plan_api_router
 from .builds import Build, RaceRef, detect_builds
 from .derive import ensure_derived
 from .format import fmt_pace, fmt_time
@@ -344,6 +347,7 @@ class WeeklyHistory(TypedDict):
     gaps: list[Gap]
     builds: list[Build]
     races: list[RaceMarker]
+    race_plans: dict[str, int]  # race date -> completed plan_id, for builds.html's cross-link
 
 
 @app.get("/api/weekly-history")
@@ -351,6 +355,10 @@ def get_weekly_history() -> WeeklyHistory:
     """
     Every week of running history, zero-filled, plus detected training periods,
     gaps, race-anchored builds within them, and every race with its effort label.
+    race_plans keys a completed plan's id by its matching race's exact
+    date (plan.completed_plans_by_race_date) — Build.race.date uses that same
+    key, so builds.html can look up a plan without builds.py (a deliberately
+    DB-free pure module) needing to know plans exist at all.
     """
     conn = _conn()
 
@@ -369,6 +377,7 @@ def get_weekly_history() -> WeeklyHistory:
         for r in race_activity_rows
     ]
     builds = detect_builds(weeks, _race_refs(race_activity_rows), periods) if periods else []
+    race_plans = {date: row["plan_id"] for date, row in plan.completed_plans_by_race_date(conn).items()}
 
     return WeeklyHistory(
         weeks=[HistoryWeek(monday=w["monday"], miles=w["miles"], runs=w["runs"]) for w in filled_weeks],
@@ -376,6 +385,7 @@ def get_weekly_history() -> WeeklyHistory:
         gaps=gaps,
         builds=builds,
         races=races,
+        race_plans=race_plans,
     )
 
 
@@ -889,20 +899,27 @@ class RaceRow(TypedDict):
     effort: str | None
     activity_id: int
     strava_url: str | None
+    plan_id: int | None  # the completed plan this race closed out, if any — links to plan.html
 
 
 @app.get("/api/races")
 def get_races() -> list[RaceRow]:
     """
     Every effective race at every distance, ascending by date, with
-    per-category PR flags computed over the full history.
+    per-category PR flags computed over the full history. plan_id is set
+    when a completed plan's race_date/distance_bucket matched this race (see
+    plan.completed_plans_by_race_date) — races.html cross-links such rows to
+    plan.html's retrospective.
     """
     conn = _conn()
+    plans_by_date = plan.completed_plans_by_race_date(conn)
     out: list[RaceRow] = []
     for r in race_rows(conn):
         pace = r["pace_min_per_mile"]
+        race_date = cast(str, r["date"])
+        matched_plan = plans_by_date.get(race_date)
         out.append(RaceRow(
-            date=cast(str, r["date"]),
+            date=race_date,
             name=cast(str | None, r["name"]),
             distance_category=cast(str, r["distance_category"]),
             distance_miles=cast(float | None, r["distance_miles"]),
@@ -913,6 +930,7 @@ def get_races() -> list[RaceRow]:
             effort=cast(str | None, r["effort"]),
             activity_id=cast(int, r["activity_id"]),
             strava_url=cast(str | None, r["strava_url"]),
+            plan_id=matched_plan["plan_id"] if matched_plan is not None else None,
         ))
     return out
 
@@ -1174,6 +1192,7 @@ def sync_status() -> SyncStatusResponse:
 # Must precede the catch-all static mount below.
 app.include_router(distance_builds_router)
 app.include_router(fitness_api_router)
+app.include_router(plan_api_router)
 
 app.mount("/workbooks", StaticFiles(directory=str(_WORKBOOKS)), name="workbooks")
 app.mount("/", StaticFiles(directory=str(_STATIC), html=True), name="static")

@@ -15,7 +15,7 @@ import sqlite3
 import statistics
 from bisect import bisect_left
 from datetime import date, datetime
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 from . import db
 from .classifier import classify_workout

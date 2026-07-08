@@ -33,13 +33,14 @@ from .fitness import (
     zones_from_predicted,
 )
 from .inference import apply_inference
+from .plan_adherence import compute_plan_adherence
 from .races import NOMINAL_METERS, classify_race_distance
 
 _CONFIDENCE_VALUES = get_args(Confidence)
 
 # Bump whenever any classifier or threshold feeding a derived value changes, so
 # ensure_derived() knows stale rows need a full recompute.
-DERIVE_VERSION = "8"
+DERIVE_VERSION = "9"
 
 # A single intensity must hold at least this share of a session's work-lap moving
 # time to count as the session's dominant_intensity; below it the session is mixed.
@@ -334,6 +335,31 @@ def _lap_intensity_pass(conn: sqlite3.Connection) -> dict[str, int]:
     return {"laps_intensity": laps_intensity, "sessions_dominant": sessions_dominant}
 
 
+def _plan_adherence_pass(conn: sqlite3.Connection) -> dict[str, int]:
+    """Full recompute of plan_adherence: every completed week of the
+    active plan plus every completed plan (see plan_adherence.py's
+    _target_plans, which keeps a finished plan's final adherence numbers
+    alive once the athlete starts the next one), scored against the plan
+    version that governed it at the time. DELETE-then-rebuild, like every
+    other pass here. A no-op — deletes whatever was there, inserts nothing —
+    when there's no active or completed plan, which is the real DB's current
+    state; plan tables are athlete-authored ground truth, exempt from this
+    rebuild themselves (only plan_adherence is derived from them)."""
+    conn.execute("DELETE FROM plan_adherence")
+    rows = compute_plan_adherence(conn)
+    if rows:
+        conn.executemany("""
+            INSERT INTO plan_adherence (
+                plan_id, week_start, version_n_used, actual_miles, actual_workouts,
+                long_run_done, mileage_ratio, workout_pace_delta_s, band, flags_json
+            ) VALUES (
+                :plan_id, :week_start, :version_n_used, :actual_miles, :actual_workouts,
+                :long_run_done, :mileage_ratio, :workout_pace_delta_s, :band, :flags_json
+            )
+        """, rows)
+    return {"plan_adherence_weeks": len(rows)}
+
+
 def derive_all(conn: sqlite3.Connection) -> dict[str, int]:
     """Full recompute of every derived value from raw synced data. Never incremental."""
     counts: dict[str, int] = {}
@@ -358,6 +384,8 @@ def derive_all(conn: sqlite3.Connection) -> dict[str, int]:
     counts["fitness_months"] = _fitness_checkpoints(conn, exclude_casual=True)  # pass 2, final
 
     counts.update(_lap_intensity_pass(conn))
+
+    counts.update(_plan_adherence_pass(conn))
 
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(

@@ -2,7 +2,7 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 from .weather import WeatherRow
 
@@ -50,6 +50,69 @@ class AthleteRow(TypedDict):
     max_hr: int | None
     long_run_floor_miles: float | None
     updated_at: str | None
+
+
+class PlanRow(TypedDict):
+    plan_id: int
+    title: str
+    race_date: str
+    distance_bucket: str
+    goal_time_s: int | None
+    status: str
+    created_at: str
+
+
+class PlanVersionRow(TypedDict):
+    version_id: int
+    plan_id: int
+    version_n: int
+    created_at: str
+    note: str | None
+    author: str
+
+
+class PlanWeekRow(TypedDict):
+    version_id: int
+    week_start: str
+    target_miles: float
+    target_workouts: int
+    target_long_run_miles: float | None
+    phase: str
+    note: str | None
+
+
+class PlanDayRow(TypedDict):
+    version_id: int
+    date: str
+    seq: int
+    slot: str
+    title: str | None
+    target_miles: float | None
+    target_json: str | None  # JSON-encoded DayTarget (see plan.py), frozen at authoring
+
+
+class PlanLogRow(TypedDict):
+    log_id: int
+    plan_id: int
+    date: str
+    action: str
+    reason: str | None
+    created_at: str
+
+
+class PlanAdherenceRow(TypedDict):
+    """Derived table, rebuilt by derive_all; created empty alongside the
+    ground-truth plan tables so run_sql always sees it."""
+    plan_id: int
+    week_start: str
+    version_n_used: int | None
+    actual_miles: float | None
+    actual_workouts: int | None
+    long_run_done: int | None
+    mileage_ratio: float | None
+    workout_pace_delta_s: float | None
+    band: str | None
+    flags_json: str | None
 
 
 DB_PATH = Path(os.environ.get("MILES_DB", Path(__file__).parent.parent / "data" / "activities.db"))
@@ -191,6 +254,87 @@ def init_db(conn: sqlite3.Connection) -> None:
             max_hr               INTEGER,
             long_run_floor_miles REAL,
             updated_at           TEXT
+        )
+    """)
+    # Plans are athlete-authored ground truth (like activities), not derived —
+    # exempt from derive_all. See adr/0001-training-plans-as-versioned-ground-truth.md.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS plans (
+            plan_id         INTEGER PRIMARY KEY,
+            title           TEXT NOT NULL,
+            race_date       TEXT NOT NULL,
+            distance_bucket TEXT NOT NULL,
+            goal_time_s     INTEGER,
+            status          TEXT NOT NULL DEFAULT 'active',
+            created_at      TEXT NOT NULL
+        )
+    """)
+    # Versions are immutable, append-only snapshots — there is no UPDATE path.
+    # A revision writes a brand new version_id with a full new set of weeks/days.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS plan_versions (
+            version_id INTEGER PRIMARY KEY,
+            plan_id    INTEGER NOT NULL REFERENCES plans(plan_id) ON DELETE CASCADE,
+            version_n  INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            note       TEXT,
+            author     TEXT NOT NULL,
+            UNIQUE(plan_id, version_n)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS plan_weeks (
+            version_id            INTEGER NOT NULL REFERENCES plan_versions(version_id) ON DELETE CASCADE,
+            week_start            TEXT NOT NULL,
+            target_miles          REAL NOT NULL,
+            target_workouts       INTEGER NOT NULL,
+            target_long_run_miles REAL,
+            phase                 TEXT NOT NULL,
+            note                  TEXT,
+            PRIMARY KEY (version_id, week_start)
+        )
+    """)
+    # seq exists so doubles are representable at the schema level (2+ = doubles);
+    # v1 planners will rarely emit one.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS plan_days (
+            version_id   INTEGER NOT NULL REFERENCES plan_versions(version_id) ON DELETE CASCADE,
+            date         TEXT NOT NULL,
+            seq          INTEGER NOT NULL DEFAULT 1,
+            slot         TEXT NOT NULL,
+            title        TEXT,
+            target_miles REAL,
+            target_json  TEXT,
+            PRIMARY KEY (version_id, date, seq)
+        )
+    """)
+    # "Life happened" annotations — day-level reality that never touches the plan
+    # or bumps a version. No FK to a version; scoped to the plan only.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS plan_log (
+            log_id     INTEGER PRIMARY KEY,
+            plan_id    INTEGER NOT NULL REFERENCES plans(plan_id) ON DELETE CASCADE,
+            date       TEXT NOT NULL,
+            action     TEXT NOT NULL,
+            reason     TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    # Derived: rebuilt from scratch by derive_all, versioned by DERIVE_VERSION.
+    # Created alongside the ground-truth tables so run_sql always sees it.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS plan_adherence (
+            plan_id              INTEGER NOT NULL REFERENCES plans(plan_id) ON DELETE CASCADE,
+            week_start           TEXT NOT NULL,
+            version_n_used       INTEGER,
+            actual_miles         REAL,
+            actual_workouts      INTEGER,
+            long_run_done        INTEGER,
+            mileage_ratio        REAL,
+            workout_pace_delta_s REAL,
+            band                 TEXT,
+            flags_json           TEXT,
+            PRIMARY KEY (plan_id, week_start)
         )
     """)
     conn.commit()

@@ -7,7 +7,9 @@ training-pace envelope — with confidence and evidence attached.
 import sqlite3
 import statistics
 from datetime import date, timedelta
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired
+
+from typing_extensions import TypedDict
 
 from .db import effective_run_type_sql, get_athlete
 from .format import fmt_pace

@@ -4,6 +4,7 @@ Launches the system chromium as a subprocess with remote debugging enabled
 and attaches Playwright over CDP.
 """
 import asyncio
+import os
 import subprocess
 import tempfile
 import time
@@ -15,11 +16,24 @@ from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
-CHROMIUM = "/usr/bin/chromium-browser"
+
+def _find_chromium() -> str:
+    override = os.environ.get("CHROMIUM")
+    candidates = [override] if override else ["/usr/bin/chromium-browser", "/usr/bin/chromium"]
+    for c in candidates:
+        if c and Path(c).exists():
+            return c
+    raise RuntimeError("no chromium found; install chromium or set CHROMIUM=/path/to/binary")
+
+
+CHROMIUM = _find_chromium()
 BASE_URL = "http://localhost:8000"
 CDP_PORT = 9222
 CDP_URL = f"http://localhost:{CDP_PORT}"
-USER_DATA_ROOT = Path.home() / "snap" / "chromium" / "common"
+# Snap-confined chromium (Ubuntu hosts) can only touch ~/snap/chromium/common;
+# everywhere else a plain temp dir works.
+_SNAP_ROOT = Path.home() / "snap" / "chromium" / "common"
+USER_DATA_ROOT = _SNAP_ROOT if _SNAP_ROOT.exists() else Path(tempfile.gettempdir())
 STARTUP_TIMEOUT_S = 30
 
 PAGES: list[tuple[str, str, str | None]] = [

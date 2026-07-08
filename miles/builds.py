@@ -7,7 +7,7 @@ Pure function of weekly aggregates, race references, and periods; no SQL, no I/O
 """
 
 from datetime import date, timedelta
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 from .periods import Period, WeekAgg, zero_fill
 

@@ -8,7 +8,9 @@ it never invents its own fitness math.
 import re
 import sqlite3
 from datetime import date, timedelta
-from typing import Literal, TypedDict, cast
+from typing import Literal, cast
+
+from typing_extensions import TypedDict
 
 from fastapi import APIRouter, HTTPException
 

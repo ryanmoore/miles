@@ -4,7 +4,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 
 class WeatherRow(TypedDict):

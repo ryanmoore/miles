@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import click
 from stravalib.exc import Fault
 
-from . import db, strava_client, weather as weather_module
+from . import db, plan, strava_client, weather as weather_module
 from .classifier import classify_workout
 from .derive import derive_all
 
@@ -109,6 +109,18 @@ def _run(conn: sqlite3.Connection, full: bool, extra: bool, extra_limit: int = 9
     counts = derive_all(conn)
     summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "no changes"
     print(f"Derive done. {summary}")
+
+    # Auto-complete the active plan when a synced effective-race activity
+    # now matches its race_date (+/-1 day) and distance_bucket (case-
+    # insensitive) — placed after the derive_all above so a race that was
+    # only just inferred (run_type_inferred) this same sync cycle is already
+    # visible to the match, not just on the next sync. The only mutation is
+    # the status flip; plans/plan_versions/plan_weeks/plan_days stay
+    # untouched and append-only. No-ops cleanly with no active plan or no
+    # matching race (see plan.auto_complete_plan).
+    completed_plan_id = plan.auto_complete_plan(conn)
+    if completed_plan_id is not None:
+        print(f"Plan {completed_plan_id} auto-completed (matching race synced).")
 
     # Lazy lap sync: fetch laps for workout/race activities that have none yet.
     # Backstamp anything already fetched by a prior sync so it's never refetched.

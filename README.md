@@ -94,13 +94,14 @@ claude mcp add miles-friend -e MILES_DB=/path/to/friend.db -- uv run --directory
 uv run miles-api
 ```
 
-Opens a local web interface at `http://localhost:8000` with five pages:
+Opens a local web interface at `http://localhost:8000` with six pages:
 
 - **Races** — race history and PRs, with a build-comparison chart and dense per-build pace tables broken out by distance (5K/10K/Half/Marathon/50K/Other)
 - **Builds** — every detected training build, one row per race, with shape sparklines and volume/workout stats
 - **Compare** — put up to four builds (same distance bucket) side by side, chart and stat table
 - **Training** — training periods, weekly volume with race markers, and a fitness-trend chart with evidence drill-down
 - **Years** — year-by-year volume comparison
+- **Plan** — the active training plan vs reality: planned-vs-actual weekly chart with adherence bands, weekly calendar, progression charts, version history; becomes a race retrospective once the goal race is run. Plans are drafted in conversation via the `/miles-plan` skill
 
 ## MCP tools
 
@@ -125,6 +126,12 @@ Opens a local web interface at `http://localhost:8000` with five pages:
 | `compare_workouts_by_build` | Cross-build comparison of a workout label's rep pace/HR |
 | `get_easy_hr_trend` | Monthly easy-run HR and pace — long-term aerobic fitness signal |
 | `get_activity_weather` | Hourly weather breakdown for one activity |
+| `get_training_plan` | The current training plan (or any version), with version history and diffs |
+| `get_plan_adherence` | Week-by-week plan adherence bands and pattern flags |
+| `create_training_plan` | Write a new athlete-approved plan (used by the `/miles-plan` planner) |
+| `revise_training_plan` | Append a new plan version; past weeks are snapshotted, never rewritten |
+| `log_plan_adjustment` | Record day-level reality ("skipped Tue") without a version bump |
+| `abandon_plan` | Mark the active plan abandoned, with the reason logged |
 | `run_sql` | Ad-hoc read-only SQL against all tables, including derived columns |
 
 `run_type` reflects the label you set in Strava (`easy`, `workout`, `long_run`, `race`);

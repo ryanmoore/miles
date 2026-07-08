@@ -14,7 +14,7 @@ import re
 import sqlite3
 import statistics
 from datetime import date
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 from .db import effective_run_type_sql
 from .fitness import estimate_fitness

@@ -1,0 +1,1180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Miles · Plan</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
+  <link rel="stylesheet" href="/theme.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    .plan-view h1 {
+      font-size: 1.25rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.25rem;
+    }
+    .plan-view .subtitle { font-size: 0.8125rem; color: var(--muted); margin-bottom: 1.25rem; }
+
+    /* Empty state */
+    .plan-view .plan-empty {
+      max-width: 32rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.5rem 1.75rem;
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+      line-height: 1.55;
+    }
+    .plan-view .plan-empty h2 { font-size: 1rem; color: var(--text); margin-bottom: 0.5rem; }
+    .plan-view .plan-empty code {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.05rem 0.35rem;
+      font-size: 0.8125rem;
+    }
+
+    /* Stat strip — ported from training.html's pattern, scoped locally. */
+    .plan-view .stat-strip {
+      display: flex;
+      flex-wrap: wrap;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+    }
+    .plan-view .stat { padding: 0.625rem 1.25rem; }
+    .plan-view .stat + .stat { border-left: 1px solid var(--border); }
+    .plan-view .stat-label {
+      font-size: 0.625rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 0.1875rem;
+    }
+    .plan-view .stat-value {
+      display: flex;
+      align-items: baseline;
+      gap: 0.375rem;
+      font-size: 1.0625rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--text);
+    }
+    .plan-view .stat-sub { font-size: 0.6875rem; font-weight: 400; color: var(--muted); }
+
+    .plan-view .chart-wrap { height: 320px; }
+    .plan-view .chart-wrap-small { height: 190px; }
+    .plan-view .subchart-label {
+      font-size: 0.625rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 0.375rem;
+    }
+    .plan-view .chart-caption {
+      font-size: 0.8125rem;
+      color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+      margin-top: 0.625rem;
+    }
+
+    /* Custom chart legend — two encodings (actual bar / planned reference line),
+       built as plain HTML like build.html's .cal-legend rather than an ECharts
+       legend widget. */
+    .plan-view .chart-legend {
+      display: flex;
+      gap: 1.25rem;
+      align-items: center;
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.625rem;
+    }
+    .plan-view .legend-swatch { display: inline-flex; align-items: center; gap: 0.375rem; }
+    .plan-view .legend-box { width: 10px; height: 10px; border-radius: 2px; }
+    .plan-view .legend-line { width: 16px; height: 0; border-top: 2px dashed var(--muted); }
+
+    /* Adherence band chip — per-week read, on the calendar leader cell. */
+    .plan-view .band-chip {
+      display: inline-block;
+      font-size: 0.5625rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 0.0625rem 0.3125rem;
+      border-radius: 999px;
+      margin-top: 0.1875rem;
+      color: #fff;
+      width: fit-content;
+    }
+
+    /* Flags panel — deliberately absent from the DOM entirely when there are
+       no active flags (see renderFlags): silence is the common case by design. */
+    .plan-view .flags-panel {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      overflow: hidden;
+    }
+    .plan-view .flag-item {
+      display: flex;
+      gap: 0.625rem;
+      align-items: baseline;
+      padding: 0.625rem 1.125rem;
+      font-size: 0.8125rem;
+      color: var(--text-secondary);
+      border-top: 1px solid var(--gridline);
+    }
+    .plan-view .flag-item:first-child { border-top: none; }
+    .plan-view .flag-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--series-6);
+      flex-shrink: 0;
+      transform: translateY(-1px);
+    }
+
+    /* Calendar — one row per plan week, Monday through Sunday columns. */
+    .plan-view .cal { border: 1px solid var(--gridline); border-radius: 8px; overflow: hidden; }
+    .plan-view .cal-header, .plan-view .cal-row {
+      display: grid;
+      grid-template-columns: 112px repeat(7, minmax(0, 1fr));
+    }
+    .plan-view .cal-header .cal-hcell {
+      font-size: 0.625rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      text-align: center;
+      padding: 0.375rem 0;
+      background: var(--bg);
+      border-bottom: 1px solid var(--gridline);
+    }
+    .plan-view .cal-header .cal-hcell:first-child { background: transparent; border-bottom: none; }
+    .plan-view .cal-leader {
+      padding: 0.375rem 0.625rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text);
+      background: var(--bg);
+      border-right: 1px solid var(--gridline);
+      border-top: 1px solid var(--gridline);
+      margin-top: -1px;
+    }
+    .plan-view .cal-row:first-child .cal-leader { border-top: none; margin-top: 0; }
+    .plan-view .cal-leader .tile-sub { font-size: 0.6875rem; margin-top: 0.125rem; color: var(--muted); }
+    .plan-view .cal-row.current .cal-leader { background: var(--pr-bg); }
+    .plan-view .cal-row.current .cal-day { background: var(--pr-bg); }
+    .plan-view .cal-day {
+      min-height: 58px;
+      background: var(--surface);
+      border-top: 1px solid var(--gridline);
+      border-left: 1px solid var(--gridline);
+      margin-top: -1px;
+      margin-left: -1px;
+      position: relative;
+      padding: 0.1875rem 0.3125rem;
+    }
+    .plan-view .cal-row:first-child .cal-day { border-top: none; margin-top: 0; }
+    .plan-view .cal-daynum { position: absolute; top: 0.125rem; right: 0.25rem; font-size: 0.625rem; color: var(--muted); }
+
+    /* Planned slot — muted chip underneath any actual run. */
+    .plan-view .plan-slot {
+      display: inline-block;
+      font-size: 0.6875rem;
+      font-weight: 500;
+      color: var(--muted);
+      background: var(--bg);
+      border: 1px dashed var(--border);
+      border-radius: 4px;
+      padding: 0.0625rem 0.3125rem;
+      margin-top: 0.6875rem;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .plan-view .plan-slot.slot-rest { border-style: dotted; }
+
+    /* Actual run — solid pill layered under/after the planned slot. */
+    .plan-view .cal-run {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      color: var(--text);
+      line-height: 1.2;
+      margin-top: 0.1875rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .plan-view .cal-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+    /* plan_log annotation marker — small dot, top-left of the cell. */
+    .plan-view .cal-log-marker {
+      position: absolute;
+      top: 0.1875rem;
+      left: 0.25rem;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--series-3);
+      cursor: help;
+    }
+
+    .plan-view .cal-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.25rem;
+      align-items: center;
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.75rem;
+    }
+    .plan-view .cal-legend .cal-dot { margin-right: 0.3125rem; }
+
+    /* Version history */
+    .plan-view .version-list { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); overflow: hidden; }
+    .plan-view .version-item { border-bottom: 1px solid var(--border); }
+    .plan-view .version-item:last-child { border-bottom: none; }
+    .plan-view .version-head {
+      display: flex;
+      align-items: baseline;
+      gap: 0.75rem;
+      padding: 0.75rem 1.125rem;
+      cursor: pointer;
+    }
+    .plan-view .version-head:hover { background: var(--bg); }
+    .plan-view .version-tag {
+      font-size: 0.8125rem;
+      font-weight: 700;
+      color: var(--text);
+      flex-shrink: 0;
+    }
+    .plan-view .version-date { font-size: 0.75rem; color: var(--muted); flex-shrink: 0; }
+    .plan-view .version-author {
+      font-size: 0.625rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      background: var(--bg);
+      border-radius: 4px;
+      padding: 0.0625rem 0.375rem;
+      flex-shrink: 0;
+    }
+    .plan-view .version-note { font-size: 0.8125rem; color: var(--text-secondary); flex: 1; }
+    .plan-view .version-toggle { font-size: 0.75rem; color: var(--accent); flex-shrink: 0; }
+    .plan-view .version-diff {
+      padding: 0 1.125rem 1rem;
+      display: none;
+    }
+    .plan-view .version-diff.open { display: block; }
+    .plan-view .diff-empty { font-size: 0.8125rem; color: var(--muted); padding: 0.5rem 0; }
+    .plan-view .diff-week {
+      display: flex;
+      gap: 0.75rem;
+      align-items: baseline;
+      font-size: 0.8125rem;
+      padding: 0.25rem 0;
+      border-top: 1px solid var(--gridline);
+    }
+    .plan-view .diff-week:first-child { border-top: none; }
+    .plan-view .diff-week-start { font-weight: 600; color: var(--text); flex-shrink: 0; width: 5.5rem; }
+    .plan-view .diff-tag {
+      font-size: 0.625rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.0625rem 0.375rem;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+    .plan-view .diff-tag.added { color: var(--good); background: var(--pr-bg); }
+    .plan-view .diff-tag.removed { color: var(--series-6); background: color-mix(in srgb, var(--series-6) 12%, var(--surface)); }
+    .plan-view .diff-tag.changed { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+    .plan-view .diff-fields { color: var(--muted); }
+
+    /* Retrospective — replaces the forward stat strip once a plan
+       completes. The plan-vs-detected-build comparison reuses the site's
+       bare <table>/.scroll styling from theme.css, not a bespoke component. */
+    .plan-view .retro-note { font-size: 0.8125rem; color: var(--muted); margin-bottom: 0.75rem; }
+    .plan-view .retro-link { color: inherit; text-decoration: none; }
+    .plan-view .retro-link:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<script src="/nav.js"></script>
+<script src="/charts.js"></script>
+
+<main class="plan-view">
+  <h1>Plan</h1>
+  <p class="subtitle" id="subtitle">Loading…</p>
+  <div id="root"></div>
+</main>
+
+<script>
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g,
+      ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  }
+
+  function shortDate(dateStr) {
+    return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  function longDate(dateStr) {
+    return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  }
+
+  function addDays(dateStr, n) {
+    const d = new Date(dateStr + 'T00:00:00');
+    d.setDate(d.getDate() + n);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  const DIST_LABEL = { '5K': '5K', '10K': '10K', '15K': '15K', '10M': '10M', half: 'Half', '30K': '30K', marathon: 'Marathon', '50K': '50K' };
+  function distLabel(bucket) { return DIST_LABEL[bucket] ?? bucket; }
+
+  const TYPE_COLOR = {
+    long_run: 'var(--series-1)',
+    workout: 'var(--series-8)',
+    race: 'var(--good)',
+    easy: 'var(--muted)',
+  };
+
+  const SLOT_LABEL = { easy: 'Easy', workout: 'Workout', long: 'Long', rest: 'Rest', race: 'Race' };
+
+  // Adherence bands — read straight off theme.css so light/dark both work,
+  // same idiom as chartTheme() in nav.js but scoped to the three band colors.
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+  const BAND_COLOR = { on: 'var(--good)', close: 'var(--series-3)', off: 'var(--series-6)' };
+  const BAND_LABEL = { on: 'On plan', close: 'Close', off: 'Off plan' };
+
+  // Flag shading on the weekly chart — one markArea per active flag,
+  // spanning the consecutive weeks it summarizes. Colors echo the pattern's
+  // nature: mileage flags reuse the "off" red, workout-count flags reuse the
+  // calendar's workout orange, long-run flags reuse the calendar's long-run blue.
+  const FLAG_COLOR = {
+    mileage_off_low: '--series-6',
+    mileage_off_high: '--series-6',
+    workout_count_short: '--series-8',
+    long_run_missed: '--series-1',
+  };
+  const FLAG_LABEL = {
+    mileage_off_low: 'Mileage low',
+    mileage_off_high: 'Mileage high',
+    workout_count_short: 'Workouts short',
+    long_run_missed: 'Long run missed',
+  };
+
+  // -----------------------------------------------------------------------
+  // Empty state
+  // -----------------------------------------------------------------------
+
+  function renderEmpty() {
+    document.getElementById('subtitle').textContent = 'No active plan.';
+    document.getElementById('root').innerHTML = `
+      <div class="plan-empty">
+        <h2>No training plan yet</h2>
+        <p>Once a plan is drafted, this page tracks planned vs actual weekly mileage,
+        a day-by-day calendar, and the version history as the plan evolves.</p>
+        <p style="margin-top:0.75rem">Draft one in conversation with <code>/miles-plan</code> —
+        it pulls your fitness estimate, past builds, and historical ramp/workout cadence,
+        proposes a week-by-week skeleton, and writes it only once you approve.</p>
+      </div>`;
+  }
+
+  // -----------------------------------------------------------------------
+  // Stat strip
+  // -----------------------------------------------------------------------
+
+  function renderStatStrip(data, adherence) {
+    const { plan, version, weeks_to_race, this_week, goal } = data;
+
+    const weeksToRaceStat = `
+      <div class="stat">
+        <div class="stat-label">Weeks to race</div>
+        <div class="stat-value">${weeks_to_race}<span class="stat-sub">${shortDate(plan.race_date)}</span></div>
+      </div>`;
+
+    const thisWeekStat = this_week ? `
+      <div class="stat">
+        <div class="stat-label">This week</div>
+        <div class="stat-value">${this_week.actual_miles.toFixed(1)}<span class="stat-sub">of ${this_week.target_miles.toFixed(1)} mi</span></div>
+        <div class="stat-sub">${this_week.actual_workouts} of ${this_week.target_workouts} workouts</div>
+      </div>` : `
+      <div class="stat">
+        <div class="stat-label">This week</div>
+        <div class="stat-value">—<span class="stat-sub">outside plan window</span></div>
+      </div>`;
+
+    const goalStat = goal ? `
+      <div class="stat">
+        <div class="stat-label">Goal vs fitness</div>
+        <div class="stat-value">${fmt.time(goal.goal_time_s)}<span class="stat-sub">goal</span></div>
+        <div class="stat-sub">${goal.equivalent_time_s != null ? `${fmt.time(Math.round(goal.equivalent_time_s))} implied (${goal.confidence})` : 'no current fitness estimate'}</div>
+      </div>` : '';
+
+    const versionStat = version ? `
+      <div class="stat">
+        <div class="stat-label">Version</div>
+        <div class="stat-value">v${version.version_n}<span class="stat-sub">${version.author}</span></div>
+        <div class="stat-sub">revised ${shortDate(version.created_at.slice(0, 10))}</div>
+      </div>` : '';
+
+    const adherenceStat = adherence ? `
+      <div class="stat">
+        <div class="stat-label">Adherence</div>
+        <div class="stat-value">${adherence.on_or_close}<span class="stat-sub">of ${adherence.completed} weeks on plan</span></div>
+      </div>` : '';
+
+    document.getElementById('root').insertAdjacentHTML('beforeend', `
+      <div class="stat-strip">
+        ${weeksToRaceStat}
+        ${thisWeekStat}
+        ${goalStat}
+        ${versionStat}
+        ${adherenceStat}
+      </div>`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Race retrospective — replaces the forward-looking stat strip once
+  // /api/plan reports plan.status === 'completed'. Reads /api/plan-
+  // retrospective for the numbers the forward stats can't answer: final
+  // adherence, race result vs goal vs a pre-race fitness prediction, and the
+  // plan's target ramp vs what detect_builds() independently saw. The
+  // weekly-mileage chart, calendar, and version history below are unchanged
+  // — "the record of what happened" stays visible either way.
+  // -----------------------------------------------------------------------
+
+  function buildCompareTable(ramp, build) {
+    if (!ramp && !build) return '';
+    const rows = [
+      ['Weeks', ramp ? ramp.weeks : null, build.found ? build.weeks : null],
+      ['Avg weekly miles', ramp ? ramp.avg_target_miles.toFixed(1) : null, build.avg_mpw != null ? build.avg_mpw.toFixed(1) : null],
+      ['Peak', ramp ? ramp.peak_target_miles.toFixed(1) : null, build.peak_3wk_avg != null ? `${build.peak_3wk_avg.toFixed(1)} (3wk avg)` : null],
+    ];
+    const note = build.found
+      ? `bounded by ${esc(build.bounded_by ?? '—')}${build.thin ? ' · thin build' : ''}, starting ${build.start ? shortDate(build.start) : '—'}`
+      : `detect_builds found no race-anchored build for this race (below its anchor-distance floor, or too little surrounding volume) — plan-only numbers shown`;
+    return `
+      <div class="scroll" style="margin-top:0.75rem">
+        <table>
+          <thead><tr><th></th><th class="r">Plan</th><th class="r">Detected build</th></tr></thead>
+          <tbody>
+            ${rows.map(([label, a, b]) => `<tr><td>${label}</td><td class="r">${a ?? '—'}</td><td class="r">${b ?? '—'}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <p class="chart-caption">${esc(note)}</p>`;
+  }
+
+  function renderRetrospective(data, retro) {
+    const { plan } = data;
+    if (!retro) {
+      document.getElementById('root').insertAdjacentHTML('beforeend', `
+        <div class="stat-strip"><div class="stat">
+          <div class="stat-label">Retrospective</div>
+          <div class="stat-value">—<span class="stat-sub">loading…</span></div>
+        </div></div>`);
+      return;
+    }
+
+    const fa = retro.final_adherence;
+    const adherenceStat = fa ? `
+      <div class="stat">
+        <div class="stat-label">Final adherence</div>
+        <div class="stat-value">${fa.weeks_on_or_close}<span class="stat-sub">of ${fa.weeks_completed} weeks</span></div>
+        <div class="stat-sub">${fa.pct_of_planned_miles != null ? `${Math.round(fa.pct_of_planned_miles)}% of planned miles` : ''}</div>
+      </div>` : '';
+
+    const race = retro.race;
+    const raceStat = race ? `
+      <div class="stat">
+        <div class="stat-label">Race result</div>
+        <div class="stat-value">
+          <a class="retro-link" href="/build.html#${race.date}" title="View build">${esc(race.finish_time)}</a>
+          <span class="stat-sub">${esc(race.name ?? '')}</span>
+        </div>
+        <div class="stat-sub">${race.pace_min_per_mile != null ? `${fmt.pace(race.pace_min_per_mile)}/mi` : ''}</div>
+      </div>` : `
+      <div class="stat">
+        <div class="stat-label">Race result</div>
+        <div class="stat-value">—<span class="stat-sub">no matching synced race</span></div>
+      </div>`;
+
+    const goal = retro.goal;
+    const goalStat = (goal.goal_time_s != null || goal.predicted_time_s != null) ? `
+      <div class="stat">
+        <div class="stat-label">Goal vs predicted</div>
+        <div class="stat-value">${goal.goal_time_s != null ? fmt.time(goal.goal_time_s) : '—'}<span class="stat-sub">goal</span></div>
+        <div class="stat-sub">${goal.predicted_time != null ? `${goal.predicted_time} predicted (${esc(goal.predicted_confidence ?? '')})` : 'no pre-race fitness estimate'}</div>
+      </div>` : '';
+
+    document.getElementById('root').insertAdjacentHTML('beforeend', `
+      <section id="section-retrospective">
+        <h2>Race retrospective</h2>
+        <p class="desc">${esc(plan.title)} closed out ${shortDate(plan.race_date)}</p>
+        <div class="stat-strip">
+          ${adherenceStat}
+          ${raceStat}
+          ${goalStat}
+        </div>
+        ${buildCompareTable(retro.plan_ramp, retro.detected_build)}
+      </section>`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Planned-vs-actual weekly chart
+  // -----------------------------------------------------------------------
+
+  // Computed, numbers-first caption for the weekly-mileage chart — first vs
+  // last COMPLETED week's actual/target miles, spanning however many
+  // completed weeks exist. "" (and no <p>) below 2 completed weeks.
+  function mileageCaption(weeks) {
+    const completed = weeks.filter(w => !w.is_current && !w.is_future);
+    if (completed.length < 2) return '';
+    const first = completed[0], last = completed[completed.length - 1];
+    return `weekly mileage ${first.actual_miles.toFixed(0)}→${last.actual_miles.toFixed(0)} mi ` +
+      `over ${completed.length} weeks (target ${first.target_miles.toFixed(0)}→${last.target_miles.toFixed(0)})`;
+  }
+
+  // One markArea span per active flag, covering the consecutive weeks
+  // it summarizes — a visual echo of the flags panel below, right on the
+  // chart where the pattern actually happened.
+  function flagMarkAreas(flags) {
+    if (!flags || !flags.length) return [];
+    return flags.map(f => {
+      const color = withAlpha(cssVar(FLAG_COLOR[f.type] ?? '--muted'), 0.16);
+      return [
+        { xAxis: f.since, itemStyle: { color }, label: { show: false } },
+        { xAxis: addDays(f.since, f.weeks * 7) },
+      ];
+    });
+  }
+
+  function renderChart(data, bandByWeek, flags) {
+    const { weeks } = data;
+    if (!weeks.length) return;
+
+    const hasBands = bandByWeek && bandByWeek.size > 0;
+    const hasFlags = flags && flags.length > 0;
+    const caption = mileageCaption(weeks);
+    const flagTypesPresent = hasFlags ? [...new Set(flags.map(f => f.type))] : [];
+
+    document.getElementById('root').insertAdjacentHTML('beforeend', `
+      <section id="section-chart">
+        <h2>Weekly mileage</h2>
+        <p class="desc">Bars are actual synced miles${hasBands ? ', colored by adherence band' : ''} · dashed line is the planned weekly target · current week is still in progress${hasFlags ? ' · shaded span marks a flagged pattern' : ''}</p>
+        <div class="chart-wrap"><div id="chart-weekly" style="width:100%;height:100%"></div></div>
+        <div class="chart-legend">
+          ${hasBands ? `
+          <span class="legend-swatch"><span class="legend-box" style="background:${cssVar('--good')}"></span>On plan</span>
+          <span class="legend-swatch"><span class="legend-box" style="background:${cssVar('--series-3')}"></span>Close</span>
+          <span class="legend-swatch"><span class="legend-box" style="background:${cssVar('--series-6')}"></span>Off plan</span>
+          ` : `<span class="legend-swatch"><span class="legend-box" style="background:var(--series-2)"></span>Actual miles</span>`}
+          <span class="legend-swatch"><span class="legend-line"></span>Planned target</span>
+          ${flagTypesPresent.map(t => `<span class="legend-swatch"><span class="legend-box" style="background:${withAlpha(cssVar(FLAG_COLOR[t] ?? '--muted'), 0.5)}"></span>${FLAG_LABEL[t] ?? t}</span>`).join('')}
+        </div>
+        ${caption ? `<p class="chart-caption">${esc(caption)}</p>` : ''}
+      </section>`);
+
+    const theme = chartTheme();
+    const barData = weeks.map(w => {
+      const band = bandByWeek ? bandByWeek.get(w.week_start) : undefined;
+      const base = band ? cssVar(`--${band === 'on' ? 'good' : band === 'close' ? 'series-3' : 'series-6'}`) : theme.series[1];
+      return {
+        value: [w.week_start, w.actual_miles],
+        itemStyle: w.is_current
+          ? { color: withAlpha(base, 0.55), borderRadius: [2, 2, 0, 0] }
+          : { color: base, borderRadius: [2, 2, 0, 0] },
+      };
+    });
+    const lineData = weeks.map(w => [w.week_start, w.target_miles]);
+    const markArea = hasFlags ? { silent: true, data: flagMarkAreas(flags) } : undefined;
+
+    const chart = echarts.init(document.getElementById('chart-weekly'));
+    chart.setOption({
+      animation: false,
+      grid: { top: 24, right: 24, bottom: 32, left: 48 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: theme.surface,
+        borderColor: theme.gridline,
+        textStyle: { fontSize: 12, color: theme.text },
+        formatter(params) {
+          // Index by dataIndex, not axisValue — on a time-type x axis, axisValue
+          // is a numeric timestamp, not the original 'YYYY-MM-DD' week_start string.
+          const w = weeks[params[0].dataIndex];
+          if (!w) return '';
+          const tag = w.is_current ? ' (in progress)' : w.is_future ? ' (upcoming)' : '';
+          const band = bandByWeek ? bandByWeek.get(w.week_start) : undefined;
+          const bandLine = band ? `<br>${BAND_LABEL[band]}` : '';
+          return `<div style="font-weight:600;margin-bottom:2px;color:${theme.text}">${shortDate(w.week_start)}${tag}</div>
+            Actual: ${w.actual_miles.toFixed(1)} mi<br>
+            Target: ${w.target_miles.toFixed(1)} mi · ${w.phase}${bandLine}`;
+        },
+      },
+      xAxis: {
+        type: 'time',
+        axisLine: { lineStyle: { color: theme.gridline } },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 11, color: theme.muted },
+      },
+      yAxis: {
+        type: 'value',
+        name: 'Miles',
+        nameLocation: 'middle',
+        nameGap: 34,
+        nameTextStyle: { fontSize: 11, color: theme.muted },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: theme.gridline } },
+        axisLabel: { fontSize: 11, color: theme.muted },
+      },
+      series: [
+        {
+          name: 'Actual miles',
+          type: 'bar',
+          data: barData,
+          barMaxWidth: 16,
+          z: 2,
+          markArea,
+        },
+        {
+          name: 'Planned target',
+          type: 'line',
+          data: lineData,
+          step: 'end',
+          showSymbol: false,
+          lineStyle: { color: theme.muted, width: 2, type: 'dashed' },
+          z: 3,
+        },
+      ],
+    });
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  // -----------------------------------------------------------------------
+  // Weekly calendar
+  // -----------------------------------------------------------------------
+
+  function mondayOf(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    const dow = (d.getDay() + 6) % 7; // Mon=0..Sun=6
+    d.setDate(d.getDate() - dow);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  function runLine(r) {
+    const color = TYPE_COLOR[r.run_type] ?? 'var(--muted)';
+    const titleParts = [esc(r.name ?? '')];
+    if (r.pace_min_per_mile != null) titleParts.push(`${fmt.pace(r.pace_min_per_mile)}/mi`);
+    const title = titleParts.join(' · ');
+    return `<div class="cal-run" title="${title}">
+      <span class="cal-dot" style="background:${color}"></span>
+      <span>${r.distance_mi.toFixed(1)} mi</span>
+    </div>`;
+  }
+
+  function plannedSlot(day) {
+    if (!day) return '';
+    if (day.slot === 'rest' && !day.title && day.target_miles == null) {
+      return `<div class="plan-slot slot-rest">Rest</div>`;
+    }
+    const label = day.title ? esc(day.title) : SLOT_LABEL[day.slot] ?? day.slot;
+    const miles = day.target_miles != null ? ` · ${day.target_miles.toFixed(1)}mi` : '';
+    return `<div class="plan-slot slot-${day.slot}" title="${esc(label)}${miles}">${label}${miles}</div>`;
+  }
+
+  function logMarker(entries) {
+    if (!entries || !entries.length) return '';
+    const title = entries.map(e => `${e.action}${e.reason ? ': ' + e.reason : ''}`).join(' · ');
+    return `<div class="cal-log-marker" title="${esc(title)}"></div>`;
+  }
+
+  function dayCell(dateStr, dayByDate, actualByDate, logByDate) {
+    const day = dayByDate.get(dateStr);
+    const runs = actualByDate.get(dateStr) ?? [];
+    const logs = logByDate.get(dateStr) ?? [];
+    const dayNum = Number(dateStr.slice(8, 10));
+    return `<div class="cal-day">
+      ${logMarker(logs)}
+      <div class="cal-daynum">${dayNum}</div>
+      ${plannedSlot(day)}
+      ${runs.map(runLine).join('')}
+    </div>`;
+  }
+
+  function bandChip(band) {
+    if (!band) return '';
+    return `<div class="band-chip" style="background:${BAND_COLOR[band]}" title="${BAND_LABEL[band]}">${band}</div>`;
+  }
+
+  function weekRow(week, dayByDate, actualByDate, logByDate, bandByWeek) {
+    const days = Array.from({ length: 7 }, (_, i) => addDays(week.week_start, i));
+    const rowClass = week.is_current ? 'cal-row current' : 'cal-row';
+    const band = bandByWeek ? bandByWeek.get(week.week_start) : undefined;
+    return `<div class="${rowClass}">
+      <div class="cal-leader">
+        <div>${shortDate(week.week_start)}</div>
+        <div class="tile-sub">${week.phase} · ${week.actual_miles.toFixed(1)} of ${week.target_miles.toFixed(1)} mi</div>
+        ${bandChip(band)}
+      </div>
+      ${days.map(d => dayCell(d, dayByDate, actualByDate, logByDate)).join('')}
+    </div>`;
+  }
+
+  function renderCalendar(data, bandByWeek) {
+    const { weeks, days, actual, log } = data;
+    if (!weeks.length) return;
+
+    const dayByDate = new Map(days.map(d => [d.date, d]));
+    const actualByDate = new Map(Object.entries(actual ?? {}));
+    const logByDate = new Map(Object.entries(log ?? {}));
+    const weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const hasBands = bandByWeek && bandByWeek.size > 0;
+
+    document.getElementById('root').insertAdjacentHTML('beforeend', `
+      <section id="section-calendar">
+        <h2>Calendar</h2>
+        <p class="desc">Dashed chip is the planned slot · filled pill is the synced run · dot marker is a plan_log note${hasBands ? ' · colored chip is the completed week’s adherence band' : ''} · current week highlighted</p>
+        <div class="cal">
+          <div class="cal-header">
+            <div class="cal-hcell"></div>
+            ${weekdayLabels.map(w => `<div class="cal-hcell">${w}</div>`).join('')}
+          </div>
+          ${weeks.map(w => weekRow(w, dayByDate, actualByDate, logByDate, bandByWeek)).join('')}
+        </div>
+        <div class="cal-legend">
+          <span><span class="cal-dot" style="background:var(--muted)"></span>Easy</span>
+          <span><span class="cal-dot" style="background:var(--series-8)"></span>Workout</span>
+          <span><span class="cal-dot" style="background:var(--series-1)"></span>Long run</span>
+          <span><span class="cal-dot" style="background:var(--good)"></span>Race</span>
+          <span><span class="cal-log-marker" style="position:static;display:inline-block;margin-right:0.3125rem"></span>Log note</span>
+        </div>
+      </section>`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Flags panel — renders nothing at all when there are no active
+  // flags. Silence is the common case by design: patterns are rare and
+  // flags only fire on 2+ consecutive completed weeks, never a single miss.
+  // -----------------------------------------------------------------------
+
+  function renderFlags(adherence) {
+    if (!adherence || !adherence.flags || !adherence.flags.length) return;
+
+    document.getElementById('root').insertAdjacentHTML('beforeend', `
+      <section id="section-flags">
+        <h2>Flags</h2>
+        <p class="desc">Patterns only — 2+ consecutive completed weeks, never a single day or week</p>
+        <div class="flags-panel">
+          ${adherence.flags.map(f => `
+            <div class="flag-item">
+              <span class="flag-dot"></span>
+              <span>${esc(f.message)}</span>
+            </div>`).join('')}
+        </div>
+      </section>`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Easy HR/pace progression — two stacked mini-charts (pace, HR) over
+  // the same continuous plan-window x-axis rather than one dual-axis chart:
+  // pace and HR are different units/scales, and this codebase never puts two
+  // y-scales on one chart (see training.html's fitness chart / weekly-history
+  // chart, both single-axis). Apparent temperature is a tooltip-only
+  // annotation, not a plotted line — context, not a third scale.
+  // -----------------------------------------------------------------------
+
+  function renderProgressionEasy(progression) {
+    if (!progression || !progression.weeks.length) return;
+    const { weeks, easy, captions } = progression;
+
+    document.getElementById('root').insertAdjacentHTML('beforeend', `
+      <section id="section-progression-easy">
+        <h2>Easy HR/pace progression</h2>
+        <p class="desc">Distance-weighted average over each week's easy runs · gaps are weeks with no easy run synced · hover for average apparent temperature</p>
+        <div style="display:flex;gap:1rem;flex-wrap:wrap">
+          <div style="flex:1;min-width:280px">
+            <div class="subchart-label">Pace</div>
+            <div class="chart-wrap-small"><div id="chart-easy-pace" style="width:100%;height:100%"></div></div>
+          </div>
+          <div style="flex:1;min-width:280px">
+            <div class="subchart-label">Heart rate</div>
+            <div class="chart-wrap-small"><div id="chart-easy-hr" style="width:100%;height:100%"></div></div>
+          </div>
+        </div>
+        ${captions && captions.easy ? `<p class="chart-caption">${esc(captions.easy)}</p>` : ''}
+      </section>`);
+
+    const theme = chartTheme();
+    const paceData = weeks.map((ws, i) => [ws, easy[i].avg_pace_min_per_mile]);
+    const hrData = weeks.map((ws, i) => [ws, easy[i].avg_hr]);
+
+    function tooltipFor(params) {
+      const i = params[0].dataIndex;
+      const e = easy[i];
+      if (!e) return '';
+      const parts = [];
+      if (e.avg_pace_min_per_mile != null) parts.push(`Pace: ${fmt.pace(e.avg_pace_min_per_mile)}/mi`);
+      if (e.avg_hr != null) parts.push(`HR: ${e.avg_hr}`);
+      if (e.avg_apparent_temp_f != null) parts.push(`Feels like: ${Math.round(e.avg_apparent_temp_f)}°F`);
+      parts.push(`${e.run_count} easy run${e.run_count === 1 ? '' : 's'}`);
+      return `<div style="font-weight:600;margin-bottom:2px;color:${theme.text}">${shortDate(e.week_start)}</div>${parts.join('<br>')}`;
+    }
+
+    function baseOption(name, data, extraYAxis) {
+      return {
+        animation: false,
+        grid: { top: 16, right: 20, bottom: 28, left: 48 },
+        tooltip: {
+          trigger: 'axis',
+          backgroundColor: theme.surface,
+          borderColor: theme.gridline,
+          textStyle: { fontSize: 12, color: theme.text },
+          formatter: tooltipFor,
+        },
+        xAxis: {
+          type: 'time',
+          axisLine: { lineStyle: { color: theme.gridline } },
+          axisTick: { show: false },
+          axisLabel: { fontSize: 10, color: theme.muted },
+        },
+        yAxis: Object.assign({
+          type: 'value',
+          axisLine: { show: false },
+          axisTick: { show: false },
+          splitLine: { lineStyle: { color: theme.gridline } },
+          axisLabel: { fontSize: 10, color: theme.muted },
+        }, extraYAxis),
+        series: [{
+          name,
+          type: 'line',
+          data,
+          connectNulls: false,
+          showSymbol: true,
+          symbolSize: 6,
+          lineStyle: { color: theme.series[0], width: 2 },
+          itemStyle: { color: theme.series[0] },
+        }],
+      };
+    }
+
+    const paceChart = echarts.init(document.getElementById('chart-easy-pace'));
+    paceChart.setOption(baseOption('Easy pace', paceData, { inverse: true, axisLabel: { fontSize: 10, color: theme.muted, formatter: fmt.pace } }));
+
+    const hrChart = echarts.init(document.getElementById('chart-easy-hr'));
+    hrChart.setOption(baseOption('Easy HR', hrData, {}));
+
+    window.addEventListener('resize', () => { paceChart.resize(); hrChart.resize(); });
+  }
+
+  // -----------------------------------------------------------------------
+  // Workout pace progression — one dot per matched workout vs its
+  // frozen target band (drawn as a floating bar: an invisible base stacked
+  // under a visible range, ECharts' standard "range bar" idiom), with
+  // fitness_checkpoints' monthly 5K pace as a subtle background reference
+  // line, per training.html's checkpoint treatment but deliberately muted
+  // here — it's context, not the headline.
+  // -----------------------------------------------------------------------
+
+  function renderProgressionWorkouts(progression) {
+    if (!progression || !progression.weeks.length) return;
+    const { weeks, workouts, checkpoints, captions } = progression;
+
+    document.getElementById('root').insertAdjacentHTML('beforeend', `
+      <section id="section-progression-workouts">
+        <h2>Workout pace progression</h2>
+        <p class="desc">Each dot is one synced workout's work-lap pace · shaded band is its frozen target range · dashed line is monthly 5K-pace fitness context</p>
+        <div class="chart-wrap"><div id="chart-workouts" style="width:100%;height:100%"></div></div>
+        <div class="chart-legend">
+          <span class="legend-swatch"><span class="legend-box" style="background:${withAlpha(cssVar('--muted'), 0.35)}"></span>Target band</span>
+          <span class="legend-swatch"><span class="legend-box" style="background:${cssVar('--series-8')}"></span>Actual pace</span>
+          <span class="legend-swatch"><span class="legend-line"></span>5K fitness (monthly)</span>
+        </div>
+        ${captions && captions.workouts ? `<p class="chart-caption">${esc(captions.workouts)}</p>` : ''}
+      </section>`);
+
+    const theme = chartTheme();
+    const withBand = workouts.filter(w => w.pace_lo != null && w.pace_hi != null);
+    const bandBase = withBand.map(w => [w.date, w.pace_lo]);
+    const bandRange = withBand.map(w => [w.date, w.pace_hi - w.pace_lo]);
+    const dotData = workouts
+      .filter(w => w.pace_min_per_mile != null)
+      .map(w => ({
+        value: [w.date, w.pace_min_per_mile],
+        meta: w,
+        itemStyle: { color: theme.series[7] },
+      }));
+    const checkpointData = (checkpoints ?? [])
+      .filter(c => c.pace_5k != null)
+      .map(c => [`${c.month}-01`, c.pace_5k]);
+
+    const rangeStart = weeks[0];
+    const rangeEnd = addDays(weeks[weeks.length - 1], 6);
+
+    const chart = echarts.init(document.getElementById('chart-workouts'));
+    chart.setOption({
+      animation: false,
+      grid: { top: 24, right: 24, bottom: 32, left: 48 },
+      tooltip: {
+        trigger: 'item',
+        backgroundColor: theme.surface,
+        borderColor: theme.gridline,
+        textStyle: { fontSize: 12, color: theme.text },
+        formatter(params) {
+          if (params.seriesName === '5K fitness') {
+            return `<div style="font-weight:600;color:${theme.text}">${params.value[0].slice(0, 7)}</div>5K pace: ${fmt.pace(params.value[1])}/mi`;
+          }
+          const w = params.data && params.data.meta;
+          if (!w) return '';
+          const band = w.pace_lo != null && w.pace_hi != null ? `${fmt.pace(w.pace_lo)}–${fmt.pace(w.pace_hi)}/mi` : 'no target band';
+          return `<div style="font-weight:600;margin-bottom:2px;color:${theme.text}">${shortDate(w.date)}${w.title ? ' · ' + esc(w.title) : ''}</div>
+            Actual: ${fmt.pace(w.pace_min_per_mile)}/mi<br>
+            Target: ${band}`;
+        },
+      },
+      xAxis: {
+        type: 'time',
+        min: rangeStart,
+        max: rangeEnd,
+        axisLine: { lineStyle: { color: theme.gridline } },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 11, color: theme.muted },
+      },
+      yAxis: {
+        type: 'value',
+        inverse: true,
+        name: 'min/mi',
+        nameLocation: 'middle',
+        nameGap: 40,
+        nameTextStyle: { fontSize: 11, color: theme.muted },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: theme.gridline } },
+        axisLabel: { fontSize: 11, color: theme.muted, formatter: fmt.pace },
+      },
+      series: [
+        {
+          name: 'band-base',
+          type: 'bar',
+          stack: 'band',
+          data: bandBase,
+          barWidth: 14,
+          itemStyle: { color: 'transparent' },
+          silent: true,
+          tooltip: { show: false },
+          z: 1,
+        },
+        {
+          name: 'Target band',
+          type: 'bar',
+          stack: 'band',
+          data: bandRange,
+          barWidth: 14,
+          itemStyle: { color: withAlpha(theme.muted, 0.35) },
+          silent: true,
+          tooltip: { show: false },
+          z: 1,
+        },
+        {
+          name: '5K fitness',
+          type: 'line',
+          data: checkpointData,
+          showSymbol: true,
+          symbolSize: 4,
+          lineStyle: { color: theme.muted, width: 1.5, type: 'dashed', opacity: 0.6 },
+          itemStyle: { color: theme.muted, opacity: 0.6 },
+          z: 2,
+        },
+        {
+          name: 'Actual pace',
+          type: 'scatter',
+          data: dotData,
+          symbolSize: 9,
+          z: 3,
+        },
+      ],
+    });
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  // -----------------------------------------------------------------------
+  // Version history
+  // -----------------------------------------------------------------------
+
+  const diffCache = new Map(); // "a:b" -> VersionDiff
+
+  const DIFF_FIELD_LABEL = {
+    target_miles: 'target miles', target_workouts: 'workouts', target_long_run_miles: 'long run',
+    phase: 'phase', note: 'note', slot: 'slot', title: 'title', target_json: 'workout target',
+  };
+  function diffFieldLabel(f) { return DIFF_FIELD_LABEL[f] ?? f; }
+
+  function diffWeekRow(w) {
+    return `<div class="diff-week">
+      <div class="diff-week-start">${shortDate(w.week_start)}</div>
+      <div class="diff-tag ${w.change}">${w.change}</div>
+      <div class="diff-fields">${w.changed_fields.length ? w.changed_fields.map(diffFieldLabel).join(', ') : ''}</div>
+    </div>`;
+  }
+
+  async function loadDiff(a, b) {
+    const key = `${a}:${b}`;
+    if (diffCache.has(key)) return diffCache.get(key);
+    const res = await fetch(`/api/plan-diff?a=${a}&b=${b}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const diff = await res.json();
+    diffCache.set(key, diff);
+    return diff;
+  }
+
+  async function toggleDiff(panel, prevId, curId) {
+    const isOpen = panel.classList.contains('open');
+    if (isOpen) {
+      panel.classList.remove('open');
+      return;
+    }
+    panel.classList.add('open');
+    if (panel.dataset.loaded) return;
+    panel.innerHTML = `<p class="diff-empty">Loading…</p>`;
+    try {
+      const diff = await loadDiff(prevId, curId);
+      panel.dataset.loaded = '1';
+      panel.innerHTML = diff.changed_weeks.length
+        ? diff.changed_weeks.map(diffWeekRow).join('')
+        : `<p class="diff-empty">No week-level changes between these versions.</p>`;
+    } catch (err) {
+      panel.innerHTML = `<p class="diff-empty">Error loading diff: ${esc(err.message)}</p>`;
+    }
+  }
+
+  function versionItem(v, prev) {
+    const dateStr = v.created_at.slice(0, 10);
+    const toggle = prev ? `<span class="version-toggle">vs v${prev.version_n} ▾</span>` : '';
+    return `
+      <div class="version-item">
+        <div class="version-head" data-version-id="${v.version_id}" data-prev-id="${prev ? prev.version_id : ''}">
+          <span class="version-tag">v${v.version_n}</span>
+          <span class="version-date">${shortDate(dateStr)}</span>
+          <span class="version-author">${esc(v.author)}</span>
+          <span class="version-note">${esc(v.note ?? '')}</span>
+          ${toggle}
+        </div>
+        <div class="version-diff" id="diff-${v.version_id}"></div>
+      </div>`;
+  }
+
+  function renderVersions(versions) {
+    if (!versions.length) return;
+    // Newest first for display; each item (but the first/original) can expand
+    // a diff against the version immediately before it.
+    const ordered = [...versions].reverse();
+    document.getElementById('root').insertAdjacentHTML('beforeend', `
+      <section id="section-versions">
+        <h2>Version history</h2>
+        <p class="desc">Every revision is a full snapshot · click a version with a note to see which weeks changed</p>
+        <div class="version-list">
+          ${ordered.map((v, i) => versionItem(v, ordered[i + 1])).join('')}
+        </div>
+      </section>`);
+
+    document.querySelectorAll('.version-head').forEach(head => {
+      head.addEventListener('click', () => {
+        const prevId = head.dataset.prevId;
+        if (!prevId) return;
+        const panel = document.getElementById(`diff-${head.dataset.versionId}`);
+        toggleDiff(panel, Number(prevId), Number(head.dataset.versionId));
+      });
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // Load + orchestrate
+  // -----------------------------------------------------------------------
+
+  async function loadPlan() {
+    const res = await fetch('/api/plan');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  async function loadVersions() {
+    const res = await fetch('/api/plan-versions');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  async function loadAdherence() {
+    const res = await fetch('/api/plan-adherence');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  async function loadProgression() {
+    const res = await fetch('/api/plan-progression');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  async function loadRetrospective() {
+    const res = await fetch('/api/plan-retrospective');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  function renderHeader(data) {
+    const { plan } = data;
+    document.title = `Miles · ${plan.title}`;
+    const parts = [distLabel(plan.distance_bucket), longDate(plan.race_date), plan.status];
+    document.getElementById('subtitle').textContent = `${plan.title} · ${parts.join(' · ')}`;
+  }
+
+  Promise.all([
+    loadPlan(),
+    loadVersions().catch(() => []),
+    loadAdherence().catch(() => null),
+    loadProgression().catch(() => null),
+    loadRetrospective().catch(() => null),
+  ]).then(([data, versions, adherence, progression, retrospective]) => {
+    if (data === null) {
+      renderEmpty();
+      return;
+    }
+    const bandByWeek = new Map((adherence?.weeks ?? []).map(w => [w.week_start, w.band]));
+    renderHeader(data);
+    if (data.plan.status === 'completed') {
+      renderRetrospective(data, retrospective);
+    } else {
+      renderStatStrip(data, adherence);
+    }
+    renderChart(data, bandByWeek, adherence?.flags ?? []);
+    renderCalendar(data, bandByWeek);
+    renderFlags(adherence);
+    renderProgressionEasy(progression);
+    renderProgressionWorkouts(progression);
+    renderVersions(versions);
+  }).catch(err => {
+    document.getElementById('subtitle').textContent = `Error: ${err.message}`;
+  });
+</script>
+</body>
+</html>

@@ -644,6 +644,13 @@
     } else if (day.target_miles != null) {
       lines.push(`${day.target_miles.toFixed(1)} mi`);
     }
+
+    // HR band last so it never displaces the session structure as the lead
+    // line; hr_hi alone is a ceiling ("keep HR under X"), the planner's
+    // don't-overcook guardrail.
+    if (t.hr_lo != null && t.hr_hi != null) lines.push(`HR ${Math.round(t.hr_lo)}–${Math.round(t.hr_hi)}`);
+    else if (t.hr_hi != null) lines.push(`keep HR under ${Math.round(t.hr_hi)}`);
+    else if (t.hr_lo != null) lines.push(`HR ${Math.round(t.hr_lo)}+`);
     return lines;
   }
 

@@ -128,6 +128,30 @@ only on the athlete's explicit say-so, in their words.
 - **Week ranges and gaps**: `target_miles` (floor) with `target_miles_hi` (ceiling) means
   "anywhere in this band is fine"; both omitted means the workouts are the whole contract.
 
+## Execution guidance — every quality session says how it should feel
+
+An intensity word is not a prescription. "6 × 3 min hard" reads as 5K-or-faster to any eager
+athlete — an LT session mis-run all-out is the canonical failure: a hard workout, just the
+wrong one. Every workout (and any long run with quality in it) ships execution guidance in
+three layers, all surfaced on the Plan page's day view:
+
+- **A pace band** — `zone_name` (freezes to the athlete's own zones at commit) or explicit
+  `pace_lo`/`pace_hi`. The band *is* the intensity; a title or slot word never carries it alone.
+- **An HR guardrail** where the athlete's record shows HR data — `hr_lo`/`hr_hi`; `hr_hi`
+  alone is a ceiling and renders as "keep HR under X". Prefer a ceiling with permission to
+  drift late ("shouldn't see 162 until the last two reps") over a narrow band to chase.
+- **A feel anchor in the day `note`** — what right feels like and the sign it's gone wrong:
+  "should end feeling like 3–4 more reps were there", "first rep should feel too easy",
+  "HR past the cap by rep 3 means the pace is wrong, not the fitness".
+
+Calibrate the register to training age (the profiles above). A high-volume veteran can be
+told "easier side of LT" and will nail it — shorthand is respectful there, and over-explaining
+is noise. For a returning or spurt runner those words carry no information: give the concrete
+anchors — the numbers, the feel, the failure sign — and one plain-language *why* ("the point
+is time at this effort; 20s/mi too fast trains a different system"). When unsure which
+register applies, write the guidance: the athlete who didn't need it skims one line; the one
+who did just avoided running the wrong workout.
+
 ## Pushback policy
 
 - **Preference-shaped** (which session, which race, weekly shape): make the case once with

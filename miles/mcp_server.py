@@ -2170,12 +2170,16 @@ def set_draft_days(days: list[DayInput]) -> str:
       terrain? (road|trail; default road — composes with any run slot rather
       than being one itself: a trail long run is still a long run, and its
       pace targets are display-guidance only, never scored), note? (athlete-
-      facing guidance, e.g. "8-10 x 3min LT, go to 10 if feeling great"),
-      target?}. target is a DayTarget: {reps?, reps_lo?, reps_hi? (a rep
-      range; reps stays the point form), rep_duration_s?, rep_distance_m?,
-      pace_lo?, pace_hi?, zone_name?, hr_lo?, hr_hi?}. A zone_name with no
-      explicit pace_lo/pace_hi is stored unresolved and freezes against a
-      live fitness estimate at commit_plan time, not now.
+      facing execution guidance — effort anchors and warning signs, e.g.
+      "8-10 x 3min LT, go to 10 if feeling great" or "should end feeling
+      like 3-4 more reps were there; HR creeping past the cap before rep 4
+      means the pace is wrong"), target?}. target is a DayTarget: {reps?,
+      reps_lo?, reps_hi? (a rep range; reps stays the point form),
+      rep_duration_s?, rep_distance_m?, pace_lo?, pace_hi?, zone_name?,
+      hr_lo?, hr_hi? (bpm; hr_hi alone is a ceiling and renders as "keep HR
+      under X")}. A zone_name with no explicit pace_lo/pace_hi is stored
+      unresolved and freezes against a live fitness estimate at commit_plan
+      time, not now.
 
     Finishes by re-running the full derive pass (see derive_all).
 

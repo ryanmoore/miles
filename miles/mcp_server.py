@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from typing import Literal, Sequence, cast
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from . import db
 from .builds import Build, RaceRef, detect_builds
@@ -44,7 +45,16 @@ from .races import (
 # mounts at /mcp (stdio via `miles-mcp` is unaffected): every request is
 # self-contained, so a server restart or dev reload never strands a client
 # holding a dead session id. Nothing here needs cross-request server state.
-mcp = FastMCP("miles", stateless_http=True)
+#
+# Host-header validation is off: FastMCP's default allows only localhost
+# Hosts, so any remote hostname gets 421 "Invalid Host header". The rest of
+# the HTTP API doesn't validate Host either, and an allowlist would hardcode
+# deployment hostnames here.
+mcp = FastMCP(
+    "miles",
+    stateless_http=True,
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
 
 RUN_TYPES = ("Run", "TrailRun", "VirtualRun")
 

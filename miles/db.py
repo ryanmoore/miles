@@ -2,7 +2,7 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from .weather import WeatherRow
 
@@ -69,14 +69,21 @@ class PlanVersionRow(TypedDict):
     created_at: str
     note: str | None
     author: str
+    # NULL = this is the mutable draft; a real timestamp = committed and
+    # immutable. NotRequired so existing call sites that pre-date this column
+    # (e.g. plan_api.py's hand-built rows) still type-check without it.
+    committed_at: NotRequired[str | None]
 
 
 class PlanWeekRow(TypedDict):
     version_id: int
     week_start: str
-    target_miles: float
+    target_miles: float | None  # range/point lo; NULL alongside target_miles_hi = deliberately unspecified
+    target_miles_hi: float | None  # range upper bound; point week = lo (target_miles) only
     target_workouts: int
     target_long_run_miles: float | None
+    target_long_run_minutes: float | None
+    target_strength_days: int | None
     phase: str
     note: str | None
 
@@ -89,6 +96,9 @@ class PlanDayRow(TypedDict):
     title: str | None
     target_miles: float | None
     target_json: str | None  # JSON-encoded DayTarget (see plan.py), frozen at authoring
+    terrain: str | None  # 'trail', or NULL meaning road (the default)
+    note: str | None  # athlete-facing guidance, distinct from plan_log's reality-annotations
+    target_minutes: float | None
 
 
 class PlanLogRow(TypedDict):
@@ -108,6 +118,7 @@ class PlanAdherenceRow(TypedDict):
     version_n_used: int | None
     actual_miles: float | None
     actual_workouts: int | None
+    actual_strength_days: int | None  # displayed only — never bands or flags (gym logging is too inconsistent to judge silence)
     long_run_done: int | None
     mileage_ratio: float | None
     workout_pace_delta_s: float | None
@@ -269,45 +280,109 @@ def init_db(conn: sqlite3.Connection) -> None:
             created_at      TEXT NOT NULL
         )
     """)
-    # Versions are immutable, append-only snapshots — there is no UPDATE path.
-    # A revision writes a brand new version_id with a full new set of weeks/days.
+    # Versions are immutable, append-only snapshots once committed — there is
+    # no UPDATE path for a committed version. A version with committed_at NULL
+    # is the one mutable draft (see plan.py); committing it stamps
+    # committed_at in place rather than writing a new version_id. A revision
+    # still writes a brand new (draft, then committed) version_id with a full
+    # new set of weeks/days.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS plan_versions (
-            version_id INTEGER PRIMARY KEY,
-            plan_id    INTEGER NOT NULL REFERENCES plans(plan_id) ON DELETE CASCADE,
-            version_n  INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            note       TEXT,
-            author     TEXT NOT NULL,
+            version_id   INTEGER PRIMARY KEY,
+            plan_id      INTEGER NOT NULL REFERENCES plans(plan_id) ON DELETE CASCADE,
+            version_n    INTEGER NOT NULL,
+            created_at   TEXT NOT NULL,
+            committed_at TEXT,
+            note         TEXT,
+            author       TEXT NOT NULL,
             UNIQUE(plan_id, version_n)
         )
     """)
+    # Migration: pre-v2 DBs have plan_versions without committed_at. Every
+    # version that existed before this column was added was committed under
+    # v1 semantics (no draft concept existed), so backfill committed_at =
+    # created_at exactly once — guarded by the ALTER succeeding only the
+    # first time a given DB is migrated. Must NOT re-run unconditionally:
+    # a real in-progress draft's committed_at is legitimately NULL forever
+    # until commit_plan stamps it, and re-running this UPDATE on every
+    # init_db call (e.g. hot reload) would silently "commit" it.
+    try:
+        conn.execute("ALTER TABLE plan_versions ADD COLUMN committed_at TEXT")
+        conn.execute("UPDATE plan_versions SET committed_at = created_at WHERE committed_at IS NULL")
+    except sqlite3.OperationalError:
+        pass
     conn.execute("""
         CREATE TABLE IF NOT EXISTS plan_weeks (
-            version_id            INTEGER NOT NULL REFERENCES plan_versions(version_id) ON DELETE CASCADE,
-            week_start            TEXT NOT NULL,
-            target_miles          REAL NOT NULL,
-            target_workouts       INTEGER NOT NULL,
-            target_long_run_miles REAL,
-            phase                 TEXT NOT NULL,
-            note                  TEXT,
+            version_id              INTEGER NOT NULL REFERENCES plan_versions(version_id) ON DELETE CASCADE,
+            week_start               TEXT NOT NULL,
+            target_miles             REAL,
+            target_miles_hi          REAL,
+            target_workouts          INTEGER NOT NULL,
+            target_long_run_miles    REAL,
+            target_long_run_minutes  REAL,
+            target_strength_days     INTEGER,
+            phase                    TEXT NOT NULL,
+            note                     TEXT,
             PRIMARY KEY (version_id, week_start)
         )
     """)
+    # Migration: pre-v2 DBs have target_miles NOT NULL and lack the new range/
+    # duration/strength columns. SQLite can't relax a NOT NULL constraint or
+    # reorder columns via ALTER, so rebuild the table (create-new/copy/rename)
+    # — guarded by checking target_miles's notnull flag, so this only runs
+    # once per DB (a freshly created table above is already nullable and
+    # skips straight past). Every existing row's committed weeks survive
+    # unchanged; only the new columns are added, all NULL for old rows.
+    week_cols = conn.execute("PRAGMA table_info(plan_weeks)").fetchall()
+    if any(c["name"] == "target_miles" and c["notnull"] for c in week_cols):
+        conn.execute("""
+            CREATE TABLE plan_weeks_v2 (
+                version_id              INTEGER NOT NULL REFERENCES plan_versions(version_id) ON DELETE CASCADE,
+                week_start               TEXT NOT NULL,
+                target_miles             REAL,
+                target_miles_hi          REAL,
+                target_workouts          INTEGER NOT NULL,
+                target_long_run_miles    REAL,
+                target_long_run_minutes  REAL,
+                target_strength_days     INTEGER,
+                phase                    TEXT NOT NULL,
+                note                     TEXT,
+                PRIMARY KEY (version_id, week_start)
+            )
+        """)
+        conn.execute("""
+            INSERT INTO plan_weeks_v2 (
+                version_id, week_start, target_miles, target_workouts,
+                target_long_run_miles, phase, note
+            )
+            SELECT version_id, week_start, target_miles, target_workouts,
+                   target_long_run_miles, phase, note
+            FROM plan_weeks
+        """)
+        conn.execute("DROP TABLE plan_weeks")
+        conn.execute("ALTER TABLE plan_weeks_v2 RENAME TO plan_weeks")
     # seq exists so doubles are representable at the schema level (2+ = doubles);
     # v1 planners will rarely emit one.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS plan_days (
-            version_id   INTEGER NOT NULL REFERENCES plan_versions(version_id) ON DELETE CASCADE,
-            date         TEXT NOT NULL,
-            seq          INTEGER NOT NULL DEFAULT 1,
-            slot         TEXT NOT NULL,
-            title        TEXT,
-            target_miles REAL,
-            target_json  TEXT,
+            version_id     INTEGER NOT NULL REFERENCES plan_versions(version_id) ON DELETE CASCADE,
+            date           TEXT NOT NULL,
+            seq            INTEGER NOT NULL DEFAULT 1,
+            slot           TEXT NOT NULL,
+            title          TEXT,
+            target_miles   REAL,
+            target_json    TEXT,
+            terrain        TEXT,
+            note           TEXT,
+            target_minutes REAL,
             PRIMARY KEY (version_id, date, seq)
         )
     """)
+    for col in ("terrain TEXT", "note TEXT", "target_minutes REAL"):
+        try:
+            conn.execute(f"ALTER TABLE plan_days ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
     # "Life happened" annotations — day-level reality that never touches the plan
     # or bumps a version. No FK to a version; scoped to the plan only.
     conn.execute("""
@@ -329,6 +404,7 @@ def init_db(conn: sqlite3.Connection) -> None:
             version_n_used       INTEGER,
             actual_miles         REAL,
             actual_workouts      INTEGER,
+            actual_strength_days INTEGER,
             long_run_done        INTEGER,
             mileage_ratio        REAL,
             workout_pace_delta_s REAL,
@@ -337,6 +413,11 @@ def init_db(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (plan_id, week_start)
         )
     """)
+    for col in ("actual_strength_days INTEGER",):
+        try:
+            conn.execute(f"ALTER TABLE plan_adherence ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
 
 
@@ -402,6 +483,16 @@ def upsert_laps(conn: sqlite3.Connection, laps: list[LapRow]) -> None:
 def last_synced_date(conn: sqlite3.Connection) -> str | None:
     row = conn.execute("SELECT MAX(start_date) FROM activities").fetchone()
     return row[0] if row and row[0] else None
+
+
+def get_last_sync_at(conn: sqlite3.Connection) -> str | None:
+    """UTC ISO timestamp of the end of the most recent successful miles-sync
+    (meta.last_sync_at, stamped by sync.py), or None before the first sync
+    since this column existed. Lets a reader answer "how stale is this data?"
+    without guessing from activities.start_date, which says nothing once a
+    sync completes with zero new activities."""
+    row = conn.execute("SELECT value FROM meta WHERE key = 'last_sync_at'").fetchone()
+    return row["value"] if row is not None else None
 
 
 def get_athlete(conn: sqlite3.Connection) -> AthleteRow | None:

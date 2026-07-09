@@ -1,8 +1,9 @@
 """
-Adherence engine: judges each COMPLETED week of the active plan against
-its contemporaneous plan version (see plan.current_version_for_week — a
-week's Monday floor-rules to version 1 even if authored later). The week is
-the contract; day placement inside it never matters here.
+Adherence engine: judges each week of the active plan that the sync has
+fully covered (see the unsynced-week guard below) against its contemporaneous
+plan version (see plan.current_version_for_week — a week's Monday
+floor-rules to version 1 even if authored later). The week is the contract;
+day placement inside it never matters here.
 
 Design (see adr/0001-training-plans-as-versioned-ground-truth.md):
   - Mileage band (WEEK_ON_LO/HI, WEEK_CLOSE_LO/HI) and workout-count band
@@ -11,18 +12,40 @@ Design (see adr/0001-training-plans-as-versioned-ground-truth.md):
     two (_worse_band) — a mileage-close week that hit its workouts is still
     a normal week, but a workout-count miss on an on-mileage week is a real
     week-level shortfall and should read that way.
-  - Long run: any single run >= LONG_RUN_ON_RATIO * target_long_run_miles,
-    any day of the week, counts. Weeks with no long-run target are excluded
-    from that judgment entirely (long_run_done = None), not counted as met.
+  - Mileage ratio for a range week (target_miles_hi set) is actual vs the
+    nearest bound — inside [target_miles, target_miles_hi] scores 1.0, the
+    band follows from that ratio same as a point week. A week with neither
+    target_miles nor target_miles_hi is deliberately unspecified: mileage_
+    ratio is NULL and mileage_band never worsens the week's overall band —
+    only the workout-count band judges it.
+  - Long run: satisfied by any single run >= LONG_RUN_ON_RATIO of either
+    target_long_run_miles or target_long_run_minutes (moving_time), any day
+    of the week — a week carrying both targets is satisfied by either one.
+    Weeks with neither target are excluded from that judgment entirely
+    (long_run_done = None), not counted as met.
+  - Trail days (plan_days.terrain = 'trail') never contribute to
+    workout_pace_delta_s — grade makes road pace bands meaningless. The
+    activity still counts toward the week's mileage and workout-count bands;
+    only its pace contribution to a matched workout slot is suppressed.
+  - Strength: actual_strength_days counts distinct dates with a synced
+    STRENGTH_SPORT_TYPES activity that week — displayed alongside
+    target_strength_days, never scored (no band, no flag; gym logging in
+    Strava is too inconsistent to judge silence).
   - Workout pace: synced workout-type activities in the week are matched to
     planned workout slots by count (date order), preferring an exact
     keyword match (classify_workout's label vs the planned slot's title)
     when one exists. workout_pace_delta_s is the distance-weighted average,
     across matched pairs with both a frozen target range and a computed
-    actual pace, of each pair's signed seconds/mile *outside* the target
-    range expanded by +/- PACE_TOLERANCE (0 when the actual pace falls
-    within the tolerance-expanded range) — this reads as "how far off,
-    if at all" rather than always-nonzero noise around a floating midpoint.
+    actual pace (trail-terrain slots excluded), of each pair's signed
+    seconds/mile *outside* the target range expanded by +/- PACE_TOLERANCE
+    (0 when the actual pace falls within the tolerance-expanded range) —
+    this reads as "how far off, if at all" rather than always-nonzero noise
+    around a floating midpoint.
+  - Unsynced-week guard: a week whose Sunday falls on or after the sync's
+    coverage date (meta.last_sync_at, DATE-truncated) gets no adherence row
+    at all — absence, not a score — because the sync hasn't seen it yet.
+    Pre-v2 DBs with no last_sync_at stamped fall back to scoring every week
+    that has already ended as of today, matching the original behavior.
   - Flags fire on patterns only: a maximal run of 2+ consecutive qualifying
     weeks gets exactly ONE flag object, attached to the run's last (most
     recent) week — never one flag per week in the run. A single off week is
@@ -60,7 +83,8 @@ WEEK_CLOSE_HI = 1.15
 WORKOUT_ON_SHORTFALL = 0
 WORKOUT_CLOSE_SHORTFALL = 1
 
-# Any single run >= this fraction of target_long_run_miles counts, any day of the week.
+# Any single run >= this fraction of target_long_run_miles/target_long_run_minutes counts,
+# any day of the week (a week with both targets is satisfied by either).
 LONG_RUN_ON_RATIO = 0.85
 
 # Seconds/mile slack added to a frozen workout pace range before judging
@@ -68,6 +92,10 @@ LONG_RUN_ON_RATIO = 0.85
 PACE_TOLERANCE = 10.0
 
 _RUN_TYPES: tuple[str, ...] = ("Run", "TrailRun", "VirtualRun")
+
+# Strength activities counted into actual_strength_days — displayed only,
+# never banded or flagged (see the module docstring).
+STRENGTH_SPORT_TYPES: tuple[str, ...] = ("WeightTraining", "Workout")
 
 
 # --- pure data shapes --------------------------------------------------------
@@ -84,12 +112,15 @@ class PlannedWorkoutSlot(TypedDict):
     title: str | None
     pace_lo: float | None  # frozen target range, decimal min/mi (from DayTarget)
     pace_hi: float | None
+    terrain: str | None  # 'trail' excludes this slot from pace-delta contribution entirely
 
 
 class WeekActuals(TypedDict):
     actual_miles: float
     actual_workouts: int
+    actual_strength_days: int  # distinct dates with a synced STRENGTH_SPORT_TYPES activity
     long_run_miles: float | None  # longest single run that week (any run_type), None if no runs
+    long_run_minutes: float | None  # longest single run's moving time that week, None if no runs
     workout_paces: list[WorkoutPace]
 
 
@@ -98,7 +129,7 @@ class ScoredWeek(TypedDict):
     mileage_band: str  # on | close | off
     mileage_off_direction: str | None  # low | high | None (only set when mileage_band == "off")
     workout_band: str  # on | close | off
-    long_run_done: bool | None  # None when the week has no long-run target
+    long_run_done: bool | None  # None when the week has no long-run target (miles or minutes)
     workout_pace_delta_s: float | None
     band: str  # on | close | off — the worse of mileage_band and workout_band
 
@@ -115,8 +146,9 @@ class _WeekCalc(ScoredWeek):
     version_n_used: int
     actual_miles: float
     actual_workouts: int
+    actual_strength_days: int
     target_workouts: int
-    target_miles: float
+    target_miles: float | None
 
 
 # --- band scoring -------------------------------------------------------------
@@ -198,10 +230,14 @@ def _match_workouts(
 
 def _aggregate_pace_delta(pairs: list[tuple[PlannedWorkoutSlot, WorkoutPace]]) -> float | None:
     """Distance-weighted average of _pace_delta_s across matched pairs that have
-    both a frozen target range and a computed actual pace; None if none qualify."""
+    both a frozen target range and a computed actual pace; None if none qualify.
+    A trail-terrain slot is skipped entirely — matched for count purposes, but
+    grade makes road pace bands meaningless, so it never contributes here."""
     weighted_sum = 0.0
     weight_total = 0.0
     for slot, pace in pairs:
+        if slot["terrain"] == "trail":
+            continue
         pace_lo, pace_hi, actual = slot["pace_lo"], slot["pace_hi"], pace["pace_min_per_mile"]
         if pace_lo is None or pace_hi is None or actual is None:
             continue
@@ -214,30 +250,75 @@ def _aggregate_pace_delta(pairs: list[tuple[PlannedWorkoutSlot, WorkoutPace]]) -
     return round(weighted_sum / weight_total, 1)
 
 
+def _week_mileage_score(week: PlanWeekRow, actual_miles: float) -> tuple[float | None, str, str | None]:
+    """Mileage ratio/band/off_direction for one week:
+      - target_miles and target_miles_hi both NULL: deliberately unspecified —
+        ratio NULL, band "on" (never worsens the week's overall band; workout
+        count is the only judgment for a week with no mileage target).
+      - target_miles_hi set (a range week): ratio is actual vs the nearest
+        bound — inside [target_miles, target_miles_hi] scores 1.0 flat, below
+        target_miles scores actual/target_miles, above target_miles_hi scores
+        actual/target_miles_hi.
+      - point week (target_miles only): ratio is actual/target_miles, same as
+        v1 — except target_miles <= 0 (e.g. a backdated week authored with no
+        real target) still reads as unspecified rather than dividing by zero.
+    """
+    lo, hi = week["target_miles"], week["target_miles_hi"]
+    if lo is None and hi is None:
+        return None, "on", None
+
+    ratio: float | None
+    if hi is not None:
+        assert lo is not None  # validated together at authoring — see plan.py's _validate_week_fields
+        if actual_miles < lo:
+            ratio = actual_miles / lo if lo > 0 else None
+        elif actual_miles > hi:
+            ratio = actual_miles / hi if hi > 0 else None
+        else:
+            ratio = 1.0
+    else:
+        ratio = actual_miles / lo if lo and lo > 0 else None
+
+    if ratio is None:
+        return None, "on", None
+    band = _mileage_band(ratio)
+    direction = _mileage_off_direction(ratio) if band == "off" else None
+    return ratio, band, direction
+
+
+def _long_run_target_met(
+    target_miles: float | None, target_minutes: float | None,
+    actual_miles: float | None, actual_minutes: float | None,
+) -> bool | None:
+    """None when the week has neither a mileage nor a duration long-run
+    target. Otherwise True when any single run met LONG_RUN_ON_RATIO of
+    either target that's set — a week carrying both is satisfied by either."""
+    if (target_miles is None or target_miles <= 0) and (target_minutes is None or target_minutes <= 0):
+        return None
+    met_miles = (
+        target_miles is not None and target_miles > 0
+        and actual_miles is not None and actual_miles >= LONG_RUN_ON_RATIO * target_miles
+    )
+    met_minutes = (
+        target_minutes is not None and target_minutes > 0
+        and actual_minutes is not None and actual_minutes >= LONG_RUN_ON_RATIO * target_minutes
+    )
+    return bool(met_miles or met_minutes)
+
+
 def score_week(
     week: PlanWeekRow, actuals: WeekActuals, workout_slots: list[PlannedWorkoutSlot]
 ) -> ScoredWeek:
     """Pure per-week scoring: no conn, no dates beyond what's already resolved
     into `actuals`/`workout_slots`. See module docstring for the semantics."""
-    target_miles = week["target_miles"]
-    if target_miles > 0:
-        mileage_ratio: float | None = actuals["actual_miles"] / target_miles
-        mileage_band = _mileage_band(mileage_ratio)
-        mileage_off_direction = _mileage_off_direction(mileage_ratio) if mileage_band == "off" else None
-    else:
-        mileage_ratio, mileage_band, mileage_off_direction = None, "on", None
+    mileage_ratio, mileage_band, mileage_off_direction = _week_mileage_score(week, actuals["actual_miles"])
 
     workout_band = _workout_band(actuals["actual_workouts"], week["target_workouts"])
 
-    target_long = week["target_long_run_miles"]
-    long_run_done: bool | None
-    if target_long is None or target_long <= 0:
-        long_run_done = None
-    else:
-        long_run_done = (
-            actuals["long_run_miles"] is not None
-            and actuals["long_run_miles"] >= LONG_RUN_ON_RATIO * target_long
-        )
+    long_run_done = _long_run_target_met(
+        week["target_long_run_miles"], week["target_long_run_minutes"],
+        actuals["long_run_miles"], actuals["long_run_minutes"],
+    )
 
     pairs = _match_workouts(workout_slots, actuals["workout_paces"])
     workout_pace_delta_s = _aggregate_pace_delta(pairs)
@@ -346,6 +427,11 @@ def _type_clause() -> tuple[str, list[str]]:
     return f"sport_type IN ({ph})", list(_RUN_TYPES)
 
 
+def _strength_type_clause() -> tuple[str, list[str]]:
+    ph = ",".join("?" * len(STRENGTH_SPORT_TYPES))
+    return f"sport_type IN ({ph})", list(STRENGTH_SPORT_TYPES)
+
+
 def _work_lap_pace(conn: sqlite3.Connection, activity_id: int) -> tuple[float, float] | None:
     """(pace_min_per_mile, distance_mi) distance-weighted over an activity's
     work laps (lap_type='work'); None if it has none or they carry no distance/time."""
@@ -369,7 +455,7 @@ def _gather_actuals(conn: sqlite3.Connection, week_start: date, week_end: date) 
     rows = conn.execute(
         f"""
         SELECT activity_id, name, DATE(start_date) AS date, {effective} AS run_type,
-               distance_m / {MILE_M} AS distance_mi
+               distance_m / {MILE_M} AS distance_mi, moving_time_s
         FROM activities
         WHERE {tc} AND DATE(start_date) >= ? AND DATE(start_date) <= ?
         ORDER BY start_date
@@ -380,12 +466,16 @@ def _gather_actuals(conn: sqlite3.Connection, week_start: date, week_end: date) 
     actual_miles = 0.0
     actual_workouts = 0
     long_run_miles: float | None = None
+    long_run_minutes: float | None = None
     workout_paces: list[WorkoutPace] = []
     for r in rows:
         dist = float(r["distance_mi"] or 0.0)
         actual_miles += dist
         if long_run_miles is None or dist > long_run_miles:
             long_run_miles = dist
+        minutes = float(r["moving_time_s"]) / 60.0 if r["moving_time_s"] is not None else None
+        if minutes is not None and (long_run_minutes is None or minutes > long_run_minutes):
+            long_run_minutes = minutes
         if r["run_type"] == "workout":
             actual_workouts += 1
             wl = _work_lap_pace(conn, int(r["activity_id"]))
@@ -396,10 +486,23 @@ def _gather_actuals(conn: sqlite3.Connection, week_start: date, week_end: date) 
                 "distance_mi": wl[1] if wl is not None else 0.0,
             })
 
+    tc_s, tp_s = _strength_type_clause()
+    strength_row = conn.execute(
+        f"""
+        SELECT COUNT(DISTINCT DATE(start_date)) AS n
+        FROM activities
+        WHERE {tc_s} AND DATE(start_date) >= ? AND DATE(start_date) <= ?
+        """,
+        tp_s + [week_start.isoformat(), week_end.isoformat()],
+    ).fetchone()
+    actual_strength_days = int(strength_row["n"] or 0) if strength_row is not None else 0
+
     return {
         "actual_miles": round(actual_miles, 2),
         "actual_workouts": actual_workouts,
+        "actual_strength_days": actual_strength_days,
         "long_run_miles": long_run_miles,
+        "long_run_minutes": long_run_minutes,
         "workout_paces": workout_paces,
     }
 
@@ -413,6 +516,7 @@ def _planned_workout_slots(day_rows: list[PlanDayRow]) -> list[PlannedWorkoutSlo
             "title": d["title"],
             "pace_lo": target.get("pace_lo"),
             "pace_hi": target.get("pace_hi"),
+            "terrain": d["terrain"],
         })
     return slots
 
@@ -431,20 +535,33 @@ def _target_plans(conn: sqlite3.Connection) -> list[tuple[int, str]]:
     return [(int(r["plan_id"]), r["race_date"]) for r in rows]
 
 
+def _sync_cutoff(conn: sqlite3.Connection) -> date:
+    """The first week-Sunday NOT eligible for scoring: meta.last_sync_at's
+    DATE, or today when no sync has ever stamped it (pre-v2 DBs) — see the
+    unsynced-week guard in the module docstring. A week whose Sunday is
+    on/after this date hasn't been fully covered by a sync yet."""
+    last_sync_at = db.get_last_sync_at(conn)
+    return date.fromisoformat(last_sync_at[:10]) if last_sync_at else date.today()
+
+
 def compute_plan_adherence(conn: sqlite3.Connection) -> list[PlanAdherenceRow]:
     """Full recompute across every plan worth scoring (see _target_plans):
-    completed weeks (week's Sunday before today) scored against each week's
-    contemporaneous version. Returns [] when there are no active or completed
-    plans at all — the expected case for a fresh DB, and the only condition
-    derive.py's _plan_adherence_pass relies on to no-op cleanly. Never raises
-    on a plan-less DB."""
+    every week fully covered by the sync (week's Sunday before the sync
+    cutoff — see _sync_cutoff) scored against each week's contemporaneous
+    version. Returns [] when there are no active or completed plans at all —
+    the expected case for a fresh DB, and the only condition derive.py's
+    _plan_adherence_pass relies on to no-op cleanly. Never raises on a
+    plan-less DB."""
+    cutoff = _sync_cutoff(conn)
     out: list[PlanAdherenceRow] = []
     for plan_id, race_date_str in _target_plans(conn):
-        out.extend(_compute_for_plan(conn, plan_id, race_date_str))
+        out.extend(_compute_for_plan(conn, plan_id, race_date_str, cutoff))
     return out
 
 
-def _compute_for_plan(conn: sqlite3.Connection, plan_id: int, race_date_str: str) -> list[PlanAdherenceRow]:
+def _compute_for_plan(
+    conn: sqlite3.Connection, plan_id: int, race_date_str: str, cutoff: date
+) -> list[PlanAdherenceRow]:
     """Per-plan recompute — the body compute_plan_adherence runs once for
     each plan_id it targets."""
     v1_row = conn.execute(
@@ -460,14 +577,13 @@ def _compute_for_plan(conn: sqlite3.Connection, plan_id: int, race_date_str: str
     plan_start = date.fromisoformat(plan_start_str)
     race_dt = date.fromisoformat(race_date_str)
     race_monday = race_dt - timedelta(days=race_dt.weekday())
-    today = date.today()
 
     calc_rows: list[_WeekCalc] = []
     week_start = plan_start
     while week_start <= race_monday:
         week_end = week_start + timedelta(days=6)
-        if week_end >= today:
-            break  # this and all later weeks aren't completed yet; weeks are ascending
+        if week_end >= cutoff:
+            break  # this and all later weeks aren't sync-covered yet; weeks are ascending
 
         governing = current_version_for_week(conn, plan_id, week_start)
         if governing is None:
@@ -493,6 +609,7 @@ def _compute_for_plan(conn: sqlite3.Connection, plan_id: int, race_date_str: str
             "version_n_used": governing["version"]["version_n"],
             "actual_miles": actuals["actual_miles"],
             "actual_workouts": actuals["actual_workouts"],
+            "actual_strength_days": actuals["actual_strength_days"],
             "target_workouts": week_row["target_workouts"],
             "target_miles": week_row["target_miles"],
         })
@@ -509,6 +626,7 @@ def _compute_for_plan(conn: sqlite3.Connection, plan_id: int, race_date_str: str
             "version_n_used": r["version_n_used"],
             "actual_miles": r["actual_miles"],
             "actual_workouts": r["actual_workouts"],
+            "actual_strength_days": r["actual_strength_days"],
             "long_run_done": None if r["long_run_done"] is None else int(r["long_run_done"]),
             "mileage_ratio": r["mileage_ratio"],
             "workout_pace_delta_s": r["workout_pace_delta_s"],

@@ -62,13 +62,17 @@ class PlanLogEntry(TypedDict):
 
 class PlanWeekOut(TypedDict):
     week_start: str
-    target_miles: float
+    target_miles: float | None  # NULL alongside target_miles_hi = deliberately unspecified week
+    target_miles_hi: float | None  # range upper bound; point week = target_miles (lo) only
     target_workouts: int
     target_long_run_miles: float | None
+    target_long_run_minutes: float | None
+    target_strength_days: int | None
     phase: str
     note: str | None
     actual_miles: float
     actual_workouts: int
+    actual_strength_days: int  # displayed only — plan_adherence never bands/flags it
     is_current: bool
     is_future: bool
 
@@ -83,21 +87,90 @@ class PlanDayOut(TypedDict):
     slot: str
     title: str | None
     target_miles: float | None
+    target_minutes: float | None
     target: DayTarget | None
+    terrain: str | None  # 'trail', or NULL meaning road (the default)
+    note: str | None  # athlete-facing guidance, distinct from plan_log's reality-annotations
 
 
 class ThisWeekStat(TypedDict):
     week_start: str
-    target_miles: float
+    target_miles: float | None
+    target_miles_hi: float | None
     actual_miles: float
     target_workouts: int
     actual_workouts: int
+    target_strength_days: int | None
+    actual_strength_days: int
 
 
 class GoalStat(TypedDict):
     goal_time_s: int
     equivalent_time_s: float | None
     confidence: str | None
+
+
+class RemainingDayOut(TypedDict):
+    date: str
+    slot: str
+    title: str | None
+    terrain: str | None
+
+
+class TodayOut(TypedDict):
+    """Today's slice of the plan — always present for an active plan whose
+    window covers today, regardless of sync freshness (the planned session
+    itself isn't sync-derived; only the actual-so-far numbers in
+    week_so_far/vs_last_week are). `day` is None when today has no explicit
+    plan_days row — an implied rest day (planners may skip emitting them)."""
+    date: str
+    day: PlanDayOut | None
+    is_race_day: bool
+    is_race_week: bool
+    week_start: str | None  # None when today falls outside the plan's week list entirely
+
+
+class WeekSoFarOut(TypedDict):
+    """"How's the week going?" — actual so far against the week's target, plus
+    an expected-by-now marker pro-rated by planned (non-rest) days elapsed
+    over total planned days this week, NOT calendar sevenths (a rest-day-
+    heavy front half must not read as behind). actual_* are truncated to
+    week_cutoff_date, the week-local clamp of the sync cutoff — see
+    _week_elapsed_days."""
+    week_start: str
+    week_cutoff_date: str  # actual_* summed over [week_start, week_cutoff_date]
+    week_started: bool  # False when the sync cutoff predates this week's Monday entirely
+    actual_miles_so_far: float
+    actual_workouts_so_far: int
+    target_miles: float | None
+    target_miles_hi: float | None
+    target_workouts: int
+    expected_miles_by_now: float | None  # None when the week has no mileage target, or no planned days
+    remaining_days: list[RemainingDayOut]  # non-rest days after week_cutoff_date, in date order
+    phase: str
+    note: str | None
+
+
+class VsLastWeekDayOut(TypedDict):
+    offset: int  # 0=Monday..6=Sunday
+    date: str
+    last_week_date: str
+    miles: float
+    last_week_miles: float
+
+
+class VsLastWeekOut(TypedDict):
+    """"vs last week at this point" — actual miles through the same weekday
+    cutoff last week, both sides truncated to the sync cutoff so this is never
+    stale-current vs complete-last. None (at the PlanResponse level) whenever
+    the cutoff predates this week's Monday — there is nothing yet to compare."""
+    week_start: str
+    last_week_start: str
+    cutoff_offset: int  # last elapsed weekday index (0=Mon), inclusive, both weeks
+    this_week_miles: float
+    last_week_miles: float
+    delta_miles: float
+    days: list[VsLastWeekDayOut]  # per-day (not cumulative), offsets 0..cutoff_offset
 
 
 class PlanResponse(TypedDict):
@@ -110,6 +183,11 @@ class PlanResponse(TypedDict):
     weeks_to_race: int
     this_week: ThisWeekStat | None
     goal: GoalStat | None
+    last_sync_at: str | None
+    synced_through: str | None  # last_sync_at's date, only when it predates today (the freshness label trigger)
+    today: TodayOut | None  # None unless the plan is active
+    week_so_far: WeekSoFarOut | None  # None unless active and current week is in the plan's week list
+    vs_last_week: VsLastWeekOut | None  # None unless week_so_far applies and week_started
 
 
 def _actual_by_week(conn: sqlite3.Connection, start: str, end: str) -> dict[str, tuple[float, int]]:
@@ -127,6 +205,52 @@ def _actual_by_week(conn: sqlite3.Connection, start: str, end: str) -> dict[str,
         GROUP BY monday
     """, tp + [start, end]).fetchall()
     return {r["monday"]: (r["miles"] or 0.0, r["workouts"] or 0) for r in rows}
+
+
+def _actual_totals(conn: sqlite3.Connection, start: str, end: str) -> tuple[float, int]:
+    """Actual miles/workout count summed over [start, end] inclusive — a plain
+    range aggregate (unlike _actual_by_week, not grouped by Monday), for a
+    partial-week window such as "this week so far"."""
+    effective = db.effective_run_type_sql()
+    tc, tp = _type_clause()
+    row = conn.execute(f"""
+        SELECT ROUND(SUM(distance_m) / 1609.34, 2) AS miles,
+               SUM(CASE WHEN {effective} = 'workout' THEN 1 ELSE 0 END) AS workouts
+        FROM activities
+        WHERE {tc} AND DATE(start_date) >= ? AND DATE(start_date) <= ?
+    """, tp + [start, end]).fetchone()
+    return (row["miles"] or 0.0, row["workouts"] or 0)
+
+
+def _daily_miles(conn: sqlite3.Connection, start: str, end: str) -> dict[str, float]:
+    """Per-date actual miles over [start, end] inclusive, keyed by ISO date —
+    the day-level series behind the vs-last-week comparison."""
+    effective = db.effective_run_type_sql()
+    tc, tp = _type_clause()
+    rows = conn.execute(f"""
+        SELECT DATE(start_date) AS date, ROUND(SUM(distance_m) / 1609.34, 2) AS miles
+        FROM activities
+        WHERE {tc} AND DATE(start_date) >= ? AND DATE(start_date) <= ?
+        GROUP BY DATE(start_date)
+    """, tp + [start, end]).fetchall()
+    return {r["date"]: (r["miles"] or 0.0) for r in rows}
+
+
+def _strength_days_by_week(conn: sqlite3.Connection, start: str, end: str) -> dict[str, int]:
+    """Monday-aligned count of distinct dates with a synced
+    plan_adherence.STRENGTH_SPORT_TYPES activity — same shape/convention as
+    _actual_by_week, kept separate since strength activities fall outside
+    _type_clause's run-only sport types."""
+    ph = ",".join("?" * len(plan_adherence.STRENGTH_SPORT_TYPES))
+    rows = conn.execute(f"""
+        SELECT
+            DATE(start_date, '-' || ((CAST(strftime('%w', start_date) AS INTEGER) + 6) % 7) || ' days') AS monday,
+            COUNT(DISTINCT DATE(start_date)) AS strength_days
+        FROM activities
+        WHERE sport_type IN ({ph}) AND DATE(start_date) >= ? AND DATE(start_date) <= ?
+        GROUP BY monday
+    """, list(plan_adherence.STRENGTH_SPORT_TYPES) + [start, end]).fetchall()
+    return {r["monday"]: int(r["strength_days"] or 0) for r in rows}
 
 
 def _activities_by_date(conn: sqlite3.Connection, start: str, end: str) -> dict[str, list[PlanActivity]]:
@@ -175,11 +299,125 @@ def _log_by_date(conn: sqlite3.Connection, plan_id: int, start: str, end: str) -
     return out
 
 
+def _week_elapsed_days(monday: date, week_cutoff: date) -> int | None:
+    """Days elapsed into the week [0=Monday..6=Sunday] as of week_cutoff,
+    clamped to that range, or None when week_cutoff predates monday entirely
+    (the sync cutoff hasn't reached this week yet — nothing has "happened"
+    in it as far as the data can say, so callers must not report a partial
+    week at all rather than defaulting to zero elapsed days)."""
+    raw = (week_cutoff - monday).days
+    if raw < 0:
+        return None
+    return min(raw, 6)
+
+
+def _today_blocks(
+    conn: sqlite3.Connection,
+    active: PlanRow,
+    weeks_in: list[PlanWeekRow],
+    days_in: list[PlanDayRow],
+    today: date,
+    cutoff_date: date,
+) -> tuple[TodayOut | None, WeekSoFarOut | None, VsLastWeekOut | None]:
+    """Today/week_so_far/vs_last_week — computed only for an active plan; see
+    PlanResponse field docstrings for the semantics of each. cutoff_date is
+    the global sync cutoff (min(today, last_sync_at's date), or today when
+    there's never been a sync)."""
+    if active["status"] != "active":
+        return None, None, None
+
+    monday = today - timedelta(days=today.weekday())
+    monday_iso = monday.isoformat()
+    week = next((w for w in weeks_in if w["week_start"] == monday_iso), None)
+
+    race_dt = date.fromisoformat(active["race_date"])
+    today_out = TodayOut(
+        date=today.isoformat(),
+        day=next((_day_out(d) for d in days_in if d["date"] == today.isoformat()), None),
+        is_race_day=race_dt == today,
+        is_race_week=monday <= race_dt <= monday + timedelta(days=6),
+        week_start=monday_iso if week is not None else None,
+    )
+    if week is None:
+        return today_out, None, None
+
+    week_days = [d for d in days_in if monday_iso <= d["date"] <= (monday + timedelta(days=6)).isoformat()]
+    elapsed = _week_elapsed_days(monday, cutoff_date)
+    week_started = elapsed is not None
+
+    week_cutoff_date = (monday + timedelta(days=elapsed)) if elapsed is not None else monday - timedelta(days=1)
+    actual_miles_so_far, actual_workouts_so_far = (
+        _actual_totals(conn, monday_iso, week_cutoff_date.isoformat()) if week_started else (0.0, 0)
+    )
+
+    planned_days = [d for d in week_days if d["slot"] != "rest"]
+    elapsed_planned = [d for d in planned_days if d["date"] <= week_cutoff_date.isoformat()]
+    basis_target = (
+        (week["target_miles"] + week["target_miles_hi"]) / 2.0
+        if week["target_miles"] is not None and week["target_miles_hi"] is not None
+        else week["target_miles"]
+    )
+    expected_miles_by_now = (
+        round(basis_target * (len(elapsed_planned) / len(planned_days)), 1)
+        if basis_target is not None and planned_days and week_started
+        else None
+    )
+    remaining_days = [
+        RemainingDayOut(date=d["date"], slot=d["slot"], title=d["title"], terrain=d["terrain"])
+        for d in planned_days
+        if d["date"] > week_cutoff_date.isoformat()
+    ]
+
+    week_so_far = WeekSoFarOut(
+        week_start=monday_iso,
+        week_cutoff_date=week_cutoff_date.isoformat(),
+        week_started=week_started,
+        actual_miles_so_far=actual_miles_so_far,
+        actual_workouts_so_far=actual_workouts_so_far,
+        target_miles=week["target_miles"],
+        target_miles_hi=week["target_miles_hi"],
+        target_workouts=week["target_workouts"],
+        expected_miles_by_now=expected_miles_by_now,
+        remaining_days=remaining_days,
+        phase=week["phase"],
+        note=week["note"],
+    )
+
+    vs_last_week: VsLastWeekOut | None = None
+    if week_started and elapsed is not None:
+        last_week_monday = monday - timedelta(days=7)
+        last_week_cutoff = last_week_monday + timedelta(days=elapsed)
+        daily_this = _daily_miles(conn, monday_iso, week_cutoff_date.isoformat())
+        daily_last = _daily_miles(conn, last_week_monday.isoformat(), last_week_cutoff.isoformat())
+        days_out: list[VsLastWeekDayOut] = []
+        for offset in range(elapsed + 1):
+            d_this = (monday + timedelta(days=offset)).isoformat()
+            d_last = (last_week_monday + timedelta(days=offset)).isoformat()
+            days_out.append(VsLastWeekDayOut(
+                offset=offset, date=d_this, last_week_date=d_last,
+                miles=daily_this.get(d_this, 0.0), last_week_miles=daily_last.get(d_last, 0.0),
+            ))
+        this_week_miles = round(sum(x["miles"] for x in days_out), 2)
+        last_week_miles = round(sum(x["last_week_miles"] for x in days_out), 2)
+        vs_last_week = VsLastWeekOut(
+            week_start=monday_iso,
+            last_week_start=last_week_monday.isoformat(),
+            cutoff_offset=elapsed,
+            this_week_miles=this_week_miles,
+            last_week_miles=last_week_miles,
+            delta_miles=round(this_week_miles - last_week_miles, 2),
+            days=days_out,
+        )
+
+    return today_out, week_so_far, vs_last_week
+
+
 def _day_out(d: PlanDayRow) -> PlanDayOut:
     target = cast(DayTarget, json.loads(d["target_json"])) if d["target_json"] else None
     return PlanDayOut(
         date=d["date"], seq=d["seq"], slot=d["slot"], title=d["title"],
-        target_miles=d["target_miles"], target=target,
+        target_miles=d["target_miles"], target_minutes=d["target_minutes"], target=target,
+        terrain=d["terrain"], note=d["note"],
     )
 
 
@@ -224,17 +462,23 @@ def get_plan() -> PlanResponse | None:
     this_week: ThisWeekStat | None = None
     if weeks_in:
         actual_weeks = _actual_by_week(conn, weeks_in[0]["week_start"], weeks_in[-1]["week_start"])
+        strength_weeks = _strength_days_by_week(conn, weeks_in[0]["week_start"], weeks_in[-1]["week_start"])
         for w in weeks_in:
             actual_miles, actual_workouts = actual_weeks.get(w["week_start"], (0.0, 0))
+            actual_strength_days = strength_weeks.get(w["week_start"], 0)
             weeks_out.append(PlanWeekOut(
                 week_start=w["week_start"],
                 target_miles=w["target_miles"],
+                target_miles_hi=w["target_miles_hi"],
                 target_workouts=w["target_workouts"],
                 target_long_run_miles=w["target_long_run_miles"],
+                target_long_run_minutes=w["target_long_run_minutes"],
+                target_strength_days=w["target_strength_days"],
                 phase=w["phase"],
                 note=w["note"],
                 actual_miles=actual_miles,
                 actual_workouts=actual_workouts,
+                actual_strength_days=actual_strength_days,
                 is_current=w["week_start"] == current_monday,
                 is_future=w["week_start"] > current_monday,
             ))
@@ -242,9 +486,12 @@ def get_plan() -> PlanResponse | None:
                 this_week = ThisWeekStat(
                     week_start=w["week_start"],
                     target_miles=w["target_miles"],
+                    target_miles_hi=w["target_miles_hi"],
                     actual_miles=actual_miles,
                     target_workouts=w["target_workouts"],
                     actual_workouts=actual_workouts,
+                    target_strength_days=w["target_strength_days"],
+                    actual_strength_days=actual_strength_days,
                 )
 
     days_out: list[PlanDayOut] = [_day_out(d) for d in days_in]
@@ -274,6 +521,12 @@ def get_plan() -> PlanResponse | None:
                 confidence = est["confidence"]
         goal = GoalStat(goal_time_s=active["goal_time_s"], equivalent_time_s=equivalent_time_s, confidence=confidence)
 
+    last_sync_at = db.get_last_sync_at(conn)
+    sync_date = date.fromisoformat(last_sync_at[:10]) if last_sync_at else today
+    cutoff_date = min(today, sync_date)
+    synced_through = cutoff_date.isoformat() if cutoff_date < today else None
+    today_out, week_so_far, vs_last_week = _today_blocks(conn, active, weeks_in, days_in, today, cutoff_date)
+
     return PlanResponse(
         plan=active,
         version=bundle["version"] if bundle is not None else None,
@@ -284,6 +537,11 @@ def get_plan() -> PlanResponse | None:
         weeks_to_race=weeks_to_race,
         this_week=this_week,
         goal=goal,
+        last_sync_at=last_sync_at,
+        synced_through=synced_through,
+        today=today_out,
+        week_so_far=week_so_far,
+        vs_last_week=vs_last_week,
     )
 
 
@@ -326,12 +584,16 @@ class WeekAdherenceOut(TypedDict):
     week_start: str
     version_n_used: int | None
     target_miles: float | None
+    target_miles_hi: float | None
     actual_miles: float | None
     mileage_ratio: float | None
     target_workouts: int | None
     actual_workouts: int | None
     target_long_run_miles: float | None
+    target_long_run_minutes: float | None
     long_run_done: bool | None
+    target_strength_days: int | None
+    actual_strength_days: int | None
     workout_pace_delta_s: float | None
     band: str | None
 
@@ -353,14 +615,17 @@ class PlanAdherenceResponse(TypedDict):
 
 def _adherence_rows(conn: sqlite3.Connection, plan_id: int) -> list[sqlite3.Row]:
     """Every plan_adherence row for one plan, joined back to that same
-    week's contemporaneous target_miles/target_workouts/target_long_run_miles
-    — shared by get_plan_adherence and the retrospective's final-adherence
-    rollup (get_plan_retrospective) so both read off one query."""
+    week's contemporaneous targets (mileage range, long-run miles/minutes,
+    strength days) — shared by get_plan_adherence and the retrospective's
+    final-adherence rollup (get_plan_retrospective) so both read off one
+    query."""
     return conn.execute("""
         SELECT
             pa.week_start, pa.version_n_used, pa.actual_miles, pa.actual_workouts,
-            pa.long_run_done, pa.mileage_ratio, pa.workout_pace_delta_s, pa.band, pa.flags_json,
-            pw.target_miles, pw.target_workouts, pw.target_long_run_miles
+            pa.actual_strength_days, pa.long_run_done, pa.mileage_ratio,
+            pa.workout_pace_delta_s, pa.band, pa.flags_json,
+            pw.target_miles, pw.target_miles_hi, pw.target_workouts,
+            pw.target_long_run_miles, pw.target_long_run_minutes, pw.target_strength_days
         FROM plan_adherence pa
         JOIN plan_versions pv ON pv.plan_id = pa.plan_id AND pv.version_n = pa.version_n_used
         JOIN plan_weeks pw ON pw.version_id = pv.version_id AND pw.week_start = pa.week_start
@@ -407,12 +672,16 @@ def get_plan_adherence() -> PlanAdherenceResponse | None:
             week_start=r["week_start"],
             version_n_used=r["version_n_used"],
             target_miles=r["target_miles"],
+            target_miles_hi=r["target_miles_hi"],
             actual_miles=r["actual_miles"],
             mileage_ratio=r["mileage_ratio"],
             target_workouts=r["target_workouts"],
             actual_workouts=r["actual_workouts"],
             target_long_run_miles=r["target_long_run_miles"],
+            target_long_run_minutes=r["target_long_run_minutes"],
             long_run_done=bool(r["long_run_done"]) if r["long_run_done"] is not None else None,
+            target_strength_days=r["target_strength_days"],
+            actual_strength_days=r["actual_strength_days"],
             workout_pace_delta_s=r["workout_pace_delta_s"],
             band=r["band"],
         )
@@ -928,12 +1197,15 @@ def get_plan_retrospective() -> PlanRetrospectiveResponse | None:
     weeks_in = bundle["weeks"] if bundle is not None else []
     plan_ramp: PlanRampSummary | None = None
     if weeks_in:
-        targets = [w["target_miles"] for w in weeks_in]
-        plan_ramp = PlanRampSummary(
-            weeks=len(weeks_in),
-            avg_target_miles=round(sum(targets) / len(targets), 1),
-            peak_target_miles=round(max(targets), 1),
-        )
+        # Weeks authored with no mileage target (deliberately unspecified) don't
+        # contribute to the ramp average/peak — there's no target to average.
+        targets = [w["target_miles"] for w in weeks_in if w["target_miles"] is not None]
+        if targets:
+            plan_ramp = PlanRampSummary(
+                weeks=len(weeks_in),
+                avg_target_miles=round(sum(targets) / len(targets), 1),
+                peak_target_miles=round(max(targets), 1),
+            )
 
     race_date_for_build = race["date"] if race is not None else current["race_date"]
     detected = _detected_build_for_race(conn, race_date_for_build)

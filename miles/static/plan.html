@@ -204,6 +204,130 @@
       white-space: nowrap;
     }
     .plan-view .plan-slot.slot-rest { border-style: dotted; }
+    .plan-view .plan-slot.slot-easy { border-color: color-mix(in srgb, var(--muted) 55%, var(--border)); color: var(--text-secondary); }
+    .plan-view .plan-slot.slot-workout { border-color: var(--series-8); color: var(--series-8); }
+    .plan-view .plan-slot.slot-long { border-color: var(--series-1); color: var(--series-1); }
+    .plan-view .plan-slot.slot-race { border-color: var(--good); color: var(--good); }
+    .plan-view .plan-slot.slot-strength { border-color: var(--series-5); color: var(--series-5); }
+
+    /* Week note on the calendar leader — always-visible affordance (plain
+       truncated text with a title for overflow), never hover-only. */
+    .plan-view .cal-week-note {
+      font-size: 0.625rem;
+      color: var(--text-secondary);
+      margin-top: 0.125rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+
+    .plan-view .cal-day { cursor: pointer; }
+
+    /* Today view -------------------------------------------------------- */
+
+    .plan-view .race-countdown { font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.25rem; }
+    .plan-view .race-countdown-num { font-size: 1.375rem; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; margin-right: 0.375rem; }
+    .plan-view .freshness-note { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.75rem; }
+
+    .plan-view .today-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      cursor: pointer;
+    }
+    .plan-view .today-slot {
+      font-size: 0.6875rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.125rem;
+    }
+    .plan-view .today-title { font-size: 1.0625rem; font-weight: 650; color: var(--text); margin-bottom: 0.5rem; }
+    .plan-view .today-rest, .plan-view .today-race, .plan-view .today-raceweek {
+      font-size: 1.0625rem;
+      font-weight: 650;
+      color: var(--text);
+      margin-bottom: 0.375rem;
+    }
+    .plan-view .today-raceweek { font-size: 0.8125rem; font-weight: 600; color: var(--accent); margin-bottom: 0.625rem; }
+    .plan-view .today-targets { font-size: 0.8125rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; margin-bottom: 0.5rem; line-height: 1.6; }
+    .plan-view .today-note { font-size: 0.8125rem; color: var(--text-secondary); line-height: 1.55; }
+
+    .plan-view .day-chip-row { display: flex; gap: 0.375rem; margin: 0.25rem 0 0.5rem; }
+    .plan-view .day-chip {
+      flex: 1;
+      min-width: 0;
+      border-radius: 6px;
+      padding: 0.375rem 0.125rem;
+      text-align: center;
+      cursor: pointer;
+      border: 1.5px solid var(--chip-color);
+      background: var(--surface);
+    }
+    .plan-view .day-chip-wd { font-size: 0.5625rem; font-weight: 600; text-transform: uppercase; color: var(--muted); }
+    .plan-view .day-chip-num { font-size: 0.75rem; font-weight: 700; color: var(--text); margin: 0.0625rem 0; font-variant-numeric: tabular-nums; }
+    .plan-view .day-chip-slot { font-size: 0.5625rem; color: var(--chip-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .plan-view .day-chip.done { background: color-mix(in srgb, var(--chip-color) 16%, var(--surface)); }
+    .plan-view .day-chip.today { border-width: 2px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--chip-color) 30%, transparent); }
+    .plan-view .day-chip.upcoming { border-style: dashed; }
+    .plan-view .week-glance-sub { font-size: 0.8125rem; color: var(--muted); }
+
+    .plan-view .momentum-headline { font-size: 0.9375rem; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; margin-bottom: 0.1875rem; }
+    .plan-view .momentum-sub { font-size: 0.8125rem; color: var(--muted); margin-bottom: 0.625rem; }
+
+    /* Expected-by-now meter — a single ratio against a limit, one accent hue;
+       the marker is a plain neutral tick, not a second judgment color. */
+    .plan-view .meter { position: relative; height: 8px; background: var(--gridline); border-radius: 4px; overflow: visible; margin-bottom: 0.375rem; }
+    .plan-view .meter-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 4px; }
+    .plan-view .meter-range { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 4px; }
+    .plan-view .meter-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text-secondary); }
+
+    .plan-view .paired-bar-wrap { margin: 0.375rem 0; }
+    .plan-view .paired-bar-wrap svg { display: block; }
+
+    /* Day detail popover — shared by the calendar and the Today strip. */
+    .plan-view .day-popover-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+    }
+    .plan-view .day-popover {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      max-width: 22rem;
+      width: calc(100% - 2rem);
+      max-height: calc(100vh - 4rem);
+      overflow-y: auto;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+      position: relative;
+    }
+    .plan-view .day-popover-close {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.625rem;
+      background: none;
+      border: none;
+      font-size: 1.25rem;
+      line-height: 1;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .plan-view .day-popover-date { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.125rem; }
+    .plan-view .day-popover-title { font-size: 1rem; font-weight: 650; color: var(--text); margin-bottom: 0.125rem; }
+    .plan-view .day-popover-slot { font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.625rem; }
+    .plan-view .day-popover-targets { font-size: 0.8125rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; margin-bottom: 0.5rem; line-height: 1.6; }
+    .plan-view .day-popover-note { font-size: 0.8125rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 0.75rem; }
+    .plan-view .day-popover-section { margin-top: 0.625rem; }
+    .plan-view .day-popover-log { font-size: 0.8125rem; color: var(--text-secondary); padding: 0.125rem 0; }
+    .plan-view .day-popover-empty { font-size: 0.8125rem; color: var(--muted); }
 
     /* Actual run — solid pill layered under/after the planned slot. */
     .plan-view .cal-run {
@@ -355,7 +479,103 @@
     easy: 'var(--muted)',
   };
 
-  const SLOT_LABEL = { easy: 'Easy', workout: 'Workout', long: 'Long', rest: 'Rest', race: 'Race' };
+  const SLOT_LABEL = { easy: 'Easy', workout: 'Workout', long: 'Long', rest: 'Rest', race: 'Race', strength: 'Strength' };
+
+  // Planned-slot palette — one entry per plan.py SLOTS value, colors matching
+  // TYPE_COLOR's actual-run-type mapping above (long/workout/race/easy share
+  // the same hue whether the source is a synced run or a planned slot).
+  // 'strength' has no synced-run counterpart in TYPE_COLOR (no page colors
+  // WeightTraining runs), so it gets its own slot: --series-5 (violet), the
+  // most CVD-distinct unused slot against the four already in use. Terrain is
+  // never a color — a trail day gets the ▲ glyph instead (TRAIL_GLYPH below).
+  const SLOT_COLOR = {
+    easy: 'var(--muted)',
+    workout: 'var(--series-8)',
+    long: 'var(--series-1)',
+    race: 'var(--good)',
+    strength: 'var(--series-5)',
+    rest: 'var(--baseline)',
+  };
+  const TRAIL_GLYPH = ' ▲'; // ▲ — terrain modifier, never a color (a trail long run is still a long run)
+
+  const MILE_M = 1609.34;
+
+  // decimal minutes (150) -> "2:30"; whole minutes under an hour -> "30 min".
+  function fmtDuration(min) {
+    if (min == null) return null;
+    const h = Math.floor(min / 60);
+    const m = Math.round(min % 60);
+    return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m} min`;
+  }
+
+  // seconds (180) -> "3:00" — rep durations, distinct from fmt.time/fmt.timeShort
+  // (both h:mm-first, wrong shape for a sub-hour rep).
+  function fmtMinSec(s) {
+    if (s == null) return null;
+    const m = Math.floor(s / 60);
+    const sec = String(Math.round(s % 60)).padStart(2, '0');
+    return `${m}:${sec}`;
+  }
+
+  // A week's target_miles/target_miles_hi as the label a coach would say:
+  // "38–42" for a range, "38.0" for a point, "workouts only" when both are
+  // NULL (deliberately unspecified — scored on workouts alone, see roadmap).
+  function targetMilesLabel(w) {
+    if (w.target_miles == null) return 'workouts only';
+    if (w.target_miles_hi != null) return `${w.target_miles.toFixed(0)}–${w.target_miles_hi.toFixed(0)}`;
+    return w.target_miles.toFixed(1);
+  }
+
+  // Natural-language rendering of one plan_days row's target: rep range/
+  // duration/pace ("8–10 × 3:00 @ 6:50–7:10/mi"), then the day-level mileage
+  // or duration target ("2:30 trail long"). Shared by the Today card, the
+  // week glance, and the day popover so the three views never describe a
+  // day's target differently.
+  function describeDayTarget(day) {
+    if (!day) return [];
+    const lines = [];
+    const t = day.target || {};
+    let reps = null;
+    if (t.reps_lo != null && t.reps_hi != null) reps = `${t.reps_lo}–${t.reps_hi}`;
+    else if (t.reps != null) reps = `${t.reps}`;
+    let unit = null;
+    if (t.rep_duration_s != null) unit = fmtMinSec(t.rep_duration_s);
+    else if (t.rep_distance_m != null) unit = `${(t.rep_distance_m / MILE_M).toFixed(2)}mi`;
+    let pace = null;
+    if (t.pace_lo != null && t.pace_hi != null) pace = `${fmt.pace(t.pace_lo)}–${fmt.pace(t.pace_hi)}/mi`;
+    if (reps && unit) {
+      lines.push(`${reps} × ${unit}${pace ? ` @ ${pace}` : ''}`);
+    } else if (pace) {
+      lines.push(`@ ${pace}`);
+    } else if (t.zone_name) {
+      lines.push(`${t.zone_name} pace`);
+    }
+    if (day.terrain === 'trail' && pace) lines.push('trail — pace is guidance only, not judged');
+
+    if (day.target_minutes != null) {
+      const slotWord = (SLOT_LABEL[day.slot] ?? day.slot).toLowerCase();
+      lines.push(`${fmtDuration(day.target_minutes)}${day.terrain === 'trail' ? ' trail' : ''} ${slotWord}`);
+    } else if (day.target_miles != null) {
+      lines.push(`${day.target_miles.toFixed(1)} mi`);
+    }
+    return lines;
+  }
+
+  // "long run and one workout still ahead" — the shape of what's left this
+  // week, from the plan's remaining (non-rest) days, never from a raw count.
+  function remainingShape(remainingDays) {
+    if (!remainingDays || !remainingDays.length) return 'nothing left on the schedule this week';
+    const counts = {};
+    remainingDays.forEach(d => { counts[d.slot] = (counts[d.slot] || 0) + 1; });
+    const parts = [];
+    if (counts.long) parts.push('the long run');
+    if (counts.workout) parts.push(counts.workout === 1 ? 'one workout' : `${counts.workout} workouts`);
+    if (counts.strength) parts.push(counts.strength === 1 ? 'one strength day' : `${counts.strength} strength days`);
+    if (counts.easy) parts.push(`${counts.easy} easy day${counts.easy > 1 ? 's' : ''}`);
+    if (counts.race) parts.push('race day');
+    if (!parts.length) return 'nothing left on the schedule this week';
+    return `${parts.join(' and ')} still ahead`;
+  }
 
   // Adherence bands — read straight off theme.css so light/dark both work,
   // same idiom as chartTheme() in nav.js but scoped to the three band colors.
@@ -381,6 +601,91 @@
     workout_count_short: 'Workouts short',
     long_run_missed: 'Long run missed',
   };
+
+  // -----------------------------------------------------------------------
+  // View tabs — house idiom (see races.html): buttons toggle .active on
+  // click, panels toggle the `hidden` attribute, hash-routed with
+  // history.replaceState so back doesn't step through tabs. Only built for
+  // an active plan with a Today to show; a completed plan's retrospective
+  // renders straight into #root with no tabs at all, unchanged from v1.
+  // -----------------------------------------------------------------------
+
+  const PLAN_TABS = ['today', 'overall'];
+
+  // Every Overall-section render function inserts here — #tab-overall when
+  // tabs exist, #root directly when they don't (completed-plan retrospective,
+  // no Today to tab away from).
+  function rootEl() {
+    return document.getElementById('tab-overall') ?? document.getElementById('root');
+  }
+
+  function renderTabs() {
+    document.getElementById('root').insertAdjacentHTML('beforeend', `
+      <div class="mode-tabs" id="plan-tabs">
+        <button class="mode-tab" data-tab="today">Today</button>
+        <button class="mode-tab" data-tab="overall">Overall</button>
+      </div>
+      <div id="tab-today" class="tab-panel"></div>
+      <div id="tab-overall" class="tab-panel" hidden></div>`);
+    document.querySelectorAll('#plan-tabs .mode-tab').forEach(btn => {
+      btn.addEventListener('click', () => activatePlanTab(btn.dataset.tab));
+    });
+  }
+
+  function activatePlanTab(key) {
+    if (!PLAN_TABS.includes(key)) key = 'today';
+    document.querySelectorAll('#plan-tabs .mode-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === key));
+    document.querySelectorAll('.tab-panel').forEach(el => { el.hidden = el.id !== `tab-${key}`; });
+    history.replaceState(null, '', `#${key}`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Day detail popover — shared by the calendar (day cells + week leaders)
+  // and the Today strip (session card + day-glance chips). Reads off the
+  // already-fetched PLAN_DATA rather than issuing a new request — every
+  // field it shows (day target, note, matched runs, log entries) is already
+  // in the /api/plan payload.
+  // -----------------------------------------------------------------------
+
+  let PLAN_DATA = null; // { dayByDate, actualByDate, logByDate } — set once on load
+
+  function dayPopoverHTML(dateStr, day, runs, logs) {
+    const glyph = day && day.terrain === 'trail' ? TRAIL_GLYPH : '';
+    const title = day ? (day.title ? esc(day.title) : (SLOT_LABEL[day.slot] ?? day.slot)) : 'Rest';
+    const targetLines = describeDayTarget(day);
+    return `
+      <div class="day-popover-backdrop" id="day-popover-backdrop">
+        <div class="day-popover" role="dialog" aria-modal="true">
+          <button class="day-popover-close" id="day-popover-close" aria-label="Close">×</button>
+          <div class="day-popover-date">${esc(longDate(dateStr))}</div>
+          <div class="day-popover-title">${title}${glyph}</div>
+          ${day ? `<div class="day-popover-slot" style="color:${SLOT_COLOR[day.slot] ?? 'var(--text)'}">${esc(SLOT_LABEL[day.slot] ?? day.slot)}</div>` : ''}
+          ${targetLines.length ? `<div class="day-popover-targets">${targetLines.map(l => `<div>${esc(l)}</div>`).join('')}</div>` : ''}
+          ${day && day.note ? `<p class="day-popover-note">${esc(day.note)}</p>` : ''}
+          ${runs.length ? `<div class="day-popover-section"><div class="subchart-label">Synced</div>${runs.map(runLine).join('')}</div>` : ''}
+          ${logs.length ? `<div class="day-popover-section"><div class="subchart-label">Log</div>${logs.map(l => `<div class="day-popover-log">${esc(l.action)}${l.reason ? ': ' + esc(l.reason) : ''}</div>`).join('')}</div>` : ''}
+          ${!day && !runs.length && !logs.length ? `<p class="day-popover-empty">No plan data for this day.</p>` : ''}
+        </div>
+      </div>`;
+  }
+
+  function openDayPopover(dateStr) {
+    if (!PLAN_DATA) return;
+    const day = PLAN_DATA.dayByDate.get(dateStr) ?? null;
+    const runs = PLAN_DATA.actualByDate.get(dateStr) ?? [];
+    const logs = PLAN_DATA.logByDate.get(dateStr) ?? [];
+    if (!day && !runs.length && !logs.length) return; // nothing to show for this date
+    document.body.insertAdjacentHTML('beforeend', dayPopoverHTML(dateStr, day, runs, logs));
+    const backdrop = document.getElementById('day-popover-backdrop');
+    function close() {
+      backdrop.remove();
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    backdrop.addEventListener('click', e => { if (e.target === backdrop) close(); });
+    document.getElementById('day-popover-close').addEventListener('click', close);
+    document.addEventListener('keydown', onKey);
+  }
 
   // -----------------------------------------------------------------------
   // Empty state
@@ -415,7 +720,7 @@
     const thisWeekStat = this_week ? `
       <div class="stat">
         <div class="stat-label">This week</div>
-        <div class="stat-value">${this_week.actual_miles.toFixed(1)}<span class="stat-sub">of ${this_week.target_miles.toFixed(1)} mi</span></div>
+        <div class="stat-value">${this_week.actual_miles.toFixed(1)}<span class="stat-sub">of ${targetMilesLabel(this_week)} mi</span></div>
         <div class="stat-sub">${this_week.actual_workouts} of ${this_week.target_workouts} workouts</div>
       </div>` : `
       <div class="stat">
@@ -443,7 +748,7 @@
         <div class="stat-value">${adherence.on_or_close}<span class="stat-sub">of ${adherence.completed} weeks on plan</span></div>
       </div>` : '';
 
-    document.getElementById('root').insertAdjacentHTML('beforeend', `
+    rootEl().insertAdjacentHTML('beforeend', `
       <div class="stat-strip">
         ${weeksToRaceStat}
         ${thisWeekStat}
@@ -488,7 +793,7 @@
   function renderRetrospective(data, retro) {
     const { plan } = data;
     if (!retro) {
-      document.getElementById('root').insertAdjacentHTML('beforeend', `
+      rootEl().insertAdjacentHTML('beforeend', `
         <div class="stat-strip"><div class="stat">
           <div class="stat-label">Retrospective</div>
           <div class="stat-value">—<span class="stat-sub">loading…</span></div>
@@ -527,7 +832,7 @@
         <div class="stat-sub">${goal.predicted_time != null ? `${goal.predicted_time} predicted (${esc(goal.predicted_confidence ?? '')})` : 'no pre-race fitness estimate'}</div>
       </div>` : '';
 
-    document.getElementById('root').insertAdjacentHTML('beforeend', `
+    rootEl().insertAdjacentHTML('beforeend', `
       <section id="section-retrospective">
         <h2>Race retrospective</h2>
         <p class="desc">${esc(plan.title)} closed out ${shortDate(plan.race_date)}</p>
@@ -548,11 +853,13 @@
   // last COMPLETED week's actual/target miles, spanning however many
   // completed weeks exist. "" (and no <p>) below 2 completed weeks.
   function mileageCaption(weeks) {
-    const completed = weeks.filter(w => !w.is_current && !w.is_future);
+    // Unspecified weeks (no target_miles) have nothing to average into a
+    // target caption — excluded here, same as plan_ramp's rollup.
+    const completed = weeks.filter(w => !w.is_current && !w.is_future && w.target_miles != null);
     if (completed.length < 2) return '';
     const first = completed[0], last = completed[completed.length - 1];
     return `weekly mileage ${first.actual_miles.toFixed(0)}→${last.actual_miles.toFixed(0)} mi ` +
-      `over ${completed.length} weeks (target ${first.target_miles.toFixed(0)}→${last.target_miles.toFixed(0)})`;
+      `over ${completed.length} weeks (target ${targetMilesLabel(first)}→${targetMilesLabel(last)})`;
   }
 
   // One markArea span per active flag, covering the consecutive weeks
@@ -578,7 +885,7 @@
     const caption = mileageCaption(weeks);
     const flagTypesPresent = hasFlags ? [...new Set(flags.map(f => f.type))] : [];
 
-    document.getElementById('root').insertAdjacentHTML('beforeend', `
+    rootEl().insertAdjacentHTML('beforeend', `
       <section id="section-chart">
         <h2>Weekly mileage</h2>
         <p class="desc">Bars are actual synced miles${hasBands ? ', colored by adherence band' : ''} · dashed line is the planned weekly target · current week is still in progress${hasFlags ? ' · shaded span marks a flagged pattern' : ''}</p>
@@ -606,7 +913,12 @@
           : { color: base, borderRadius: [2, 2, 0, 0] },
       };
     });
-    const lineData = weeks.map(w => [w.week_start, w.target_miles]);
+    // Range weeks plot at the midpoint of [lo, hi]; unspecified weeks (both
+    // NULL) leave a gap in the dashed line, same as any week with no target.
+    const lineData = weeks.map(w => [
+      w.week_start,
+      w.target_miles == null ? null : w.target_miles_hi != null ? (w.target_miles + w.target_miles_hi) / 2 : w.target_miles,
+    ]);
     const markArea = hasFlags ? { silent: true, data: flagMarkAreas(flags) } : undefined;
 
     const chart = echarts.init(document.getElementById('chart-weekly'));
@@ -628,7 +940,7 @@
           const bandLine = band ? `<br>${BAND_LABEL[band]}` : '';
           return `<div style="font-weight:600;margin-bottom:2px;color:${theme.text}">${shortDate(w.week_start)}${tag}</div>
             Actual: ${w.actual_miles.toFixed(1)} mi<br>
-            Target: ${w.target_miles.toFixed(1)} mi · ${w.phase}${bandLine}`;
+            Target: ${targetMilesLabel(w)} mi · ${w.phase}${bandLine}`;
         },
       },
       xAxis: {
@@ -695,12 +1007,16 @@
 
   function plannedSlot(day) {
     if (!day) return '';
+    const glyph = day.terrain === 'trail' ? TRAIL_GLYPH : '';
     if (day.slot === 'rest' && !day.title && day.target_miles == null) {
-      return `<div class="plan-slot slot-rest">Rest</div>`;
+      return `<div class="plan-slot slot-rest">Rest${glyph}</div>`;
     }
     const label = day.title ? esc(day.title) : SLOT_LABEL[day.slot] ?? day.slot;
-    const miles = day.target_miles != null ? ` · ${day.target_miles.toFixed(1)}mi` : '';
-    return `<div class="plan-slot slot-${day.slot}" title="${esc(label)}${miles}">${label}${miles}</div>`;
+    const extras = [];
+    if (day.target_miles != null) extras.push(`${day.target_miles.toFixed(1)}mi`);
+    if (day.target_minutes != null) extras.push(fmtDuration(day.target_minutes));
+    const suffix = extras.length ? ` · ${extras.join(' · ')}` : '';
+    return `<div class="plan-slot slot-${day.slot}" title="${esc(label)}${suffix}">${label}${glyph}${suffix}</div>`;
   }
 
   function logMarker(entries) {
@@ -714,7 +1030,7 @@
     const runs = actualByDate.get(dateStr) ?? [];
     const logs = logByDate.get(dateStr) ?? [];
     const dayNum = Number(dateStr.slice(8, 10));
-    return `<div class="cal-day">
+    return `<div class="cal-day" data-plan-date="${dateStr}">
       ${logMarker(logs)}
       <div class="cal-daynum">${dayNum}</div>
       ${plannedSlot(day)}
@@ -734,7 +1050,8 @@
     return `<div class="${rowClass}">
       <div class="cal-leader">
         <div>${shortDate(week.week_start)}</div>
-        <div class="tile-sub">${week.phase} · ${week.actual_miles.toFixed(1)} of ${week.target_miles.toFixed(1)} mi</div>
+        <div class="tile-sub">${week.phase} · ${week.actual_miles.toFixed(1)} of ${targetMilesLabel(week)} mi</div>
+        ${week.note ? `<div class="cal-week-note" title="${esc(week.note)}">${esc(week.note)}</div>` : ''}
         ${bandChip(band)}
       </div>
       ${days.map(d => dayCell(d, dayByDate, actualByDate, logByDate)).join('')}
@@ -751,10 +1068,10 @@
     const weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const hasBands = bandByWeek && bandByWeek.size > 0;
 
-    document.getElementById('root').insertAdjacentHTML('beforeend', `
+    rootEl().insertAdjacentHTML('beforeend', `
       <section id="section-calendar">
         <h2>Calendar</h2>
-        <p class="desc">Dashed chip is the planned slot · filled pill is the synced run · dot marker is a plan_log note${hasBands ? ' · colored chip is the completed week’s adherence band' : ''} · current week highlighted</p>
+        <p class="desc">Dashed chip is the planned slot, colored by type · filled pill is the synced run · dot marker is a plan_log note · ▲ marks a trail day · click any day or week for detail${hasBands ? ' · colored chip is the completed week’s adherence band' : ''} · current week highlighted</p>
         <div class="cal">
           <div class="cal-header">
             <div class="cal-hcell"></div>
@@ -767,6 +1084,8 @@
           <span><span class="cal-dot" style="background:var(--series-8)"></span>Workout</span>
           <span><span class="cal-dot" style="background:var(--series-1)"></span>Long run</span>
           <span><span class="cal-dot" style="background:var(--good)"></span>Race</span>
+          <span><span class="cal-dot" style="background:var(--series-5)"></span>Strength</span>
+          <span>▲ Trail</span>
           <span><span class="cal-log-marker" style="position:static;display:inline-block;margin-right:0.3125rem"></span>Log note</span>
         </div>
       </section>`);
@@ -781,7 +1100,7 @@
   function renderFlags(adherence) {
     if (!adherence || !adherence.flags || !adherence.flags.length) return;
 
-    document.getElementById('root').insertAdjacentHTML('beforeend', `
+    rootEl().insertAdjacentHTML('beforeend', `
       <section id="section-flags">
         <h2>Flags</h2>
         <p class="desc">Patterns only — 2+ consecutive completed weeks, never a single day or week</p>
@@ -808,7 +1127,7 @@
     if (!progression || !progression.weeks.length) return;
     const { weeks, easy, captions } = progression;
 
-    document.getElementById('root').insertAdjacentHTML('beforeend', `
+    rootEl().insertAdjacentHTML('beforeend', `
       <section id="section-progression-easy">
         <h2>Easy HR/pace progression</h2>
         <p class="desc">Distance-weighted average over each week's easy runs · gaps are weeks with no easy run synced · hover for average apparent temperature</p>
@@ -900,7 +1219,7 @@
     if (!progression || !progression.weeks.length) return;
     const { weeks, workouts, checkpoints, captions } = progression;
 
-    document.getElementById('root').insertAdjacentHTML('beforeend', `
+    rootEl().insertAdjacentHTML('beforeend', `
       <section id="section-progression-workouts">
         <h2>Workout pace progression</h2>
         <p class="desc">Each dot is one synced workout's work-lap pace · shaded band is its frozen target range · dashed line is monthly 5K-pace fitness context</p>
@@ -1088,7 +1407,7 @@
     // Newest first for display; each item (but the first/original) can expand
     // a diff against the version immediately before it.
     const ordered = [...versions].reverse();
-    document.getElementById('root').insertAdjacentHTML('beforeend', `
+    rootEl().insertAdjacentHTML('beforeend', `
       <section id="section-versions">
         <h2>Version history</h2>
         <p class="desc">Every revision is a full snapshot · click a version with a note to see which weeks changed</p>
@@ -1105,6 +1424,170 @@
         toggleDiff(panel, Number(prevId), Number(head.dataset.versionId));
       });
     });
+  }
+
+  // -----------------------------------------------------------------------
+  // Today view — session card, week-at-a-glance chips, and the two momentum
+  // reads (see plan_api.py's _today_blocks for how week_so_far/vs_last_week
+  // are computed: both pro-rate/cut off by planned days and the sync cutoff
+  // server-side, so this rendering layer only formats what's already there).
+  // -----------------------------------------------------------------------
+
+  function raceCountdownHTML(data) {
+    const { plan, today } = data;
+    const days = Math.round((new Date(plan.race_date + 'T00:00:00') - new Date(today.date + 'T00:00:00')) / 86400000);
+    if (days <= 0) return `<div class="race-countdown">${esc(plan.title)} · ${shortDate(plan.race_date)}</div>`;
+    return `<div class="race-countdown"><span class="race-countdown-num">${days}</span> day${days === 1 ? '' : 's'} to ${esc(plan.title)} <span class="stat-sub">${shortDate(plan.race_date)}</span></div>`;
+  }
+
+  function freshnessLine(data) {
+    return data.synced_through ? `<p class="freshness-note">Synced through ${shortDate(data.synced_through)}.</p>` : '';
+  }
+
+  function todaySessionHTML(data) {
+    const { today, plan } = data;
+    if (!today || !today.week_start) {
+      return `<div class="today-card"><p class="desc" style="margin:0">Outside the plan window.</p></div>`;
+    }
+    const day = today.day;
+    const parts = [];
+    if (today.is_race_day) {
+      parts.push(`<div class="today-race">Race day — ${esc(plan.title)}.</div>`);
+      if (day && day.note) parts.push(`<p class="today-note">${esc(day.note)}</p>`);
+    } else {
+      if (today.is_race_week) parts.push(`<div class="today-raceweek">Race week — ${esc(plan.title)} is ${shortDate(plan.race_date)}.</div>`);
+      if (!day || day.slot === 'rest') {
+        parts.push(`<div class="today-rest">Rest day.</div>`);
+        if (day && day.note) parts.push(`<p class="today-note">${esc(day.note)}</p>`);
+      } else {
+        const glyph = day.terrain === 'trail' ? TRAIL_GLYPH : '';
+        const label = day.title ? esc(day.title) : (SLOT_LABEL[day.slot] ?? day.slot);
+        parts.push(`<div class="today-slot" style="color:${SLOT_COLOR[day.slot] ?? 'var(--text)'}">${esc(SLOT_LABEL[day.slot] ?? day.slot)}</div>`);
+        parts.push(`<div class="today-title">${label}${glyph}</div>`);
+        const lines = describeDayTarget(day);
+        if (lines.length) parts.push(`<div class="today-targets">${lines.map(l => `<div>${esc(l)}</div>`).join('')}</div>`);
+        if (day.note) parts.push(`<p class="today-note">${esc(day.note)}</p>`);
+      }
+    }
+    return `<div class="today-card" data-plan-date="${today.date}">${parts.join('')}</div>`;
+  }
+
+  function dayChip(dateStr, dayByDate, todayStr) {
+    const day = dayByDate.get(dateStr) ?? null;
+    const slot = day ? day.slot : 'rest';
+    const color = SLOT_COLOR[slot] ?? 'var(--muted)';
+    const state = dateStr < todayStr ? 'done' : dateStr === todayStr ? 'today' : 'upcoming';
+    const glyph = day && day.terrain === 'trail' ? TRAIL_GLYPH : '';
+    const label = day ? (SLOT_LABEL[day.slot] ?? day.slot) : 'Rest';
+    const wd = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+    const num = Number(dateStr.slice(8, 10));
+    return `<div class="day-chip ${state}" style="--chip-color:${color}" data-plan-date="${dateStr}" title="${esc(label)}${glyph}">
+      <div class="day-chip-wd">${wd}</div>
+      <div class="day-chip-num">${num}</div>
+      <div class="day-chip-slot">${esc(label)}${glyph}</div>
+    </div>`;
+  }
+
+  function weekGlanceHTML(data) {
+    const { today, week_so_far } = data;
+    if (!today || !today.week_start) return '';
+    const dayByDate = PLAN_DATA.dayByDate;
+    const days = Array.from({ length: 7 }, (_, i) => addDays(today.week_start, i));
+    const chips = days.map(d => dayChip(d, dayByDate, today.date)).join('');
+    const ws = week_so_far;
+    return `
+      <div class="day-chip-row">${chips}</div>
+      ${ws ? `<p class="week-glance-sub">${esc(ws.phase)} phase${ws.note ? ' · ' + esc(ws.note) : ''} · ${ws.actual_miles_so_far.toFixed(1)} of ${esc(targetMilesLabel(ws))} mi so far</p>` : ''}`;
+  }
+
+  // Expected-by-now marker — a single ratio against a limit (a meter, not a
+  // bar chart): one accent fill, a lighter band for a range week's [lo, hi],
+  // and a plain neutral tick for the pro-rated expectation. No color codes
+  // ahead/behind — the numbers next to it carry that, not the marker.
+  function meterHTML(ws) {
+    if (!ws || ws.target_miles == null) return '';
+    const hi = ws.target_miles_hi ?? ws.target_miles;
+    const scaleMax = Math.max(hi, ws.actual_miles_so_far, ws.expected_miles_by_now ?? 0, 1) * 1.05;
+    const pct = v => Math.max(0, Math.min(100, (v / scaleMax) * 100));
+    const rangeBand = ws.target_miles_hi != null
+      ? `<div class="meter-range" style="left:${pct(ws.target_miles)}%;width:${(pct(ws.target_miles_hi) - pct(ws.target_miles)).toFixed(2)}%"></div>` : '';
+    const mark = ws.expected_miles_by_now != null
+      ? `<div class="meter-mark" style="left:${pct(ws.expected_miles_by_now)}%" title="usually ~${ws.expected_miles_by_now.toFixed(1)} mi by now"></div>` : '';
+    return `<div class="meter">${rangeBand}<div class="meter-fill" style="width:${pct(ws.actual_miles_so_far)}%"></div>${mark}</div>`;
+  }
+
+  function howsWeekGoingHTML(data) {
+    const ws = data.week_so_far;
+    if (!ws) return `<p class="desc">Outside the plan window.</p>`;
+    if (!ws.week_started) return `<p class="desc">Sync hasn't reached this week yet.</p>`;
+    const shape = remainingShape(ws.remaining_days);
+    const headline = ws.target_miles == null
+      ? `${ws.actual_workouts_so_far} of ${ws.target_workouts} workouts so far`
+      : `${ws.actual_miles_so_far.toFixed(1)} of ${targetMilesLabel(ws)} mi so far`;
+    return `
+      <div class="momentum-headline">${esc(headline)}</div>
+      <p class="momentum-sub">${esc(shape)}</p>
+      ${meterHTML(ws)}`;
+  }
+
+  // A tiny paired-bar SVG, day by day — lighter than an ECharts instance for
+  // ≤7 data points. Two bars per elapsed day (last week muted, this week
+  // accent), a plain 2-series comparison, not a judgment encoding.
+  function pairedBarSVG(days) {
+    if (!days.length) return '';
+    const barW = 8, gap = 3, groupGap = 7, H = 28;
+    const maxVal = Math.max(0.1, ...days.flatMap(d => [d.miles, d.last_week_miles]));
+    const groupW = barW * 2 + gap;
+    const width = days.length * groupW + (days.length - 1) * groupGap;
+    let x = 0;
+    const bars = days.map(d => {
+      const hThis = (d.miles / maxVal) * H;
+      const hLast = (d.last_week_miles / maxVal) * H;
+      const svg = `
+        <rect x="${x}" y="${(H - hLast).toFixed(1)}" width="${barW}" height="${Math.max(0, hLast).toFixed(1)}" rx="1" fill="var(--muted)" fill-opacity="0.55"><title>${shortDate(d.last_week_date)}: ${d.last_week_miles.toFixed(1)} mi</title></rect>
+        <rect x="${x + barW + gap}" y="${(H - hThis).toFixed(1)}" width="${barW}" height="${Math.max(0, hThis).toFixed(1)}" rx="1" fill="var(--accent)"><title>${shortDate(d.date)}: ${d.miles.toFixed(1)} mi</title></rect>`;
+      x += groupW + groupGap;
+      return svg;
+    }).join('');
+    return `<svg width="${width}" height="${H}" viewBox="0 0 ${width} ${H}">${bars}</svg>`;
+  }
+
+  function vsLastWeekHTML(data) {
+    const vw = data.vs_last_week;
+    if (!vw) return `<p class="desc">Not enough synced data this week yet to compare.</p>`;
+    const sign = vw.delta_miles >= 0 ? '+' : '';
+    return `
+      <div class="momentum-headline">${sign}${vw.delta_miles.toFixed(1)} mi vs last week here</div>
+      <div class="paired-bar-wrap">${pairedBarSVG(vw.days)}</div>
+      <div class="chart-legend">
+        <span class="legend-swatch"><span class="legend-box" style="background:var(--accent)"></span>This week</span>
+        <span class="legend-swatch"><span class="legend-box" style="background:var(--muted);opacity:0.55"></span>Last week</span>
+      </div>`;
+  }
+
+  function renderToday(data) {
+    const target = document.getElementById('tab-today');
+    if (!target) return;
+    target.innerHTML = `
+      <section id="section-today-session">
+        ${raceCountdownHTML(data)}
+        ${freshnessLine(data)}
+        <h2>Today</h2>
+        <p class="desc">${longDate(data.today.date)}</p>
+        ${todaySessionHTML(data)}
+      </section>
+      <section id="section-week-glance">
+        <h2>This week at a glance</h2>
+        ${weekGlanceHTML(data)}
+      </section>
+      <section id="section-hows-week-going">
+        <h2>How's the week going?</h2>
+        ${howsWeekGoingHTML(data)}
+      </section>
+      <section id="section-vs-last-week">
+        <h2>vs last week at this point</h2>
+        ${vsLastWeekHTML(data)}
+      </section>`;
   }
 
   // -----------------------------------------------------------------------
@@ -1159,8 +1642,22 @@
       renderEmpty();
       return;
     }
+    PLAN_DATA = {
+      dayByDate: new Map(data.days.map(d => [d.date, d])),
+      actualByDate: new Map(Object.entries(data.actual ?? {})),
+      logByDate: new Map(Object.entries(data.log ?? {})),
+    };
     const bandByWeek = new Map((adherence?.weeks ?? []).map(w => [w.week_start, w.band]));
     renderHeader(data);
+
+    // Today is default-visible for an active plan whose window covers today;
+    // a completed plan skips it entirely and renders the retrospective the
+    // way v1 always did, straight into #root, no tabs.
+    const showTabs = data.plan.status === 'active' && data.today != null;
+    if (showTabs) {
+      renderTabs();
+      renderToday(data);
+    }
     if (data.plan.status === 'completed') {
       renderRetrospective(data, retrospective);
     } else {
@@ -1172,6 +1669,13 @@
     renderProgressionEasy(progression);
     renderProgressionWorkouts(progression);
     renderVersions(versions);
+
+    if (showTabs) activatePlanTab((location.hash || '#today').replace('#', ''));
+
+    document.getElementById('root').addEventListener('click', e => {
+      const el = e.target.closest('[data-plan-date]');
+      if (el) openDayPopover(el.dataset.planDate);
+    });
   }).catch(err => {
     document.getElementById('subtitle').textContent = `Error: ${err.message}`;
   });

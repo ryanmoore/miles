@@ -101,7 +101,7 @@ Opens a local web interface at `http://localhost:8000` with six pages:
 - **Compare** — put up to four builds (same distance bucket) side by side, chart and stat table
 - **Training** — training periods, weekly volume with race markers, and a fitness-trend chart with evidence drill-down
 - **Years** — year-by-year volume comparison
-- **Plan** — the active training plan vs reality: planned-vs-actual weekly chart with adherence bands, weekly calendar, progression charts, version history; becomes a race retrospective once the goal race is run. Plans are drafted in conversation via the `/miles-plan` skill
+- **Plan** — the active training plan vs reality. A **Today** view (today's session, the week at a glance, how the week is going, and a same-weekday comparison to last week) and an **Overall** view (planned-vs-actual weekly chart with adherence bands, color-coded weekly calendar with clickable day details, progression charts, version history); becomes a race retrospective once the goal race is run. Plans are drafted incrementally in conversation via the `/miles-plan` skill
 
 ## MCP tools
 
@@ -126,10 +126,15 @@ Opens a local web interface at `http://localhost:8000` with six pages:
 | `compare_workouts_by_build` | Cross-build comparison of a workout label's rep pace/HR |
 | `get_easy_hr_trend` | Monthly easy-run HR and pace — long-term aerobic fitness signal |
 | `get_activity_weather` | Hourly weather breakdown for one activity |
-| `get_training_plan` | The current training plan (or any version), with version history and diffs |
+| `get_training_plan` | The current training plan (or any version), version history, diffs, and this week's targets vs synced actuals |
 | `get_plan_adherence` | Week-by-week plan adherence bands and pattern flags |
-| `create_training_plan` | Write a new athlete-approved plan (used by the `/miles-plan` planner) |
-| `revise_training_plan` | Append a new plan version; past weeks are snapshotted, never rewritten |
+| `start_plan_draft` | Open a new mutable plan draft (used by the `/miles-plan` planner) |
+| `start_revision_draft` | Copy the active plan's current version into a new draft for revision |
+| `set_draft_weeks` / `set_draft_days` | Author or edit any subset of a draft incrementally |
+| `delete_draft_weeks` / `delete_draft_days` | Retract part of a draft |
+| `get_draft` | Draft state with a gap report and sanity warnings |
+| `commit_plan` | Freeze and commit the draft after athlete approval; past weeks snapshotted, never rewritten |
+| `discard_draft` | Throw a draft away |
 | `log_plan_adjustment` | Record day-level reality ("skipped Tue") without a version bump |
 | `abandon_plan` | Mark the active plan abandoned, with the reason logged |
 | `run_sql` | Ad-hoc read-only SQL against all tables, including derived columns |

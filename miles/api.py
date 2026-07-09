@@ -3,6 +3,8 @@ import sqlite3
 import click
 import subprocess as _subprocess
 import uvicorn
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal, cast
@@ -29,9 +31,25 @@ from .builds import Build, RaceRef, detect_builds
 from .derive import ensure_derived
 from .format import fmt_pace, fmt_time
 from .periods import Gap, Period, WeekAgg, is_active, zero_fill, detect_periods
+from .mcp_server import mcp as _mcp_server
 from .races import MARATHON_MAX_M, MARATHON_MIN_M, classify_race_distance, race_rows
 
-app = FastAPI(title="miles")
+# The MCP server, served over streamable HTTP by this same process at /mcp,
+# so a remote Claude Code session can reach the tools (and this instance's
+# DB) with `claude mcp add --transport http`. `miles-mcp` remains the stdio
+# entrypoint for local use. streamable_http_app() must be built before the
+# session manager exists; the transport rejects requests unless that manager
+# is running, hence the lifespan below.
+_mcp_app = _mcp_server.streamable_http_app()
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async with _mcp_server.session_manager.run():
+        yield
+
+
+app = FastAPI(title="miles", lifespan=_lifespan)
 
 _logger = logging.getLogger(__name__)
 _sync_proc: _subprocess.Popen[bytes] | None = None
@@ -1194,6 +1212,12 @@ app.include_router(distance_builds_router)
 app.include_router(fitness_api_router)
 app.include_router(plan_api_router)
 
+# Lift the MCP transport's exact-path /mcp route onto this app directly.
+# A nested app.mount() would either double the path (/mcp/mcp) or leave the
+# exact path reachable only via a trailing-slash redirect that not every
+# MCP client follows.
+app.router.routes.extend(_mcp_app.routes)
+
 app.mount("/workbooks", StaticFiles(directory=str(_WORKBOOKS)), name="workbooks")
 app.mount("/", StaticFiles(directory=str(_STATIC), html=True), name="static")
 
@@ -1203,4 +1227,8 @@ app.mount("/", StaticFiles(directory=str(_STATIC), html=True), name="static")
 @click.option("--port", default=8000, type=int, help="Port to bind to.")
 @click.option("--reload/--no-reload", default=True, help="Enable auto-reload on code changes.")
 def main(host: str, port: int, reload: bool) -> None:
-    uvicorn.run("miles.api:app", host=host, port=port, reload=reload)
+    # Watch only the package (code + static) — the default watches the whole
+    # project dir, and the reloader dies racing transient files that uv/pyright
+    # create under .venv.
+    reload_dirs = [str(Path(__file__).parent)] if reload else None
+    uvicorn.run("miles.api:app", host=host, port=port, reload=reload, reload_dirs=reload_dirs)

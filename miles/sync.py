@@ -233,6 +233,15 @@ def _run(conn: sqlite3.Connection, full: bool, extra: bool, extra_limit: int = 9
     summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "no changes"
     print(f"Derive done. {summary}")
 
+    # Stamp the moment this sync finished so readers (adherence, plan tools)
+    # can tell how fresh the synced data is without guessing from activities.
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('last_sync_at', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [datetime.now(timezone.utc).isoformat()],
+    )
+    conn.commit()
+
 
 @click.command()
 @click.option("--full", is_flag=True, help="Ignore last sync date and fetch everything.")

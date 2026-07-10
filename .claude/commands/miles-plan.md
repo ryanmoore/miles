@@ -68,10 +68,19 @@ was once said, wrongly, to an athlete who simply hadn't synced).
 1. **Intake, in conversation.** Goal race and why-now, days/week and time budget, what kind of
    running they actually enjoy, injury history — and anything the record shows that needs a
    human answer, surfaced as a question, never a conclusion ("training stopped abruptly
-   mid-build in March 2024 — injury, or life?"). Never treat a gap as a verdict.
+   mid-build in March 2024 — injury, or life?"). Never treat a gap as a verdict. And always
+   settle an explicit, agreed **start date** — never default silently to today. The plan can
+   begin today, be backdated into a block already underway (a mid-block import — see step 3), or
+   start on a future date; pin the exact date with the athlete before authoring, since every week
+   anchors to it.
 2. **Pull the descriptive record.** `get_fitness_estimate` (state confidence, relay any `note`),
    `get_race_history` / `get_build_snapshot` for past builds at this distance, `get_consistency_report`
-   and `get_training_periods` for peak weeks, ramp, and workout cadence.
+   and `get_training_periods` for peak weeks, ramp, and workout cadence. Read these for mid-build
+   signals before proposing a start date: an active current streak, a sustained recent ramp, or
+   steady recent volume means the athlete is likely already in a block. When they are, say so
+   plainly and quote it ("you're four weeks into a ramp — 28 → 31 → 35 → 38, synced through
+   Tuesday") and ask whether the plan should start today, backdate to where that block actually
+   began, or begin on a future date — don't assume today.
 3. **Propose a week-level skeleton in chat** — phases, target miles (a range, or deliberately
    left open), workout count per week, long-run progression, any strength or trail days — before
    writing anything, citing the record on every major number. A plan starting before today

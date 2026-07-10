@@ -65,8 +65,10 @@
       display: flex;
       align-items: baseline;
       justify-content: space-between;
-      margin-bottom: 1.5rem;
+      margin-bottom: 0.35rem;
     }
+
+    .subtitle { font-size: 0.8125rem; color: var(--muted); margin-bottom: 1.25rem; }
 
     h1 {
       font-size: 1.25rem;
@@ -122,6 +124,14 @@
     }
     .file-name:hover { color: var(--accent); }
 
+    .file-date {
+      font-size: 0.8125rem;
+      color: var(--muted);
+      white-space: nowrap;
+      margin-left: 1rem;
+      font-variant-numeric: tabular-nums;
+    }
+
     .empty-state {
       color: var(--muted);
       font-size: 0.9rem;
@@ -138,6 +148,7 @@
       <button id="upload-btn">+ Upload</button>
       <input type="file" id="file-input" accept=".html">
     </div>
+    <p class="subtitle">One-off analyses the fixed pages don't answer — bespoke pages written by Claude during analysis sessions</p>
     <div id="upload-status"></div>
     <ul class="file-list" id="file-list"></ul>
     <p class="empty-state" id="empty-state" style="display:none">No workbooks yet. Upload an HTML file to get started.</p>
@@ -172,13 +183,17 @@
         return;
       }
       emptyState.style.display = "none";
-      for (const name of files) {
+      for (const { name, title, uploaded } of files) {
         const li = document.createElement("li");
         const span = document.createElement("span");
         span.className = "file-name";
-        span.textContent = name;
-        span.addEventListener("click", () => openWorkbook(name));
+        span.textContent = title;
+        span.addEventListener("click", () => openWorkbook(name, title));
         li.appendChild(span);
+        const date = document.createElement("span");
+        date.className = "file-date";
+        date.textContent = uploaded.slice(0, 10);
+        li.appendChild(date);
         fileList.appendChild(li);
       }
     }
@@ -193,8 +208,8 @@
       } catch (_) {}
     }
 
-    function openWorkbook(name) {
-      viewerTitle.textContent = name;
+    function openWorkbook(name, title) {
+      viewerTitle.textContent = title || name;
       frame.style.height = "0px";
       frame.src = "/workbooks/" + encodeURIComponent(name);
       listView.style.display = "none";

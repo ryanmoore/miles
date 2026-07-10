@@ -264,9 +264,13 @@
   // Side-by-side table
   // -----------------------------------------------------------------------
 
+  // higherBetter: true/false marks the best cell; null means neither
+  // direction is better (e.g. paces where faster isn't the goal).
   function metricRow(label, values, higherBetter, formatter, boldAlways, titles) {
     const nonNull = values.filter(v => v != null);
-    const best = nonNull.length >= 2 ? (higherBetter ? Math.max(...nonNull) : Math.min(...nonNull)) : null;
+    const best = higherBetter != null && nonNull.length >= 2
+      ? (higherBetter ? Math.max(...nonNull) : Math.min(...nonNull))
+      : null;
     const cells = values.map((v, i) => {
       if (v == null) return `<td class="r dash">—</td>`;
       const isBest = best != null && v === best;
@@ -313,8 +317,8 @@
       paceClaimRow('LT / tempo', 'lt', cols),
       paceClaimRow('MP work', 'mp', cols),
       metricRow('Long runs', cols.map(c => c.m.build?.by_type?.long_run?.runs ?? null), true, v => String(v)),
-      metricRow('Long-run pace', cols.map(c => c.m.build?.by_type?.long_run?.avg_pace_min_per_mile ?? null), false, v => fmt.pace(v)),
-      metricRow('Easy HR', cols.map(c => c.m.build?.by_type?.easy?.avg_hr ?? null), false, v => String(Math.round(v))),
+      metricRow('Long-run pace', cols.map(c => c.m.build?.by_type?.long_run?.avg_pace_min_per_mile ?? null), null, v => fmt.pace(v)),
+      metricRow('Easy HR', cols.map(c => c.m.build?.by_type?.easy?.avg_hr ?? null), null, v => String(Math.round(v))),
     ];
     document.getElementById('tbody').innerHTML = rows.join('');
   }

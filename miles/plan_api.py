@@ -12,7 +12,7 @@ reports plain planned-vs-actual numbers, no judgment; /api/plan-adherence
 import json
 import sqlite3
 from datetime import date, timedelta
-from typing import cast
+from typing import cast, get_args
 
 from typing_extensions import TypedDict
 
@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException
 from . import db, plan, plan_adherence
 from .builds import Build, RaceRef, detect_builds
 from .derive import ensure_derived
+from .distance_builds import Bucket, get_distance_builds
 from .fitness import MILE_M, estimate_fitness
 from .format import fmt_pace, fmt_time
 from .periods import WeekAgg, detect_periods
@@ -1226,4 +1227,435 @@ def get_plan_retrospective() -> PlanRetrospectiveResponse | None:
         final_adherence=final_adherence,
         plan_ramp=plan_ramp,
         detected_build=detected_build,
+    )
+
+
+# --- readiness --------------------------------------------------------------
+#
+# "Race is in N weeks. Am I ready?" — the forward-looking twin of the
+# retrospective above, for an ACTIVE plan only (a completed plan renders the
+# retrospective in the same slot). Three evidence blocks: goal vs current
+# fitness (estimate_fitness + the plan window's monthly checkpoints), the
+# in-progress block vs a completed reference build at the same distance
+# (weeks-out aligned, both sides cut at the same point — never a partial
+# block vs a complete one), and session execution (matched workouts in their
+# frozen target band + longest run vs the plan's peak long-run target).
+
+
+# source_tier -> basis vocabulary: race-confirmed (tier 1, an actual raced
+# effort), workout-anchored (tier 2, work-lap paces), training-floor (tier 3,
+# training-pace envelope). Absolute per estimate, unlike the confidence word,
+# which also encodes recency.
+_READINESS_BASIS_BY_TIER: dict[int, str] = {1: "race-confirmed", 2: "workout-anchored", 3: "training-floor"}
+
+# fitness_checkpoints pace column per canonical race category. Only the four
+# distances estimate_fitness projects are tracked; a plan at any other
+# distance (50K, Other) gets no checkpoint mini-line and no predicted time —
+# the goal block degrades to nulls rather than borrowing a proxy distance.
+_CHECKPOINT_PACE_COL: dict[str, str] = {
+    "5K": "pace_5k", "10K": "pace_10k", "half": "pace_half", "marathon": "pace_marathon",
+}
+
+# Reference candidates with less window overlap than this against the elapsed
+# plan carry too little shared signal to compare cumulatively at all.
+_MIN_OVERLAP_WEEKS = 3
+
+# How many completed weeks back the session-execution window reaches.
+_SESSION_WINDOW_WEEKS = 3
+
+
+def _builds_bucket(bucket: str) -> Bucket | None:
+    """Case-insensitive match of a plan's distance_bucket against
+    distance_builds.py's Title Case Bucket vocabulary — same casing
+    reconciliation as _canonical_bucket above, pointed at the other
+    convention."""
+    target = bucket.strip().casefold()
+    for key in get_args(Bucket):
+        if key.casefold() == target:
+            return cast(Bucket, key)
+    return None
+
+
+class ReadinessCheckpoint(TypedDict):
+    month: str
+    pace_min_per_mile: float
+
+
+class ReadinessGoal(TypedDict):
+    """Goal vs current fitness at the plan's race distance. predicted_* /
+    basis / confidence are None when estimate_fitness tracks no prediction at
+    that distance (see _CHECKPOINT_PACE_COL) or no estimate is computable;
+    goal_* are None when the plan was authored without a goal time."""
+    goal_time_s: int | None
+    goal_pace_min_per_mile: float | None
+    predicted_time_s: float | None
+    predicted_pace_min_per_mile: float | None
+    basis: str | None
+    confidence: str | None
+    trend_s_per_mi: float | None  # last minus first in-window checkpoint, sec/mi (negative = faster); None below 2 checkpoints
+    checkpoints: list[ReadinessCheckpoint]  # in-window months with a tracked pace at the race distance
+
+
+class ReadinessWeekPoint(TypedDict):
+    offset: int  # weeks to race (0 = race week, negative = before), Monday-aligned
+    miles: float
+
+
+class ReadinessBlockStats(TypedDict):
+    """Cumulative stats over the shared comparison offsets [-W, -k] (see
+    get_plan_readiness) — identical window on both sides, weekly points dense
+    over that range (a synced week with no runs is a real 0.0, never a gap)."""
+    avg_mpw: float
+    long_runs: int
+    peak_week: float | None  # None when no week in the range has any runs
+    weekly: list[ReadinessWeekPoint]
+
+
+class ReadinessReference(ReadinessBlockStats):
+    overlap_weeks: int
+
+
+class ReadinessCandidate(TypedDict):
+    name: str | None
+    race_date: str
+    result_s: int | None
+    is_pr: bool  # the default reference — exactly one candidate carries it
+
+
+class ReadinessBuilds(TypedDict):
+    bucket: str  # distance_builds Bucket casing — the vocabulary reference-choice persistence keys on
+    candidates: list[ReadinessCandidate]
+    through_weeks_out: int  # k — both sides cut at this weeks-out point
+    window_weeks: int  # W = min(plan length, bucket build-window length)
+    current: ReadinessBlockStats
+    by_date: dict[str, ReadinessReference]  # every candidate's aligned stats, so flipping needs no refetch
+
+
+class ReadinessSessionPoint(TypedDict):
+    date: str
+    pace_min_per_mile: float
+    pace_lo: float  # frozen target band from the version governing that week
+    pace_hi: float
+    in_band: bool
+
+
+class ReadinessSessions(TypedDict):
+    workouts_in_band: int
+    workouts_total: int
+    window_weeks: int  # completed weeks actually covered (< _SESSION_WINDOW_WEEKS early in a plan)
+    points: list[ReadinessSessionPoint]
+    longest_run_mi: float | None  # longest single run over [plan start, sync cutoff]
+    plan_peak_long_run_miles: float | None  # max weekly long-run mileage target across the plan
+
+
+class PlanReadinessResponse(TypedDict):
+    weeks_to_race: int
+    race_date: str
+    goal: ReadinessGoal
+    builds: ReadinessBuilds | None  # None when no comparable reference exists (first race at the distance, or too little overlap yet)
+    sessions: ReadinessSessions | None  # None until the plan has a completed sync-covered week
+
+
+def _weekly_offset_miles(
+    conn: sqlite3.Connection, anchor_monday: date, weeks_before: int, start: str, end: str
+) -> dict[int, float]:
+    """Weekly miles keyed by week offset from race day (0 = race week),
+    over [start, end] inclusive. anchor_monday must be the race-week Monday
+    minus weeks_before weeks, so all julianday differences are positive and
+    CAST truncates toward zero correctly — the app-wide offset convention
+    (see distance_builds.py). Only weeks with at least one run appear."""
+    tc, tp = _type_clause()
+    rows = conn.execute(f"""
+        SELECT
+            CAST((julianday(DATE(start_date)) - julianday(?)) / 7.0 AS INTEGER) - {weeks_before} AS week_offset,
+            ROUND(SUM(distance_m) / 1609.34, 2) AS miles
+        FROM activities
+        WHERE {tc} AND DATE(start_date) >= ? AND DATE(start_date) <= ?
+        GROUP BY week_offset
+    """, [anchor_monday.isoformat()] + tp + [start, end]).fetchall()
+    return {int(r["week_offset"]): float(r["miles"] or 0.0) for r in rows}
+
+
+def _long_run_count(conn: sqlite3.Connection, start: str, end: str) -> int:
+    """Count of effective-type long runs over [start, end] inclusive."""
+    effective = db.effective_run_type_sql()
+    tc, tp = _type_clause()
+    row = conn.execute(f"""
+        SELECT COUNT(*) AS n FROM activities
+        WHERE {tc} AND {effective} = 'long_run'
+          AND DATE(start_date) >= ? AND DATE(start_date) <= ?
+    """, tp + [start, end]).fetchone()
+    return int(row["n"] or 0)
+
+
+def _block_stats(
+    conn: sqlite3.Connection, race_monday: date, weeks_before: int, window_w: int, k: int, end: str
+) -> ReadinessBlockStats:
+    """One side of the build comparison: cumulative stats over offsets
+    [-window_w, -k], dates [race_monday - window_w weeks, end]. The average
+    divides by the full offset count, so a zero-mileage week inside the range
+    drags it down the way it should — the range is entirely sync-covered by
+    construction, so absence there means no running, not no data."""
+    anchor = race_monday - timedelta(weeks=weeks_before)
+    start = (race_monday - timedelta(weeks=window_w)).isoformat()
+    by_offset = _weekly_offset_miles(conn, anchor, weeks_before, start, end)
+    offsets = range(-window_w, -k + 1)
+    total = sum(by_offset.get(o, 0.0) for o in offsets)
+    observed = [by_offset[o] for o in offsets if o in by_offset]
+    return ReadinessBlockStats(
+        avg_mpw=round(total / len(offsets), 1) if len(offsets) else 0.0,
+        long_runs=_long_run_count(conn, start, end),
+        peak_week=max(observed) if observed else None,
+        weekly=[ReadinessWeekPoint(offset=o, miles=by_offset.get(o, 0.0)) for o in offsets],
+    )
+
+
+def _race_efforts(conn: sqlite3.Connection) -> dict[str, str | None]:
+    """race_effort keyed by race date, for splitting raced from casual
+    candidates — get_distance_builds' rows don't carry the effort column."""
+    effective = db.effective_run_type_sql()
+    tc, tp = _type_clause()
+    rows = conn.execute(
+        f"SELECT DATE(start_date) AS date, race_effort FROM activities WHERE {tc} AND {effective} = 'race'",
+        tp,
+    ).fetchall()
+    return {r["date"]: r["race_effort"] for r in rows}
+
+
+def _readiness_goal(
+    conn: sqlite3.Connection, active: PlanRow, weeks_in: list[PlanWeekRow], today: date
+) -> ReadinessGoal:
+    canonical = _canonical_bucket(active["distance_bucket"])
+    nominal_mi = NOMINAL_METERS[canonical] / MILE_M if canonical is not None else None
+
+    goal_time_s = active["goal_time_s"]
+    goal_pace = (
+        round((goal_time_s / 60.0) / nominal_mi, 2)
+        if goal_time_s is not None and nominal_mi is not None else None
+    )
+
+    predicted_pace: float | None = None
+    predicted_time_s: float | None = None
+    basis: str | None = None
+    confidence: str | None = None
+    est = estimate_fitness(conn, today)
+    if est is not None and canonical is not None and nominal_mi is not None:
+        pace = est["predicted"].get(canonical)
+        if pace is not None:
+            predicted_pace = pace
+            predicted_time_s = round(pace * nominal_mi * 60.0, 1)
+            confidence = est["confidence"]
+            if est["sources"]:
+                basis = _READINESS_BASIS_BY_TIER.get(est["sources"][0]["tier"])
+
+    checkpoints: list[ReadinessCheckpoint] = []
+    col = _CHECKPOINT_PACE_COL.get(canonical) if canonical is not None else None
+    if col is not None and weeks_in:
+        rows = conn.execute(
+            f"SELECT month, {col} AS pace FROM fitness_checkpoints "
+            f"WHERE month >= ? AND month <= ? AND {col} IS NOT NULL ORDER BY month",
+            [weeks_in[0]["week_start"][:7], weeks_in[-1]["week_start"][:7]],
+        ).fetchall()
+        checkpoints = [ReadinessCheckpoint(month=r["month"], pace_min_per_mile=float(r["pace"])) for r in rows]
+
+    trend_s_per_mi = (
+        round((checkpoints[-1]["pace_min_per_mile"] - checkpoints[0]["pace_min_per_mile"]) * 60.0, 1)
+        if len(checkpoints) >= 2 else None
+    )
+
+    return ReadinessGoal(
+        goal_time_s=goal_time_s,
+        goal_pace_min_per_mile=goal_pace,
+        predicted_time_s=predicted_time_s,
+        predicted_pace_min_per_mile=predicted_pace,
+        basis=basis,
+        confidence=confidence,
+        trend_s_per_mi=trend_s_per_mi,
+        checkpoints=checkpoints,
+    )
+
+
+def _readiness_builds(
+    conn: sqlite3.Connection,
+    active: PlanRow,
+    plan_weeks_before: int,
+    race_monday: date,
+    k: int,
+    cutoff: date,
+) -> ReadinessBuilds | None:
+    """The in-progress block vs completed builds at the same distance, aligned
+    by weeks-out. Candidates: the builds behind the 3 fastest raced efforts
+    plus the most recent completed one, deduped; the fastest raced (the PR
+    build) is the default. Both sides' cumulative stats cover the same
+    offsets [-W, -k] — the current block never gets judged partial-vs-whole,
+    and a reference never gets credit for weeks the plan hasn't reached.
+    None when nothing comparable exists: no completed race at the distance,
+    or fewer than _MIN_OVERLAP_WEEKS shared weeks so far (the bucket's build
+    window is fixed, so overlap is uniform across candidates)."""
+    bucket = _builds_bucket(active["distance_bucket"])
+    if bucket is None:
+        return None
+    rows = get_distance_builds(bucket)
+    if not rows:
+        return None
+
+    ref_weeks = rows[0]["build_weeks"]
+    window_w = min(plan_weeks_before, ref_weeks)
+    overlap = window_w - k + 1
+    if overlap < _MIN_OVERLAP_WEEKS:
+        return None
+
+    efforts = _race_efforts(conn)
+    raced = sorted(
+        (r for r in rows if efforts.get(r["date"]) == "raced" and r["finish_time_s"] is not None),
+        key=lambda r: cast(int, r["finish_time_s"]),
+    )
+    picks = raced[:3] + [rows[-1]]  # rows are date-ascending, so rows[-1] is the most recent
+    seen: set[str] = set()
+    deduped = [r for r in picks if not (r["date"] in seen or seen.add(r["date"]))]
+    pr_date = raced[0]["date"] if raced else deduped[0]["date"]
+
+    by_date: dict[str, ReadinessReference] = {}
+    candidates: list[ReadinessCandidate] = []
+    for r in deduped:
+        ref_race_dt = date.fromisoformat(r["date"])
+        ref_monday = ref_race_dt - timedelta(days=ref_race_dt.weekday())
+        ref_end = (ref_monday - timedelta(weeks=k) + timedelta(days=6)).isoformat()
+        stats = _block_stats(conn, ref_monday, r["build_weeks"], window_w, k, ref_end)
+        by_date[r["date"]] = ReadinessReference(**stats, overlap_weeks=overlap)
+        candidates.append(ReadinessCandidate(
+            name=r["name"], race_date=r["date"], result_s=r["finish_time_s"], is_pr=r["date"] == pr_date,
+        ))
+
+    current = _block_stats(conn, race_monday, plan_weeks_before, window_w, k, cutoff.isoformat())
+
+    return ReadinessBuilds(
+        bucket=bucket,
+        candidates=candidates,
+        through_weeks_out=k,
+        window_weeks=window_w,
+        current=current,
+        by_date=by_date,
+    )
+
+
+def _readiness_sessions(
+    conn: sqlite3.Connection,
+    active: PlanRow,
+    weeks_in: list[PlanWeekRow],
+    plan_start: date,
+    cutoff: date,
+) -> ReadinessSessions | None:
+    """Session execution over the last _SESSION_WINDOW_WEEKS completed
+    (sync-covered) weeks: synced workouts matched to their planned slots with
+    plan_adherence's matching — so this and the adherence score never
+    disagree about which run was the workout — each judged against the frozen
+    band from the version that governed its week, with the same
+    PACE_TOLERANCE slack the weekly band scoring applies. Trail slots are
+    matched but never judged (grade voids road pace bands), same as
+    adherence. None until the plan has a completed week."""
+    completed = [
+        w for w in weeks_in
+        if date.fromisoformat(w["week_start"]) + timedelta(days=6) < cutoff
+    ]
+    if not completed:
+        return None
+    window = completed[-_SESSION_WINDOW_WEEKS:]
+
+    points: list[ReadinessSessionPoint] = []
+    for w in window:
+        week_start = date.fromisoformat(w["week_start"])
+        week_end = week_start + timedelta(days=6)
+        governing = plan.current_version_for_week(conn, active["plan_id"], week_start)
+        if governing is None:
+            continue
+        day_rows = [d for d in governing["days"] if w["week_start"] <= d["date"] <= week_end.isoformat()]
+        slots = plan_adherence._planned_workout_slots(day_rows)
+        actuals = plan_adherence._gather_actuals(conn, week_start, week_end)
+        for slot, pace in plan_adherence._match_workouts(slots, actuals["workout_paces"]):
+            if slot["terrain"] == "trail":
+                continue
+            lo, hi, actual = slot["pace_lo"], slot["pace_hi"], pace["pace_min_per_mile"]
+            if lo is None or hi is None or actual is None:
+                continue
+            points.append(ReadinessSessionPoint(
+                date=pace["date"],
+                pace_min_per_mile=round(actual, 2),
+                pace_lo=lo,
+                pace_hi=hi,
+                in_band=plan_adherence._pace_delta_s(actual, lo, hi) == 0.0,
+            ))
+    points.sort(key=lambda p: p["date"])
+
+    tc, tp = _type_clause()
+    longest = conn.execute(
+        f"SELECT MAX(distance_m) AS d FROM activities WHERE {tc} AND DATE(start_date) >= ? AND DATE(start_date) <= ?",
+        tp + [plan_start.isoformat(), cutoff.isoformat()],
+    ).fetchone()
+    longest_run_mi = round(float(longest["d"]) / MILE_M, 1) if longest is not None and longest["d"] else None
+
+    lr_targets = [w["target_long_run_miles"] for w in weeks_in if w["target_long_run_miles"] is not None]
+
+    return ReadinessSessions(
+        workouts_in_band=sum(1 for p in points if p["in_band"]),
+        workouts_total=len(points),
+        window_weeks=len(window),
+        points=points,
+        longest_run_mi=longest_run_mi,
+        plan_peak_long_run_miles=round(max(lr_targets), 1) if lr_targets else None,
+    )
+
+
+@router.get("/api/plan-readiness")
+def get_plan_readiness() -> PlanReadinessResponse | None:
+    """
+    "Am I ready?" evidence for the ACTIVE plan — null for a completed plan
+    (the retrospective owns that slot) or when no plan exists.
+
+    Alignment is by weeks-out, never calendar: with k = weeks to race and
+    W = min(plan length, the bucket's build-window length), both the current
+    block and every reference build report cumulative stats over the same
+    Monday-aligned offsets [-W, -k]. k is computed at the sync cutoff
+    (min(today, last_sync_at's date)) rather than the calendar today, so a
+    stale sync narrows the compared range instead of reading absent weeks as
+    zeros — the same clamp _today_blocks applies at week scale.
+
+    All candidates' aligned stats ship in one payload (builds.by_date) so
+    flipping the reference is purely client-side.
+    """
+    conn = _conn()
+    active = plan.get_current_or_recent_plan(conn)
+    if active is None or active["status"] != "active":
+        return None
+
+    latest = conn.execute(
+        "SELECT version_id FROM plan_versions WHERE plan_id = ? ORDER BY version_n DESC LIMIT 1",
+        [active["plan_id"]],
+    ).fetchone()
+    bundle = plan.get_version(conn, int(latest["version_id"])) if latest is not None else None
+    weeks_in = bundle["weeks"] if bundle is not None else []
+    if not weeks_in:
+        return None
+
+    today = date.today()
+    last_sync_at = db.get_last_sync_at(conn)
+    sync_date = date.fromisoformat(last_sync_at[:10]) if last_sync_at else today
+    cutoff = min(today, sync_date)
+
+    race_dt = date.fromisoformat(active["race_date"])
+    race_monday = race_dt - timedelta(days=race_dt.weekday())
+    current_monday = today - timedelta(days=today.weekday())
+    weeks_to_race = max(0, (race_monday - current_monday).days // 7)
+
+    plan_start = date.fromisoformat(weeks_in[0]["week_start"])
+    plan_weeks_before = max(0, (race_monday - plan_start).days // 7)
+    cutoff_monday = cutoff - timedelta(days=cutoff.weekday())
+    k = max(0, (race_monday - cutoff_monday).days // 7)
+
+    return PlanReadinessResponse(
+        weeks_to_race=weeks_to_race,
+        race_date=active["race_date"],
+        goal=_readiness_goal(conn, active, weeks_in, today),
+        builds=_readiness_builds(conn, active, plan_weeks_before, race_monday, k, cutoff),
+        sessions=_readiness_sessions(conn, active, weeks_in, plan_start, cutoff),
     )

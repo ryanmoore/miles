@@ -511,12 +511,51 @@
     .plan-view .diff-tag.changed { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
     .plan-view .diff-fields { color: var(--muted); }
 
-    /* Retrospective — replaces the forward stat strip once a plan
-       completes. The plan-vs-detected-build comparison reuses the site's
-       bare <table>/.scroll styling from theme.css, not a bespoke component. */
+    /* Retrospective — occupies the Readiness slot once a plan completes
+       (the same panel pointed backward: headline stats + evidence). The
+       plan-vs-detected-build comparison reuses the site's bare
+       <table>/.scroll styling from theme.css, not a bespoke component. */
     .plan-view .retro-note { font-size: 0.8125rem; color: var(--muted); margin-bottom: 0.75rem; }
     .plan-view .retro-link { color: inherit; text-decoration: none; }
     .plan-view .retro-link:hover { text-decoration: underline; }
+
+    /* Readiness evidence rows — same anatomy as the retrospective (headline
+       strip above, then compact evidence), each row a small figure + one
+       sentence + a link deeper. Figures are fixed-size sparkline panels;
+       detail lives in the tooltip, not on 72px of chart. */
+    .plan-view .readiness-rows {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+    }
+    .plan-view .readiness-row { padding: 0.75rem 1.125rem; border-top: 1px solid var(--gridline); }
+    .plan-view .readiness-row:first-child { border-top: none; }
+    .plan-view .readiness-row .chip-row { margin-bottom: 0.625rem; }
+    .plan-view .readiness-row-body { display: flex; gap: 1.25rem; align-items: center; flex-wrap: wrap; }
+    .plan-view .readiness-fig { width: 260px; height: 72px; flex-shrink: 0; }
+    .plan-view .readiness-fig > div { width: 100%; height: 100%; }
+    .plan-view .readiness-text { flex: 1; min-width: 240px; }
+    .plan-view .readiness-text p {
+      font-size: 0.8125rem;
+      color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+      line-height: 1.5;
+      margin-top: 0.25rem;
+    }
+    .plan-view .readiness-text .chart-legend { margin-top: 0.375rem; }
+    .plan-view .readiness-link { color: var(--accent); text-decoration: none; white-space: nowrap; }
+    .plan-view .readiness-link:hover { text-decoration: underline; }
+
+    /* Latest-version annotation on the Version history header — the strip
+       stat this page used to carry, demoted to context. */
+    .plan-view .version-annot {
+      font-size: 0.6875rem;
+      font-weight: 400;
+      color: var(--muted);
+      margin-left: 0.625rem;
+      letter-spacing: normal;
+    }
   </style>
 </head>
 <body>
@@ -806,67 +845,351 @@
   }
 
   // -----------------------------------------------------------------------
-  // Stat strip
+  // Readiness — "race is in N weeks, am I ready?", the first section of the
+  // Overall tab for an ACTIVE plan (a completed plan renders the
+  // retrospective in this slot instead — the same panel pointed backward).
+  // Headline strip + three evidence rows off /api/plan-readiness; execution
+  // reads the already-fetched /api/plan-adherence. Everything build-related
+  // is aligned by weeks-out, both sides cut at the same point — see
+  // plan_api.get_plan_readiness for the alignment rules.
   // -----------------------------------------------------------------------
 
-  function renderStatStrip(data, adherence) {
-    const { plan, version, weeks_to_race, this_week, goal } = data;
+  // Sub-hour results read as "M:SS", longer as fmt.timeShort's "h:mm" —
+  // compare.html's chip-result convention.
+  function fmtResult(s) {
+    if (s == null) return '';
+    if (s < 3600) {
+      const m = Math.floor(s / 60);
+      const sec = String(Math.round(s % 60)).padStart(2, '0');
+      return `${m}:${sec}`;
+    }
+    return fmt.timeShort(s);
+  }
+
+  // Plan-window fitness trend as a glyph: pace falling (negative sec/mi) is
+  // improving. Deltas under 2 s/mi read as flat — smaller than anything the
+  // monthly checkpoints can honestly resolve.
+  function trendGlyph(t) {
+    if (t == null) return '';
+    if (Math.abs(t) < 2) return '—';
+    return t < 0 ? '▾' : '▴';
+  }
+
+  function trendPhrase(t) {
+    if (t == null) return null;
+    if (Math.abs(t) < 2) return 'flat over the plan so far';
+    return `${t < 0 ? '−' : '+'}${fmtMinSec(Math.abs(t))}/mi over the plan so far`;
+  }
+
+  // The reference-build choice is shared across every surface that compares
+  // against a reference, persisted per distance bucket. A stored date that no
+  // longer resolves to a candidate falls back to the PR build silently.
+  function refStorageKey(bucket) { return `miles.refBuild.${bucket}`; }
+
+  function resolveRefDate(builds) {
+    let stored = null;
+    try { stored = localStorage.getItem(refStorageKey(builds.bucket)); } catch { /* storage unavailable */ }
+    if (stored && builds.by_date[stored]) return stored;
+    const pr = builds.candidates.find(c => c.is_pr);
+    return (pr ?? builds.candidates[0]).race_date;
+  }
+
+  function saveRefDate(bucket, date) {
+    try { localStorage.setItem(refStorageKey(bucket), date); } catch { /* storage unavailable */ }
+  }
+
+  function refShortName(builds, date) {
+    const c = builds.candidates.find(x => x.race_date === date);
+    return c ? fmt.shortName(c.name ?? '', c.race_date) : date;
+  }
+
+  function refChipsHTML(builds, selDate) {
+    return builds.candidates.map(c => {
+      const sel = c.race_date === selDate;
+      const label = `${fmt.shortName(c.name ?? '', c.race_date)}${c.result_s != null ? ` · ${fmtResult(c.result_s)}` : ''}`;
+      return `<button class="chip${sel ? ' selected' : ''}" data-ref-date="${c.race_date}" title="${c.is_pr ? 'PR build (default)' : 'flip the comparison'}">
+        <span class="dot" style="background:${sel ? 'var(--accent)' : 'var(--baseline)'}"></span>${esc(label)}</button>`;
+    }).join('');
+  }
+
+  function buildSentence(builds, refDate, planWeeks) {
+    const cur = builds.current, ref = builds.by_date[refDate];
+    const k = builds.through_weeks_out, w = builds.window_weeks;
+    const peaks = cur.peak_week != null || ref.peak_week != null
+      ? ` · peak ${cur.peak_week != null ? cur.peak_week.toFixed(1) : '—'} vs ${ref.peak_week != null ? ref.peak_week.toFixed(1) : '—'}`
+      : '';
+    const overlapNote = planWeeks > w ? `, comparing the overlapping ${w} wk` : '';
+    return `Avg ${cur.avg_mpw.toFixed(1)} vs ${ref.avg_mpw.toFixed(1)} mpw · long runs ${cur.long_runs} vs ${ref.long_runs}${peaks} — both through ${k} wk out${overlapNote}.`;
+  }
+
+  function fitnessSentence(goal) {
+    const bits = [];
+    if (goal.predicted_time_s != null) {
+      bits.push(`Predicted ${fmt.time(Math.round(goal.predicted_time_s))}${goal.basis ? ` (${goal.basis})` : ''}`);
+    }
+    if (goal.goal_time_s != null) bits.push(`goal ${fmt.time(goal.goal_time_s)}`);
+    const trend = trendPhrase(goal.trend_s_per_mi);
+    if (trend) bits.push(trend);
+    if (!bits.length) return 'No tracked fitness prediction at this distance.';
+    return `${bits.join('; ')}.`;
+  }
+
+  function sessionsSentence(sessions) {
+    const parts = [];
+    parts.push(sessions.workouts_total > 0
+      ? `${sessions.workouts_in_band} of ${sessions.workouts_total} workouts in their target band over the last ${sessions.window_weeks} wk`
+      : `no workouts with a target band matched in the last ${sessions.window_weeks} wk`);
+    if (sessions.longest_run_mi != null) {
+      const peak = sessions.plan_peak_long_run_miles != null ? ` (plan peaks at ${trimMiles(sessions.plan_peak_long_run_miles)})` : '';
+      parts.push(`longest run ${sessions.longest_run_mi.toFixed(1)} mi${peak}`);
+    }
+    return `${parts.map((p, i) => i === 0 ? p.charAt(0).toUpperCase() + p.slice(1) : p).join(' · ')}.`;
+  }
+
+  // Sparkline base: no on-chart axes at 72px tall — identity comes from the
+  // adjacent sentence/legend, detail from the tooltip.
+  function miniOption(theme) {
+    return {
+      animation: false,
+      grid: { top: 8, right: 8, bottom: 8, left: 8 },
+      tooltip: {
+        backgroundColor: theme.surface,
+        borderColor: theme.gridline,
+        textStyle: { fontSize: 12, color: theme.text },
+      },
+    };
+  }
+
+  function initFitnessFig(goal, theme) {
+    const el = document.getElementById('readiness-fig-fitness');
+    if (!el) return;
+    const data = goal.checkpoints.map(c => [`${c.month}-01`, c.pace_min_per_mile]);
+    const paceVals = data.map(d => d[1]).concat(goal.goal_pace_min_per_mile != null ? [goal.goal_pace_min_per_mile] : []);
+    const pad = 0.15;
+    const opt = miniOption(theme);
+    opt.tooltip.trigger = 'axis';
+    opt.tooltip.formatter = params => {
+      const p = params[0];
+      return `<div style="font-weight:600;color:${theme.text}">${p.value[0].slice(0, 7)}</div>${fmt.pace(p.value[1])}/mi predicted`;
+    };
+    opt.xAxis = { type: 'time', show: false };
+    opt.yAxis = {
+      type: 'value', inverse: true, show: false,
+      min: Math.min(...paceVals) - pad, max: Math.max(...paceVals) + pad,
+    };
+    opt.series = [{
+      name: 'Predicted pace',
+      type: 'line',
+      data,
+      showSymbol: true,
+      symbolSize: 5,
+      lineStyle: { color: theme.series[0], width: 2 },
+      itemStyle: { color: theme.series[0] },
+      markLine: goal.goal_pace_min_per_mile != null ? {
+        silent: true,
+        symbol: 'none',
+        label: { show: false },
+        lineStyle: { color: theme.muted, type: 'dashed', width: 1.5 },
+        data: [{ yAxis: goal.goal_pace_min_per_mile }],
+      } : undefined,
+    }];
+    const chart = echarts.init(el);
+    chart.setOption(opt);
+    OVERALL_CHARTS.push(chart);
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  function initSessionsFig(sessions, theme) {
+    const el = document.getElementById('readiness-fig-sessions');
+    if (!el) return;
+    const pts = sessions.points;
+    const bandBase = pts.map(p => [p.date, p.pace_lo]);
+    const bandRange = pts.map(p => [p.date, p.pace_hi - p.pace_lo]);
+    const dots = pts.map(p => ({ value: [p.date, p.pace_min_per_mile], meta: p }));
+    const vals = pts.flatMap(p => [p.pace_lo, p.pace_hi, p.pace_min_per_mile]);
+    const opt = miniOption(theme);
+    opt.tooltip.trigger = 'item';
+    opt.tooltip.formatter = params => {
+      const p = params.data && params.data.meta;
+      if (!p) return '';
+      return `<div style="font-weight:600;color:${theme.text}">${shortDate(p.date)}</div>
+        ${fmt.pace(p.pace_min_per_mile)}/mi vs ${fmt.pace(p.pace_lo)}–${fmt.pace(p.pace_hi)}${p.in_band ? '' : ' (outside band)'}`;
+    };
+    opt.xAxis = { type: 'time', show: false };
+    opt.yAxis = { type: 'value', inverse: true, show: false, min: Math.min(...vals) - 0.25, max: Math.max(...vals) + 0.25 };
+    opt.series = [
+      { name: 'band-base', type: 'bar', stack: 'band', data: bandBase, barWidth: 8, itemStyle: { color: 'transparent' }, silent: true, tooltip: { show: false } },
+      { name: 'Target band', type: 'bar', stack: 'band', data: bandRange, barWidth: 8, itemStyle: { color: withAlpha(theme.muted, 0.35) }, silent: true, tooltip: { show: false } },
+      { name: 'Workout pace', type: 'scatter', data: dots, symbolSize: 7, itemStyle: { color: theme.series[7] }, z: 3 },
+    ];
+    const chart = echarts.init(el);
+    chart.setOption(opt);
+    OVERALL_CHARTS.push(chart);
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  // The build row's figure + sentence + strip stat all follow the flipped
+  // reference; the chart is a single instance that gets setOption'd on flip,
+  // so the OVERALL_CHARTS resize registration stays valid.
+  function initBuildRow(builds, planWeeks) {
+    const el = document.getElementById('readiness-fig-build');
+    if (!el) return;
+    const theme = chartTheme();
+    const accent = cssVar('--accent');
+    const curData = builds.current.weekly.map(w => [w.offset, w.miles]);
+
+    const opt = miniOption(theme);
+    opt.tooltip.trigger = 'axis';
+    opt.tooltip.formatter = params => {
+      if (!params.length) return '';
+      const head = `<div style="font-weight:600;color:${theme.text}">${-params[0].value[0]} wk out</div>`;
+      return head + params.map(p => `${esc(p.seriesName)}: ${p.value[1].toFixed(1)} mi`).join('<br>');
+    };
+    opt.xAxis = { type: 'value', show: false, min: -builds.window_weeks, max: -builds.through_weeks_out };
+    opt.yAxis = { type: 'value', show: false, min: 0 };
+    opt.series = [
+      { name: 'This block', type: 'line', data: curData, showSymbol: false, lineStyle: { color: accent, width: 2 }, itemStyle: { color: accent }, z: 3 },
+      { name: '', type: 'line', data: [], showSymbol: false, lineStyle: { color: theme.muted, width: 2 }, itemStyle: { color: theme.muted }, z: 2 },
+    ];
+    const chart = echarts.init(el);
+    chart.setOption(opt);
+    OVERALL_CHARTS.push(chart);
+    window.addEventListener('resize', () => chart.resize());
+
+    function applyReference(refDate) {
+      const refName = refShortName(builds, refDate);
+      chart.setOption({ series: [{}, { name: refName, data: builds.by_date[refDate].weekly.map(w => [w.offset, w.miles]) }] });
+      document.getElementById('readiness-chips').innerHTML = refChipsHTML(builds, refDate);
+      document.getElementById('readiness-build-sentence').textContent = buildSentence(builds, refDate, planWeeks);
+      document.getElementById('readiness-build-legend').innerHTML = `
+        <span class="legend-swatch"><span class="legend-box" style="background:${accent}"></span>This block</span>
+        <span class="legend-swatch"><span class="legend-box" style="background:${theme.muted}"></span>${esc(refName)}</span>`;
+      const statValue = document.getElementById('readiness-stat-build-value');
+      const statSub = document.getElementById('readiness-stat-build-sub');
+      if (statValue) statValue.textContent = `${builds.current.avg_mpw.toFixed(1)} vs ${builds.by_date[refDate].avg_mpw.toFixed(1)}`;
+      if (statSub) statSub.textContent = `vs ${refName} · both at ${builds.through_weeks_out} wk out`;
+    }
+
+    applyReference(resolveRefDate(builds));
+    document.getElementById('readiness-chips').addEventListener('click', e => {
+      const btn = e.target.closest('.chip');
+      if (!btn || !builds.by_date[btn.dataset.refDate]) return;
+      saveRefDate(builds.bucket, btn.dataset.refDate);
+      applyReference(btn.dataset.refDate);
+    });
+  }
+
+  function renderReadiness(data, adherence, readiness) {
+    if (!readiness) return;
+    const { goal, builds, sessions } = readiness;
+    const theme = chartTheme();
+    // Weeks before race week the latest version covers — the sub-label cue
+    // when the reference window is shorter than the plan.
+    const planWeeks = Math.max(0, data.weeks.length - 1);
 
     const weeksToRaceStat = `
       <div class="stat">
         <div class="stat-label">Weeks to race</div>
-        <div class="stat-value">${weeks_to_race}<span class="stat-sub">${shortDate(plan.race_date)}</span></div>
+        <div class="stat-value">${readiness.weeks_to_race}<span class="stat-sub">${shortDate(readiness.race_date)}</span></div>
       </div>`;
 
-    const thisWeekStat = this_week ? `
-      <div class="stat">
-        <div class="stat-label">This week</div>
-        <div class="stat-value">${this_week.actual_miles.toFixed(1)}<span class="stat-sub">of ${targetMilesLabel(this_week)} mi</span></div>
-        <div class="stat-sub">${this_week.actual_workouts} of ${this_week.target_workouts} workouts</div>
-      </div>` : `
-      <div class="stat">
-        <div class="stat-label">This week</div>
-        <div class="stat-value">—<span class="stat-sub">outside plan window</span></div>
-      </div>`;
+    const glyph = trendGlyph(goal.trend_s_per_mi);
+    let goalStat = '';
+    if (goal.goal_time_s != null) {
+      goalStat = `
+        <div class="stat">
+          <div class="stat-label">Goal vs fitness</div>
+          <div class="stat-value">${fmt.time(goal.goal_time_s)}<span class="stat-sub">goal</span></div>
+          <div class="stat-sub">${goal.predicted_time_s != null
+            ? `${fmt.time(Math.round(goal.predicted_time_s))} predicted · ${esc(goal.basis ?? goal.confidence ?? '')}${glyph ? ` ${glyph}` : ''}`
+            : 'no current fitness estimate'}</div>
+        </div>`;
+    } else if (goal.predicted_time_s != null) {
+      goalStat = `
+        <div class="stat">
+          <div class="stat-label">Fitness</div>
+          <div class="stat-value">${fmt.time(Math.round(goal.predicted_time_s))}<span class="stat-sub">predicted · no goal set</span></div>
+          <div class="stat-sub">${esc(goal.basis ?? goal.confidence ?? '')}${glyph ? ` ${glyph}` : ''}</div>
+        </div>`;
+    }
 
-    const goalStat = goal ? `
+    const buildStat = builds ? `
       <div class="stat">
-        <div class="stat-label">Goal vs fitness</div>
-        <div class="stat-value">${fmt.time(goal.goal_time_s)}<span class="stat-sub">goal</span></div>
-        <div class="stat-sub">${goal.equivalent_time_s != null ? `${fmt.time(Math.round(goal.equivalent_time_s))} implied (${goal.confidence})` : 'no current fitness estimate'}</div>
+        <div class="stat-label">Build vs reference</div>
+        <div class="stat-value"><span id="readiness-stat-build-value"></span><span class="stat-sub">mpw</span></div>
+        <div class="stat-sub" id="readiness-stat-build-sub"></div>
       </div>` : '';
 
-    const versionStat = version ? `
+    const executionStat = adherence ? `
       <div class="stat">
-        <div class="stat-label">Version</div>
-        <div class="stat-value">v${version.version_n}<span class="stat-sub">${version.author}</span></div>
-        <div class="stat-sub">revised ${shortDate(version.created_at.slice(0, 10))}</div>
+        <div class="stat-label">Execution</div>
+        <div class="stat-value">${adherence.on_or_close}<span class="stat-sub">of ${adherence.completed} wk on plan</span></div>
+        <div class="stat-sub">${adherence.flags.length ? `${adherence.flags.length} pattern${adherence.flags.length === 1 ? '' : 's'} flagged` : 'no patterns flagged'}</div>
       </div>` : '';
 
-    const adherenceStat = adherence ? `
-      <div class="stat">
-        <div class="stat-label">Adherence</div>
-        <div class="stat-value">${adherence.on_or_close}<span class="stat-sub">of ${adherence.completed} weeks on plan</span></div>
+    const showFitnessRow = goal.goal_time_s != null || goal.predicted_time_s != null || goal.checkpoints.length > 0;
+    const fitnessRow = showFitnessRow ? `
+      <div class="readiness-row">
+        <div class="readiness-row-body">
+          ${goal.checkpoints.length ? `<div class="readiness-fig"><div id="readiness-fig-fitness"></div></div>` : ''}
+          <div class="readiness-text">
+            <span class="panel-label">Fitness</span>
+            <p>${esc(fitnessSentence(goal))} <a class="readiness-link" href="/training.html">Fitness chart →</a></p>
+          </div>
+        </div>
       </div>` : '';
 
+    const buildRow = builds ? `
+      <div class="readiness-row">
+        <div class="chip-row" id="readiness-chips"></div>
+        <div class="readiness-row-body">
+          <div class="readiness-fig"><div id="readiness-fig-build"></div></div>
+          <div class="readiness-text">
+            <span class="panel-label">Build vs reference</span>
+            <p id="readiness-build-sentence"></p>
+            <div class="chart-legend" id="readiness-build-legend"></div>
+          </div>
+        </div>
+      </div>` : '';
+
+    const sessionsRow = sessions ? `
+      <div class="readiness-row">
+        <div class="readiness-row-body">
+          ${sessions.points.length ? `<div class="readiness-fig"><div id="readiness-fig-sessions"></div></div>` : ''}
+          <div class="readiness-text">
+            <span class="panel-label">Sessions</span>
+            <p>${esc(sessionsSentence(sessions))} <a class="readiness-link" href="#section-progression-workouts">Workout progression ↓</a></p>
+          </div>
+        </div>
+      </div>` : '';
+
+    const rows = fitnessRow + buildRow + sessionsRow;
     rootEl().insertAdjacentHTML('beforeend', `
-      <div class="stat-strip">
-        ${weeksToRaceStat}
-        ${thisWeekStat}
-        ${goalStat}
-        ${versionStat}
-        ${adherenceStat}
-      </div>`);
+      <section id="section-readiness">
+        <h2>Readiness</h2>
+        <p class="desc">Goal vs fitness, this block vs a reference build, and session execution — build numbers are cumulative through the same weeks-out point on both sides${builds ? ' · flip the chips to change the reference' : ''}</p>
+        <div class="stat-strip">
+          ${weeksToRaceStat}
+          ${goalStat}
+          ${buildStat}
+          ${executionStat}
+        </div>
+        ${rows ? `<div class="readiness-rows">${rows}</div>` : ''}
+      </section>`);
+
+    if (goal.checkpoints.length) initFitnessFig(goal, theme);
+    if (sessions && sessions.points.length) initSessionsFig(sessions, theme);
+    if (builds) initBuildRow(builds, planWeeks);
   }
 
   // -----------------------------------------------------------------------
-  // Race retrospective — replaces the forward-looking stat strip once
-  // /api/plan reports plan.status === 'completed'. Reads /api/plan-
-  // retrospective for the numbers the forward stats can't answer: final
-  // adherence, race result vs goal vs a pre-race fitness prediction, and the
-  // plan's target ramp vs what detect_builds() independently saw. The
-  // weekly-mileage chart, calendar, and version history below are unchanged
-  // — "the record of what happened" stays visible either way.
+  // Race retrospective — takes over the Readiness slot once /api/plan
+  // reports plan.status === 'completed'. Reads /api/plan-retrospective for
+  // the numbers the forward view can't answer: final adherence, race result
+  // vs goal vs a pre-race fitness prediction, and the plan's target ramp vs
+  // what detect_builds() independently saw. The weekly-mileage chart,
+  // calendar, and version history below are unchanged — "the record of what
+  // happened" stays visible either way.
   // -----------------------------------------------------------------------
 
   function buildCompareTable(ramp, build) {
@@ -1523,11 +1846,15 @@
   function renderVersions(versions) {
     if (!versions.length) return;
     // Newest first for display; each item (but the first/original) can expand
-    // a diff against the version immediately before it.
+    // a diff against the version immediately before it. The header carries a
+    // latest-version annotation — the plan's current authorship state, read
+    // at a glance without scanning the list.
     const ordered = [...versions].reverse();
+    const latest = ordered[0];
+    const annot = `<span class="version-annot">v${latest.version_n} · ${esc(latest.author)} · revised ${shortDate(latest.created_at.slice(0, 10))}</span>`;
     rootEl().insertAdjacentHTML('beforeend', `
       <section id="section-versions">
-        <h2>Version history</h2>
+        <h2>Version history${annot}</h2>
         <p class="desc">Every revision is a full snapshot · click a version with a note to see which weeks changed</p>
         <div class="version-list">
           ${ordered.map((v, i) => versionItem(v, ordered[i + 1])).join('')}
@@ -1819,6 +2146,12 @@
     return res.json();
   }
 
+  async function loadReadiness() {
+    const res = await fetch('/api/plan-readiness');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
   function renderHeader(data) {
     const { plan } = data;
     document.title = `Miles · ${plan.title}`;
@@ -1832,7 +2165,8 @@
     loadAdherence().catch(() => null),
     loadProgression().catch(() => null),
     loadRetrospective().catch(() => null),
-  ]).then(([data, versions, adherence, progression, retrospective]) => {
+    loadReadiness().catch(() => null),
+  ]).then(([data, versions, adherence, progression, retrospective, readiness]) => {
     if (data === null) {
       renderEmpty();
       return;
@@ -1856,7 +2190,7 @@
     if (data.plan.status === 'completed') {
       renderRetrospective(data, retrospective);
     } else {
-      renderStatStrip(data, adherence);
+      renderReadiness(data, adherence, readiness);
     }
     renderChart(data, bandByWeek, adherence?.flags ?? []);
     renderCalendar(data, bandByWeek);

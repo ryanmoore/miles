@@ -1,12 +1,14 @@
+import html
 import logging
 import os
+import re
 import sqlite3
 import click
 import subprocess as _subprocess
 import uvicorn
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, cast
 
@@ -137,6 +139,7 @@ class _RaceActivityRow(TypedDict):
     date: str
     name: str | None
     distance_m: float | None
+    moving_time_s: int | None
     race_effort: str | None
 
 
@@ -146,13 +149,19 @@ def _race_activity_rows(conn: sqlite3.Connection) -> list[_RaceActivityRow]:
     effective_run_type = db.effective_run_type_sql()
     tc, tp = _type_clause()
     rows = conn.execute(f"""
-        SELECT DATE(start_date) AS date, name, distance_m, race_effort
+        SELECT DATE(start_date) AS date, name, distance_m, moving_time_s, race_effort
         FROM activities
         WHERE {tc} AND {effective_run_type} = 'race'
         ORDER BY date
     """, tp).fetchall()
     return [
-        {"date": r["date"], "name": r["name"], "distance_m": r["distance_m"], "race_effort": r["race_effort"]}
+        {
+            "date": r["date"],
+            "name": r["name"],
+            "distance_m": r["distance_m"],
+            "moving_time_s": r["moving_time_s"],
+            "race_effort": r["race_effort"],
+        }
         for r in rows
     ]
 
@@ -359,6 +368,7 @@ class RaceMarker(TypedDict):
     date: str
     name: str | None
     distance_category: str
+    finish_time_s: int | None
     effort: str | None
 
 
@@ -375,7 +385,9 @@ class WeeklyHistory(TypedDict):
 def get_weekly_history() -> WeeklyHistory:
     """
     Every week of running history, zero-filled, plus detected training periods,
-    gaps, race-anchored builds within them, and every race with its effort label.
+    gaps, race-anchored builds within them, and every race with its effort label
+    and finish time (builds.html joins races to builds by date for its Time
+    column — Build.race deliberately carries no result fields).
     race_plans keys a completed plan's id by its matching race's exact
     date (plan.completed_plans_by_race_date) — Build.race.date uses that same
     key, so builds.html can look up a plan without builds.py (a deliberately
@@ -393,6 +405,7 @@ def get_weekly_history() -> WeeklyHistory:
             date=r["date"],
             name=r["name"],
             distance_category=classify_race_distance(r["distance_m"]) or "other",
+            finish_time_s=r["moving_time_s"],
             effort=r["race_effort"],
         )
         for r in race_activity_rows
@@ -1155,9 +1168,41 @@ def get_hr_pace_heatmap() -> list[HrPacePoint]:
     return out
 
 
+class WorkbookEntry(TypedDict):
+    name: str
+    title: str
+    uploaded: str  # ISO 8601 UTC
+
+
+_TITLE_RE = re.compile(rb"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+
+
+def _workbook_title(path: Path) -> str | None:
+    # Workbooks are self-contained pages that can embed large inline datasets;
+    # a bounded read keeps listing cheap and still covers any sane <head>.
+    head = path.read_bytes()[:65536]
+    m = _TITLE_RE.search(head)
+    if m is None:
+        return None
+    title = html.unescape(m.group(1).decode("utf-8", errors="replace")).strip()
+    return title or None
+
+
 @app.get("/api/workbooks")
-def list_workbooks() -> list[str]:
-    return sorted(p.name for p in _WORKBOOKS.glob("*.html"))
+def list_workbooks() -> list[WorkbookEntry]:
+    entries: list[WorkbookEntry] = []
+    for p in _WORKBOOKS.glob("*.html"):
+        # mtime is the upload time: the upload endpoint below is the only writer.
+        mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc)
+        entries.append(
+            WorkbookEntry(
+                name=p.name,
+                title=_workbook_title(p) or p.name,
+                uploaded=mtime.isoformat(),
+            )
+        )
+    entries.sort(key=lambda e: e["uploaded"], reverse=True)
+    return entries
 
 
 @app.post("/api/workbooks/upload")

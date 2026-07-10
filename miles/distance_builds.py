@@ -81,6 +81,11 @@ class DistanceBuildRow(TypedDict):
     finish_time: str
     distance_miles: float | None
     pace_min_per_mile: float | None
+    # 'raced'/'hard'/'casual' — distinguishes a raced PR from a merely fast
+    # casual effort; reference-build selection (builds.html/build.html,
+    # plan.html's readiness) needs the fastest *raced* result, not just the
+    # fastest time on record.
+    effort: str | None
     build: BuildStat
     build_weeks: int
 
@@ -160,6 +165,7 @@ def get_distance_builds(bucket: Bucket) -> list[DistanceBuildRow]:
             finish_time=cast(str, race["finish_time"]),
             distance_miles=cast("float | None", race["distance_miles"]),
             pace_min_per_mile=cast("float | None", race["pace_min_per_mile"]),
+            effort=cast("str | None", race["effort"]),
             build=BuildStat(
                 start=build_start_s,
                 weeks=build_weeks,

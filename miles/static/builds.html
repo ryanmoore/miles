@@ -58,6 +58,12 @@
     .builds-view .compare-link:hover { text-decoration: underline; }
     .builds-view .plan-link { font-size: 0.75rem; color: var(--muted); text-decoration: none; margin-left: 0.375rem; }
     .builds-view .plan-link:hover { text-decoration: underline; }
+
+    /* Finish time of a casual-effort race — de-emphasized, not hidden. */
+    .builds-view .casual-time { color: var(--muted); font-style: italic; }
+
+    /* Transient highlight when arriving via a #build-YYYY-MM-DD hash. */
+    .builds-view .flash td { background: var(--pr-bg-hover) !important; transition: background 1s ease 1s; }
   </style>
 </head>
 <body>
@@ -76,6 +82,7 @@
         <thead>
           <tr>
             <th>Race</th>
+            <th class="r">Time</th>
             <th>Start</th>
             <th class="r">Weeks</th>
             <th class="r">Shape</th>
@@ -144,21 +151,68 @@
     return `${race.name ?? race.distance_category} (${race.date})`;
   }
 
-  function renderStatStrip(builds) {
+  // Bucket param for /api/distance-builds — distance_builds.py's Title Case
+  // Bucket literal, keyed by race.distance_category; the same four
+  // categories COMPARE_BUCKET recognizes, since only those have a build
+  // history deep enough to support a reference comparison.
+  const REF_BUCKET = { '5K': '5K', '10K': '10K', half: 'Half', marathon: 'Marathon' };
+
+  // The athlete's reference-build override persists per distance bucket and
+  // is honored by every surface that compares against a reference (plan.html's
+  // readiness, this strip, build.html's reference row) — see refStorageKey
+  // in plan.html for the canonical statement of this convention. A stored
+  // date that no longer resolves to a candidate falls back to the fastest
+  // raced effort (the PR build) silently.
+  function refStorageKey(bucket) { return `miles.refBuild.${bucket}`; }
+
+  function resolveRefRow(rows, bucket) {
+    const raced = rows.filter(r => r.effort === 'raced' && r.finish_time_s != null)
+      .slice().sort((a, b) => a.finish_time_s - b.finish_time_s);
+    const pr = raced[0] ?? rows[rows.length - 1];
+    let stored = null;
+    try { stored = localStorage.getItem(refStorageKey(bucket)); } catch { /* storage unavailable */ }
+    const match = stored ? rows.find(r => r.date === stored) : null;
+    return match ?? pr;
+  }
+
+  function fmtSigned(v, decimals = 1) {
+    return `${v < 0 ? '−' : '+'}${Math.abs(v).toFixed(decimals)}`;
+  }
+
+  // The latest build's avg mpw against the reference build at the same
+  // distance bucket. Omitted when the category has no compare bucket, too
+  // few races exist at that distance to pick a reference, or the reference
+  // resolves to the latest build itself (the latest race is the fastest
+  // raced effort on record — nothing else to compare it against).
+  async function vsReferenceStat(latest) {
+    const bucket = REF_BUCKET[latest.race.distance_category];
+    if (!bucket) return '';
+    let rows;
+    try {
+      const res = await fetch(`/api/distance-builds?bucket=${encodeURIComponent(bucket)}`);
+      if (!res.ok) return '';
+      rows = await res.json();
+    } catch {
+      return '';
+    }
+    if (rows.length < 2) return '';
+    const ref = resolveRefRow(rows, bucket);
+    if (!ref || ref.date === latest.race.date) return '';
+    const delta = latest.avg_mpw - ref.build.avg_mpw;
+    return `
+      <div class="stat">
+        <div class="stat-label">vs</div>
+        <div class="stat-value">${fmtSigned(delta)}<span class="stat-sub">mpw</span></div>
+        <div class="stat-sub">${esc(fmt.shortName(ref.name ?? bucket, ref.date))}</div>
+      </div>`;
+  }
+
+  async function renderStatStrip(builds) {
     const el = document.getElementById('stat-strip');
     if (!builds.length) return;
 
     const years = builds.map(b => Number(b.start.slice(0, 4)));
     const raceYears = builds.map(b => Number(b.race.date.slice(0, 4)));
-
-    let biggest = builds[0];
-    for (const b of builds) if (b.avg_mpw > biggest.avg_mpw) biggest = b;
-
-    let longest = builds[0];
-    for (const b of builds) if (b.weeks > longest.weeks) longest = b;
-
-    let busiest = builds[0];
-    for (const b of builds) if (b.workouts_per_week > busiest.workouts_per_week) busiest = b;
 
     let latest = builds[0];
     for (const b of builds) if (b.race.date > latest.race.date) latest = b;
@@ -170,32 +224,18 @@
         <div class="stat-value">${builds.length}</div>
       </div>
       <div class="stat">
-        <div class="stat-label">Biggest</div>
-        <div class="stat-value">${biggest.avg_mpw.toFixed(1)}<span class="stat-sub">mpw</span></div>
-        <div class="stat-sub">${esc(fmt.shortName(biggest.race.name ?? biggest.race.distance_category, biggest.race.date))}</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Longest</div>
-        <div class="stat-value">${longest.weeks}<span class="stat-sub">wk</span></div>
-        <div class="stat-sub">${esc(fmt.shortName(longest.race.name ?? longest.race.distance_category, longest.race.date))}</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Most workouts/wk</div>
-        <div class="stat-value">${busiest.workouts_per_week.toFixed(2)}</div>
-        <div class="stat-sub">${esc(fmt.shortName(busiest.race.name ?? busiest.race.distance_category, busiest.race.date))}</div>
-      </div>
-      <div class="stat">
         <div class="stat-label">Latest</div>
-        <div class="stat-value">${esc(fmt.shortName(latest.race.name ?? latest.race.distance_category, latest.race.date))}</div>
+        <div class="stat-value">${esc(fmt.shortName(latest.race.name ?? latest.race.distance_category, latest.race.date))}<span class="stat-sub">${latest.avg_mpw.toFixed(1)} mpw</span></div>
         <div class="stat-sub">${latest.race.date}</div>
       </div>
+      ${await vsReferenceStat(latest)}
     `;
 
     document.getElementById('subtitle').textContent =
       `${builds.length} detected builds · ${Math.min(...years)}–${Math.max(...raceYears)}`;
   }
 
-  function renderBuilds(builds, weeks, racePlans) {
+  function renderBuilds(builds, weeks, races, racePlans) {
     if (!builds.length) {
       document.getElementById('empty').style.display = '';
       return;
@@ -203,6 +243,9 @@
     document.getElementById('section-builds').style.display = '';
 
     const milesByMonday = new Map(weeks.map(w => [w.monday, w.miles]));
+    // Anchor-race result (finish time, effort) by date — Build.race carries
+    // only identity fields, so join against the payload's races array.
+    const raceByDate = new Map(races.map(r => [r.date, r]));
     // detect_builds() returns builds oldest-first; reverse so the initial
     // render already reads Start-descending, matching makeSortable's
     // initial-arrow hint below (it labels the sort, it doesn't apply it).
@@ -220,8 +263,15 @@
       const planId = racePlans ? racePlans[b.race.date] : undefined;
       const planLink = planId != null
         ? ` <a class="plan-link" href="/plan.html" title="View plan retrospective">Plan →</a>` : '';
+      const result = raceByDate.get(b.race.date);
+      const timeCell = result?.finish_time_s == null
+        ? td(null)
+        : td(fmt.time(result.finish_time_s),
+             result.effort === 'casual' ? 'r casual-time' : 'r',
+             result.effort === 'casual' ? 'casual effort' : '');
       return `<tr data-race="${b.race.date}">
         <td><a class="entity-link" href="/build.html#${b.race.date}">${esc(label)}</a>${planLink}</td>
+        ${timeCell}
         ${td(b.start, '')}
         ${td(b.weeks)}
         <td class="r">${sparklineSVG(buildSeries[i], b.weeks, globalMax, false)}</td>
@@ -231,8 +281,23 @@
         ${compareCell}
       </tr>`;
     }).join('');
-    makeSortable(document.getElementById('body-builds').closest('table'), { col: 1, dir: 'desc' });
+    makeSortable(document.getElementById('body-builds').closest('table'), { col: 2, dir: 'desc' });
   }
+
+  // races.html and build.html link here as #build-{race date}; scroll the
+  // matching row into view and flash it. No-ops if the hash doesn't match
+  // or the row isn't rendered yet (called again after render).
+  function focusBuildFromHash() {
+    const m = /^#build-(\d{4}-\d{2}-\d{2})$/.exec(location.hash);
+    if (!m) return;
+    const row = document.querySelector(`#body-builds tr[data-race="${m[1]}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: 'center' });
+    row.classList.add('flash');
+    setTimeout(() => row.classList.remove('flash'), 2000);
+  }
+
+  window.addEventListener('hashchange', focusBuildFromHash);
 
   async function load() {
     const res = await fetch('/api/weekly-history');
@@ -240,15 +305,16 @@
     return res.json();
   }
 
-  load().then(data => {
-    const { weeks, builds, race_plans } = data;
+  load().then(async data => {
+    const { weeks, builds, races, race_plans } = data;
     if (!builds.length) {
       document.getElementById('subtitle').textContent = 'No builds detected yet.';
       document.getElementById('empty').style.display = '';
       return;
     }
-    renderStatStrip(builds);
-    renderBuilds(builds, weeks, race_plans);
+    await renderStatStrip(builds);
+    renderBuilds(builds, weeks, races, race_plans);
+    focusBuildFromHash();
   }).catch(err => {
     document.getElementById('subtitle').textContent = `Error: ${err.message}`;
   });

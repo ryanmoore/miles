@@ -61,6 +61,10 @@
     .dist-view .entity-link { color: inherit; text-decoration: none; }
     .dist-view .entity-link:hover { text-decoration: underline; }
 
+    /* Free-form comparison routes to compare.html from the chart desc. */
+    .dist-view .desc a { color: inherit; text-decoration: none; }
+    .dist-view .desc a:hover { text-decoration: underline; }
+
     /* Cross-link into a completed plan's retrospective. */
     .plan-link { font-size: 0.75rem; color: var(--muted); text-decoration: none; margin-left: 0.375rem; }
     .plan-link:hover { text-decoration: underline; }
@@ -90,30 +94,10 @@
 
       <section>
         <h2>Race Paces Over Time</h2>
-        <p class="desc">Each point is a race · faster is up · PRs labeled · casual efforts hollow</p>
+        <p class="desc">Each point is a race · faster is up · standing PRs labeled · casual efforts hollow</p>
         <div class="chip-row" id="overview-chips"></div>
         <div class="chart-wrap">
           <div id="chart-races" style="width:100%;height:100%"></div>
-        </div>
-      </section>
-
-      <section>
-        <h2>Personal Bests</h2>
-        <p class="desc">Fastest finish per distance</p>
-        <div class="scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Distance</th>
-                <th class="r">Time</th>
-                <th class="r">Pace</th>
-                <th>Date</th>
-                <th>Race</th>
-                <th class="r">Attempts</th>
-              </tr>
-            </thead>
-            <tbody id="body-pbs"></tbody>
-          </table>
         </div>
       </section>
 
@@ -230,26 +214,6 @@
     return byCat;
   }
 
-  function renderPbTable(rows) {
-    const byCat = computePBs(rows);
-    const counts = new Map();
-    for (const r of rows) {
-      counts.set(r.distance_category, (counts.get(r.distance_category) ?? 0) + 1);
-    }
-    const html = CATEGORIES.filter(c => byCat.has(c)).map(c => {
-      const r = byCat.get(c);
-      return `<tr class="pr">
-        ${td(catLabel(c), '')}
-        ${td(r.finish_time, 'r bold')}
-        ${td(r.pace_min_per_mile)}
-        ${td(r.date, 'dim')}
-        ${td(esc(r.name), '')}
-        ${td(counts.get(c))}
-      </tr>`;
-    });
-    document.getElementById('body-pbs').innerHTML = html.join('');
-  }
-
   function renderRaceTable(rows) {
     // Current PBs (fastest per category, computed once) tell a current PR
     // apart from a race that was merely a PR the day it was run and has
@@ -291,11 +255,19 @@
 
   function renderOverviewStats(rows) {
     const byCat = computePBs(rows);
+    const counts = new Map();
+    for (const r of rows) {
+      counts.set(r.distance_category, (counts.get(r.distance_category) ?? 0) + 1);
+    }
+    // The sub carries the PB's identity (race + attempts) — the strip is the
+    // sole home of headline PBs; the archive below badges standing ones.
     const pbStat = (cat, label) => {
       const r = byCat.get(cat);
+      const n = counts.get(cat) ?? 0;
+      const sub = r ? `${esc(fmt.shortName(r.name ?? '', r.date))} · ${n} start${n === 1 ? '' : 's'}` : '';
       return `<div class="stat">
         <div class="stat-label">${label}</div>
-        <div class="stat-value">${r ? r.finish_time : '—'}<span class="stat-sub">${r ? r.date.slice(0, 4) : ''}</span></div>
+        <div class="stat-value">${r ? r.finish_time : '—'}<span class="stat-sub">${sub}</span></div>
       </div>`;
     };
     const prs = rows.filter(r => r.is_pr).length;
@@ -342,6 +314,11 @@
     const present = CATEGORIES.filter(c => rows.some(r => r.distance_category === c));
     if (rows.some(r => r.distance_category === 'other')) present.push('other');
 
+    // Only standing PRs (current fastest per category) carry a time label —
+    // one per category, so labels never collide enough to need dropping and
+    // every current record stays visible. Beaten "PR then" rows keep their
+    // enlarged point here and their badge in the archive table.
+    const standingPBs = computePBs(rows);
     const series = present.map(cat => {
       const color = categoryColor(cat, theme);
       const pts = rows
@@ -353,7 +330,7 @@
           itemStyle: r.effort === 'casual'
             ? { color: theme.surface, borderColor: color, borderWidth: 2, opacity: 0.75 }
             : { color, borderColor: theme.surface, borderWidth: 2 },
-          label: r.is_pr
+          label: standingPBs.get(r.distance_category) === r
             ? { show: true, position: 'top', distance: 6, formatter: r.finish_time,
                 fontSize: 10, fontWeight: 600, color: theme.textSecondary,
                 textBorderColor: theme.surface, textBorderWidth: 2 }
@@ -365,7 +342,6 @@
         color,
         data: pts,
         emphasis: { scale: 1.4 },
-        labelLayout: { hideOverlap: true }, // colliding PR labels defer to tooltip/table
       };
     });
 
@@ -426,9 +402,7 @@
     document.getElementById('overview-body').hidden = false;
     renderOverviewStats(rows);
     renderOverviewChart(rows);
-    renderPbTable(rows);
     renderRaceTable(rows);
-    makeSortable(document.getElementById('body-pbs').closest('table'));
     makeSortable(document.getElementById('body-races').closest('table'), { col: 0, dir: 'desc' });
   }
 
@@ -475,6 +449,15 @@
     return '';
   }
 
+  // Each tab shows the two pace claims that predict its distance, most
+  // relevant first; the full claims matrix lives in compare.html.
+  const CLAIM_COLS = {
+    '5k': { label: '5K', title: '5K-intensity work pace' },
+    lt:   { label: 'LT', title: 'Threshold / tempo pace' },
+    mp:   { label: 'MP', title: 'Marathon-pace work' },
+  };
+  const TAB_CLAIMS = { half: ['lt', 'mp'], marathon: ['mp', 'lt'], '50k': ['mp', 'lt'] };
+
   function renderDistanceTab(container, key, builds, weeks) {
     const label = BUCKET_LABEL[key];
     if (builds.length === 0) {
@@ -483,6 +466,10 @@
     }
 
     const isMarathon = key === 'marathon';
+    // Long-run columns only where long runs are a structural part of the
+    // preparation; on the short tabs they are empty noise.
+    const isLong = key === 'half' || key === 'marathon' || key === '50k';
+    const claimCols = TAB_CLAIMS[key] ?? ['5k', 'lt'];
     const real = builds.filter(m => !fmt.isVirtual(m));
     const virt = builds.filter(m => fmt.isVirtual(m));
     const sortedReal = [...real].sort((a, b) => (a.finish_time_s ?? Infinity) - (b.finish_time_s ?? Infinity));
@@ -492,11 +479,25 @@
     const buildWeeks = builds[0]?.build_weeks ?? 8;
     const showChart = sortedReal.length >= 2;
 
-    const avgVals = real.map(m => m.build?.avg_mpw).filter(v => v != null);
-    const peakVals = real.map(m => m.build?.peak_week).filter(v => v != null);
-    const bestAvg = avgVals.length ? Math.max(...avgVals) : null;
-    const bestPeak = peakVals.length ? Math.max(...peakVals) : null;
-    const sub3Count = real.filter(m => m.finish_time_s != null && m.finish_time_s < 10800).length;
+    // Goal-line barriers: conversational round numbers — whole minutes for
+    // the short distances, 5-minute marks for the long ones (the mixed-bag
+    // Other tab picks by PR magnitude). The two nearest barriers the PR has
+    // already cracked (strictly above it), each valued at the count of real
+    // races under it. A barrier above the PR always counts at least the PR
+    // itself, so a fresh breakthrough reads "Sub-3:00 · 1" instead of
+    // resetting to a zero-count next target; the second barrier is dropped
+    // when it separates no additional races.
+    const prS = pr?.finish_time_s ?? null;
+    const barriers = [];
+    if (prS != null) {
+      const step = key === '5k' || key === '10k' || (key === 'other' && prS < 3600) ? 60 : 300;
+      const first = (Math.floor(prS / step) + 1) * step;
+      for (const b of [first, first + step]) {
+        barriers.push({ b, count: real.filter(m => m.finish_time_s != null && m.finish_time_s < b).length });
+      }
+      if (barriers[1].count === barriers[0].count) barriers.pop();
+    }
+    const fmtBarrier = s => s < 3600 ? String(s / 60) : fmt.timeShort(s);
 
     const weeksByDate = new Map(weeks.map(w => [w.date, w.weeks]));
     let globalMax = 0;
@@ -506,13 +507,19 @@
       }
     }
 
-    const statSub3 = isMarathon ? `
+    const statBarriers = barriers.map(({ b, count }) => `
       <div class="stat">
-        <div class="stat-label">Sub-3</div>
-        <div class="stat-value">${sub3Count}</div>
-      </div>` : '';
+        <div class="stat-label">Sub-${fmtBarrier(b)}</div>
+        <div class="stat-value">${count}<span class="stat-sub">race${count === 1 ? '' : 's'}</span></div>
+      </div>`).join('');
 
+    // The three modes are curated comparisons; anything free-form routes to
+    // compare.html (which takes a plain #{bucket} hash for its four buckets).
+    const compareBucket = { '5k': '5k', '10k': '10k', half: 'half', marathon: 'marathon' }[key];
+    const compareLink = compareBucket
+      ? ` · build anything against anything in <a href="/compare.html#${compareBucket}">Compare →</a>` : '';
     const chartHtml = showChart ? `
+      <p class="desc">Curated views — fastest builds, last three, PR vs latest${compareLink}</p>
       <div class="mode-tabs" data-role="chart-tabs">
         <button class="mode-tab active" data-mode="fastest">Fastest</button>
         <button class="mode-tab" data-mode="recent">Recent 3</button>
@@ -536,15 +543,7 @@
           <div class="stat-label">Races</div>
           <div class="stat-value">${real.length}<span class="stat-sub">${virt.length ? `+${virt.length} virtual` : ''}</span></div>
         </div>
-        <div class="stat">
-          <div class="stat-label">Best avg</div>
-          <div class="stat-value">${bestAvg != null ? bestAvg.toFixed(1) : '—'}<span class="stat-sub">mpw</span></div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Peak week</div>
-          <div class="stat-value">${bestPeak != null ? bestPeak.toFixed(1) : '—'}<span class="stat-sub">mi</span></div>
-        </div>
-        ${statSub3}
+        ${statBarriers}
       </div>
 
       ${chartHtml}
@@ -560,14 +559,10 @@
               <th class="r">${buildWeeks}-wk shape</th>
               <th class="r">Avg</th>
               <th class="r">Peak</th>
-              <th class="r">Peak 3wk</th>
               <th class="r">WOs</th>
-              <th class="r" title="5K-intensity work pace">5K</th>
-              <th class="r" title="Threshold / tempo pace">LT</th>
-              <th class="r" title="Marathon-pace work">MP</th>
-              <th class="r">LRs</th>
-              <th class="r">LR pace</th>
-              <th class="r">HR</th>
+              ${claimCols.map(c => `<th class="r" title="${CLAIM_COLS[c].title}">${CLAIM_COLS[c].label}</th>`).join('')}
+              ${isLong ? `<th class="r">LRs</th>
+              <th class="r">LR pace</th>` : ''}
             </tr>
           </thead>
           <tbody></tbody>
@@ -581,9 +576,8 @@
       const isPR = !isVirtual && i === 0;
       const rc = rowClass(isVirtual, isPR, isMarathon, r.finish_time_s);
       const bt = r.build?.by_type ?? {};
-      const wko = bt.workout, lr = bt.long_run, easy = bt.easy;
+      const wko = bt.workout, lr = bt.long_run;
       const claims = r.build?.pace_claims ?? {};
-      const claim5k = claims['5k'], claimLt = claims.lt, claimMp = claims.mp;
       const delta = !isPR && r.finish_time_s != null && pr?.finish_time_s != null
         ? r.finish_time_s - pr.finish_time_s : null;
       // Cross-link into the build's own detail page. Anchored on the RACE
@@ -601,14 +595,13 @@
         <td class="r">${sparklineSVG(weeksByDate.get(r.date), buildWeeks, globalMax, isPR)}</td>
         ${td(r.build?.avg_mpw?.toFixed(1))}
         ${td(r.build?.peak_week?.toFixed(1))}
-        ${td(r.build?.peak_3wk_avg?.toFixed(1))}
         ${td(wko?.runs)}
-        ${td(fmt.pace(claim5k?.pace_min_per_mile), 'r', claim5k ? `${claim5k.workouts} workout(s)` : '')}
-        ${td(fmt.pace(claimLt?.pace_min_per_mile), 'r', claimLt ? `${claimLt.workouts} workout(s)` : '')}
-        ${td(fmt.pace(claimMp?.pace_min_per_mile), 'r', claimMp ? `${claimMp.workouts} workout(s)` : '')}
-        ${td(lr?.runs)}
-        ${td(fmt.pace(lr?.avg_pace_min_per_mile))}
-        ${td(easy?.avg_hr != null ? Math.round(easy.avg_hr) : null)}
+        ${claimCols.map(c => {
+          const claim = claims[c];
+          return td(fmt.pace(claim?.pace_min_per_mile), 'r', claim ? `${claim.workouts} workout(s)` : '');
+        }).join('')}
+        ${isLong ? `${td(lr?.runs)}
+        ${td(fmt.pace(lr?.avg_pace_min_per_mile))}` : ''}
       </tr>`;
     }).join('');
 

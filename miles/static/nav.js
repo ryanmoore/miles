@@ -2,13 +2,12 @@
 // Include with a single <script src="/nav.js"></script> right after <body>.
 
 const NAV_LINKS = [
+  { href: "/plan.html", label: "Plan" },
   { href: "/races.html", label: "Races" },
   { href: "/builds.html", label: "Builds" },
   { href: "/compare.html", label: "Compare" },
   { href: "/training.html", label: "Training" },
   { href: "/years.html", label: "Years" },
-  { href: "/plan.html", label: "Plan" },
-  { href: "/workbook.html", label: "Workbook" },
 ];
 
 function renderNav() {
@@ -27,8 +26,9 @@ function renderNav() {
     const a = document.createElement("a");
     a.href = href;
     a.textContent = label;
-    const isActive = href === "/races.html"
-      ? (path === "/races.html" || path === "/" || path === "/index.html")
+    // "/" and "/index.html" land on Plan (index.html redirects there).
+    const isActive = href === "/plan.html"
+      ? (path === "/plan.html" || path === "/" || path === "/index.html")
       : path === href;
     if (isActive) a.classList.add("active");
     nav.appendChild(a);
@@ -85,6 +85,17 @@ function renderNav() {
   syncBtn.addEventListener("click", startSync);
   header.insertBefore(syncBtn, nav);
   // --- end sync button ---
+
+  // Workbook is a utility page (collected one-off analyses), not a primary
+  // view, so it gets an icon beside Sync rather than a text nav link.
+  const workbookLink = document.createElement("a");
+  workbookLink.href = "/workbook.html";
+  workbookLink.className = "workbook-link";
+  workbookLink.title = "Workbook";
+  workbookLink.setAttribute("aria-label", "Workbook");
+  workbookLink.textContent = "⌗";
+  if (path === "/workbook.html") workbookLink.classList.add("active");
+  header.insertBefore(workbookLink, nav);
 
   document.body.insertBefore(header, document.body.firstChild);
 }

@@ -116,6 +116,18 @@ body {
   opacity: 0.5;
   cursor: default;
 }
+.workbook-link {
+  font-size: 0.8rem;
+  padding: 2px 8px;
+  border: 1px solid var(--muted);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.workbook-link:hover { color: var(--text); border-color: var(--text-secondary); }
+.workbook-link.active { color: var(--accent); border-color: var(--accent); }
 
 main { max-width: 1600px; margin: 0 auto; padding: 1.5rem 2rem; }
 

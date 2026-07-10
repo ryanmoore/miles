@@ -224,6 +224,35 @@
   // "#{bucket}:{date}" with the bucket lowercased (compare.html's parseHash).
   const COMPARE_BUCKET = { '5K': '5k', '10K': '10k', half: 'half', marathon: 'marathon' };
 
+  // Bucket param for /api/distance-builds — distance_builds.py's Title Case
+  // Bucket literal, keyed by race.distance_category; the same four
+  // categories COMPARE_BUCKET recognizes.
+  const REF_BUCKET = { '5K': '5K', '10K': '10K', half: 'Half', marathon: 'Marathon' };
+
+  const PACE_CLAIM_LABEL = { lt: 'LT', mp: 'MP', '5k': '5K' };
+
+  // The athlete's reference-build override persists per distance bucket and
+  // is honored by every surface that compares against a reference (plan.html's
+  // readiness, builds.html's strip, this row) — see refStorageKey in
+  // plan.html for the canonical statement of this convention. A stored date
+  // that no longer resolves to a candidate falls back to the fastest raced
+  // effort (the PR build) silently.
+  function refStorageKey(bucket) { return `miles.refBuild.${bucket}`; }
+
+  function resolveRefRow(rows, bucket) {
+    const raced = rows.filter(r => r.effort === 'raced' && r.finish_time_s != null)
+      .slice().sort((a, b) => a.finish_time_s - b.finish_time_s);
+    const pr = raced[0] ?? rows[rows.length - 1];
+    let stored = null;
+    try { stored = localStorage.getItem(refStorageKey(bucket)); } catch { /* storage unavailable */ }
+    const match = stored ? rows.find(r => r.date === stored) : null;
+    return match ?? pr;
+  }
+
+  function fmtSigned(v, decimals = 1) {
+    return `${v < 0 ? '−' : '+'}${Math.abs(v).toFixed(decimals)}`;
+  }
+
   const TYPE_COLOR = {
     long_run: 'var(--series-1)',
     workout: 'var(--series-8)',
@@ -556,16 +585,67 @@
     }
   }
 
+  // Reference-build comparison row, under the stat strip: this build vs the
+  // reference build at the same distance bucket (avg mpw, long-run count,
+  // and whichever pace claim both builds actually carry). Both sides read
+  // from distance-builds' own rows rather than mixing in build-detail's
+  // numbers — fixed-window and detected-build stats can disagree, and
+  // comparing within one endpoint keeps the delta apples-to-apples. Omitted
+  // when the category has no compare bucket, the race is virtual (no real
+  // effort to compare), or no reference resolves.
+  async function loadReferenceRow(race) {
+    const el = document.getElementById('reference-row');
+    if (!el) return;
+    const bucket = REF_BUCKET[race.distance_category];
+    if (!bucket || fmt.isVirtual(race)) return;
+
+    let rows;
+    try {
+      const res = await fetch(`/api/distance-builds?bucket=${encodeURIComponent(bucket)}`);
+      rows = res.ok ? await res.json() : [];
+    } catch {
+      rows = [];
+    }
+    if (rows.length < 2) return;
+
+    const mine = rows.find(r => r.date === race.date);
+    if (!mine) return;
+    const ref = resolveRefRow(rows, bucket);
+    if (!ref) return;
+
+    if (ref.date === race.date) {
+      el.innerHTML = `<p class="window-note">This is your reference build at this distance.</p>`;
+      return;
+    }
+
+    const parts = [`${fmtSigned(mine.build.avg_mpw - ref.build.avg_mpw)} avg mpw`];
+    const lrDelta = (mine.build.by_type.long_run?.runs ?? 0) - (ref.build.by_type.long_run?.runs ?? 0);
+    parts.push(`${fmtSigned(lrDelta, 0)} long run${Math.abs(lrDelta) === 1 ? '' : 's'}`);
+    // At most one pace-claim comparison, keeping the row to 2-3 deltas total;
+    // LT is checked first since it's the one claim every distance bucket carries.
+    for (const key of ['lt', 'mp', '5k']) {
+      const a = mine.build.pace_claims?.[key];
+      const b = ref.build.pace_claims?.[key];
+      if (a && b) {
+        parts.push(`${PACE_CLAIM_LABEL[key]} ${fmt.pace(a.pace_min_per_mile)} vs ${fmt.pace(b.pace_min_per_mile)}`);
+        break;
+      }
+    }
+
+    const refName = esc(fmt.shortName(ref.name ?? bucket, ref.date));
+    el.innerHTML = `<p class="window-note">vs ${refName} (${ref.finish_time}): ${parts.join(' · ')}</p>`;
+  }
+
   function elsewhere(race, build) {
     const bucket = COMPARE_BUCKET[race.distance_category];
     const compareLink = bucket
       ? `<a href="/compare.html#${bucket}:${race.date}">Compare this build →</a>`
       : '';
-    // No detected build row to flash on training.html when the build is a
-    // fixed-window fallback rather than a real detect_builds() anchor.
+    // No builds.html row to flash when the build is a fixed-window fallback
+    // rather than a real detect_builds() anchor.
     const historyLink = build.source === 'window'
       ? ''
-      : `<a href="/training.html#build-${race.date}">See in training history →</a>`;
+      : `<a href="/builds.html#build-${race.date}">See in builds index →</a>`;
     if (!compareLink && !historyLink) return '';
     return `
       <div class="elsewhere">
@@ -599,6 +679,7 @@
       <p class="subtitle">${subtitleParts.map(esc).join(' · ')}</p>
       ${windowNote}
       ${statStrip(race, build)}
+      <div id="reference-row"></div>
       ${contentsLine([])}
       <div id="section-calendar">
         ${calendar(data)}
@@ -644,6 +725,7 @@
     currentData = await res.json();
     render(currentData);
     loadWorkoutGroups(raceDate);
+    loadReferenceRow(currentData.race);
   }
 
   // Delegated on #root (never itself replaced, only its innerHTML) so one

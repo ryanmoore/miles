@@ -41,7 +41,9 @@ first sync of a long history:
 - Re-run the same command any time afterwards for an incremental sync (only new activities).
   Use `--full` to ignore the last sync date and re-fetch everything.
 - Use `--extra` to gradually backfill laps for every run (not just workouts/races), most
-  important first — resumable, so rerun daily until the queue is empty.
+  important first — resumable, so rerun daily until the queue is empty. It watches Strava's
+  rate-limit headers and stops while 10 daily API calls remain (tune with `--extra-reserve`),
+  so a sync later the same day can still pull new activities.
 - The first interactive sync asks once for your max heart rate (Enter to skip). Set it later —
   or set a personal long-run distance floor — with `uv run miles-sync --max-hr 185` /
   `--long-run-floor 14` (updates the profile, rebuilds derived values, and exits; no Strava calls).

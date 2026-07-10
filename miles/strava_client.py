@@ -7,10 +7,32 @@ from pathlib import Path
 from dotenv import load_dotenv
 from stravalib import Client
 from stravalib.model import Lap, SummaryActivity
+from stravalib.protocol import RequestMethod
+from stravalib.util.limiter import RequestRate, get_rates_from_response_headers
 
 from .db import WORKOUT_TYPE_MAP, ActivityRow, LapRow
 
 load_dotenv()
+
+# Latest daily/15-min usage observed from Strava's rate-limit response headers,
+# updated by _record_rate_limit on every request. Sync is single-threaded, so
+# a module global is sufficient.
+_latest_rate: RequestRate | None = None
+
+
+def _record_rate_limit(headers: dict[str, str], method: RequestMethod) -> None:
+    global _latest_rate
+    rate = get_rates_from_response_headers(headers, method)
+    if rate is not None:
+        _latest_rate = rate
+
+
+def daily_calls_remaining() -> int | None:
+    """Daily Strava API calls left, per the most recent response headers seen
+    in this process. None until at least one request has been made."""
+    if _latest_rate is None:
+        return None
+    return _latest_rate.long_limit - _latest_rate.long_usage
 
 
 def _refresh_and_get_token() -> str:
@@ -68,6 +90,7 @@ def _get_client() -> Client:
     client = Client(access_token=access_token)
     client.refresh_token = os.environ.get("STRAVA_REFRESH_TOKEN", "")
     client.token_expires = int(time.time()) + 3600
+    client.protocol.rate_limiter.rules.append(_record_rate_limit)
     return client
 
 

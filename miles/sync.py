@@ -20,11 +20,22 @@ def _wait_for_rate_limit() -> None:
     time.sleep(wait)
 
 
-def _extra_lap_backfill(conn: sqlite3.Connection, extra_limit: int) -> None:
+def _extra_lap_backfill(conn: sqlite3.Connection, extra_limit: int, reserve: int) -> None:
     """Backfill laps for all remaining runs, long runs first then newest-first.
     Resumable: each activity is stamped and committed individually, and a fresh
     generator is built for the remaining ids after a rate-limit interruption.
     """
+    # The incremental sync earlier in _run has already hit the API, so the
+    # recorded daily usage is current — skip without spending a single call
+    # when the reserve is already gone (e.g. a second --extra run today).
+    remaining_calls = strava_client.daily_calls_remaining()
+    if remaining_calls is not None and remaining_calls <= reserve:
+        print(
+            f"Skipping --extra backfill: {remaining_calls} daily API calls left "
+            f"(reserving {reserve} for later syncs); rerun tomorrow."
+        )
+        return
+
     effective_run_type = db.effective_run_type_sql()
     remaining_ids = [
         row["activity_id"]
@@ -47,7 +58,8 @@ def _extra_lap_backfill(conn: sqlite3.Connection, extra_limit: int) -> None:
     # 429 after a fruitless full-window wait means the daily cap.
     successes_since_429 = 1
 
-    while todo_ids:
+    stopped_for_reserve = False
+    while todo_ids and not stopped_for_reserve:
         processed_in_attempt = 0
         try:
             for activity_id, laps in strava_client.get_activity_laps_batch(todo_ids):
@@ -64,7 +76,18 @@ def _extra_lap_backfill(conn: sqlite3.Connection, extra_limit: int) -> None:
                 processed_in_attempt += 1
                 if fetched % 25 == 0:
                     print(f"  {fetched}/{batch_size} fetched, {lap_total} laps...")
-            todo_ids = []
+                remaining_calls = strava_client.daily_calls_remaining()
+                if remaining_calls is not None and remaining_calls <= reserve:
+                    remaining_after = total_remaining - fetched
+                    print(
+                        f"Stopping --extra backfill: {remaining_calls} daily API calls left "
+                        f"(reserving {reserve} for later syncs) — {remaining_after} activities "
+                        "still unsynced; rerun tomorrow."
+                    )
+                    stopped_for_reserve = True
+                    break
+            else:
+                todo_ids = []
         except Fault as e:
             if e.response is not None and e.response.status_code == 429:
                 todo_ids = todo_ids[processed_in_attempt:]
@@ -84,7 +107,13 @@ def _extra_lap_backfill(conn: sqlite3.Connection, extra_limit: int) -> None:
     print(f"Extra backfill: {fetched} fetched this run, {remaining_after} remaining.")
 
 
-def _run(conn: sqlite3.Connection, full: bool, extra: bool, extra_limit: int = 900) -> None:
+def _run(
+    conn: sqlite3.Connection,
+    full: bool,
+    extra: bool,
+    extra_limit: int = 900,
+    extra_reserve: int = 10,
+) -> None:
     after = None if full else db.last_synced_date(conn)
     if after:
         print(f"Incremental sync: fetching activities after {after}")
@@ -226,7 +255,7 @@ def _run(conn: sqlite3.Connection, full: bool, extra: bool, extra_limit: int = 9
         print(f"Weather done. {fetched_w} new records.")
 
     if extra:
-        _extra_lap_backfill(conn, extra_limit)
+        _extra_lap_backfill(conn, extra_limit, extra_reserve)
 
     # Recompute all derived values (inferred run types, lap types, ...) from raw synced rows.
     counts = derive_all(conn)
@@ -247,9 +276,17 @@ def _run(conn: sqlite3.Connection, full: bool, extra: bool, extra_limit: int = 9
 @click.option("--full", is_flag=True, help="Ignore last sync date and fetch everything.")
 @click.option("--extra", is_flag=True, help="Backfill laps for all remaining runs, most important first (resumable; rerun daily until complete).")
 @click.option("--extra-limit", type=int, default=900, help="Max lap fetches per --extra invocation.")
+@click.option("--extra-reserve", type=int, default=10, help="Daily API calls to leave unused when --extra backfills (so later syncs today can still fetch new activities).")
 @click.option("--max-hr", type=int, default=None, help="Set max heart rate and exit (no Strava calls).")
 @click.option("--long-run-floor", type=float, default=None, help="Set long-run distance floor in miles and exit (no Strava calls).")
-def main(full: bool, extra: bool, extra_limit: int, max_hr: int | None, long_run_floor: float | None) -> None:
+def main(
+    full: bool,
+    extra: bool,
+    extra_limit: int,
+    extra_reserve: int,
+    max_hr: int | None,
+    long_run_floor: float | None,
+) -> None:
     conn = db.connect()
     db.init_db(conn)
 
@@ -280,7 +317,7 @@ def main(full: bool, extra: bool, extra_limit: int, max_hr: int | None, long_run
 
     while True:
         try:
-            _run(conn, full, extra, extra_limit)
+            _run(conn, full, extra, extra_limit, extra_reserve)
             break
         except Fault as e:
             if e.response is not None and e.response.status_code == 429:

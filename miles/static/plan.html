@@ -357,6 +357,11 @@
     .plan-view .day-chip.today { border-width: 2px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--chip-color) 30%, transparent); }
     .plan-view .day-chip.upcoming { border-style: dashed; }
 
+    /* Signed actual-vs-plan delta, right-aligned immediately above the meter
+       it summarizes — same weight/size as .week-headline, neutral color. */
+    .plan-view .week-delta-row { display: flex; justify-content: flex-end; }
+    .plan-view .week-delta { font-size: 0.9375rem; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }
+
     /* Expected-by-now meter — a single ratio against a limit, one accent hue;
        the marker is a plain neutral tick, not a second judgment color. */
     .plan-view .meter { position: relative; height: 8px; background: var(--gridline); border-radius: 4px; overflow: visible; margin-bottom: 0.375rem; }
@@ -707,6 +712,21 @@
     if (counts.race) parts.push('race day');
     if (!parts.length) return 'nothing left on the schedule this week';
     return `${parts.join(' and ')} still ahead`;
+  }
+
+  // "23.8 mi to go · 26.0 mi scheduled over the long run and 2 easy days
+  // still ahead" — how much of this week's target remains, then what's
+  // actually still on the schedule to cover it. Degrades to the shape-only
+  // sentence when the plan doesn't carry enough per-day mileage to total
+  // remaining_planned_miles (e.g. only strength days left) or has no weekly
+  // mileage target at all (workouts-only week).
+  function remainingLine(ws) {
+    const shape = remainingShape(ws.remaining_days);
+    if (ws.target_miles == null || ws.remaining_planned_miles == null) return shape;
+    const basis = ws.target_miles_hi != null ? (ws.target_miles + ws.target_miles_hi) / 2 : ws.target_miles;
+    const toGo = basis - ws.actual_miles_so_far;
+    const toGoLabel = toGo <= 0 ? 'target met' : `${toGo.toFixed(1)} mi to go`;
+    return `${toGoLabel} · ${ws.remaining_planned_miles.toFixed(1)} mi scheduled over ${shape}`;
   }
 
   // Adherence bands — read straight off theme.css so light/dark both work,
@@ -2009,7 +2029,7 @@
       : `${ws.actual_miles_so_far.toFixed(1)} of ${targetMilesLabel(ws)} mi so far`;
     const progress = !ws ? ''
       : !started ? `<p class="week-shape">Sync hasn't reached this week yet.</p>`
-      : `${meterHTML(ws)}<p class="week-shape">${esc(remainingShape(ws.remaining_days))}</p>`;
+      : `${meterHTML(ws)}<p class="week-shape">${esc(remainingLine(ws))}</p>`;
     return `
       <div class="week-card">
         <div class="week-card-head">
@@ -2052,8 +2072,20 @@
     const rangeBand = ws.target_miles_hi != null
       ? `<div class="meter-range" style="left:${pct(ws.target_miles)}%;width:${(pct(ws.target_miles_hi) - pct(ws.target_miles)).toFixed(2)}%"></div>` : '';
     const mark = ws.expected_miles_by_now != null
-      ? `<div class="meter-mark" style="left:${pct(ws.expected_miles_by_now)}%" title="usually ~${ws.expected_miles_by_now.toFixed(1)} mi by now"></div>` : '';
-    return `<div class="meter">${rangeBand}<div class="meter-fill" style="width:${pct(ws.actual_miles_so_far)}%"></div>${mark}</div>`;
+      ? `<div class="meter-mark" style="left:${pct(ws.expected_miles_by_now)}%" title="plan pace: ~${ws.expected_miles_by_now.toFixed(1)} mi by now"></div>` : '';
+    return `${deltaLineHTML(ws)}<div class="meter">${rangeBand}<div class="meter-fill" style="width:${pct(ws.actual_miles_so_far)}%"></div>${mark}</div>`;
+  }
+
+  // The most-scanned number on the card: the meter's fill-vs-tick gap made
+  // explicit as a signed figure, right above the meter it describes. Text
+  // emphasis only — no red/green, same "numbers carry the judgment" rule as
+  // the meter itself, since mid-week "behind" is often just a reshuffle.
+  function deltaLineHTML(ws) {
+    if (ws.actual_miles_so_far == null || ws.expected_miles_by_now == null) return '';
+    const delta = ws.actual_miles_so_far - ws.expected_miles_by_now;
+    const sign = delta >= 0 ? '+' : '';
+    const title = `synced miles vs the plan's scheduled mileage through ${shortDate(ws.week_cutoff_date)} — moving runs between days shifts this until the week closes`;
+    return `<div class="week-delta-row"><span class="week-delta" title="${esc(title)}">${sign}${delta.toFixed(1)} mi vs plan</span></div>`;
   }
 
   // A tiny paired-bar SVG, day by day — lighter than an ECharts instance for

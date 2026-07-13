@@ -13,6 +13,7 @@ uv run miles-mcp    # start MCP server (stdio)
 uv run miles-api    # start web UI on http://localhost:8000
 uv run miles-derive # rebuild derived values (run_type_inferred, laps.lap_type); no API calls
 uv run pyright      # type check
+uv run pytest       # unit tests (tests/) — pure-function coverage: streams.py math, format.py, api.py pace helpers
 ```
 
 ## Architecture

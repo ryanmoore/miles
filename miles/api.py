@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, cast
 
+import pandas as pd
 from typing_extensions import TypedDict
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -20,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 from starlette.types import Scope
 
-from . import db, plan
+from . import db, plan, strava_client, streams
 from .build_paces import PaceClaim, pace_claims
 from .classifier import LAP_MIN_DISTANCE_M, LAP_MIN_MOVING_TIME_S
 from .distance_builds import (
@@ -675,6 +676,70 @@ def get_build_detail(race_date: str) -> BuildDetail:
     )
 
 
+class ActivityListRow(TypedDict):
+    id: int
+    name: str | None
+    start_date: str | None
+    run_type: str
+    distance_mi: float | None
+    moving_time_s: int | None
+    pace_min_per_mile: float | None
+    avg_hr: int | None
+
+
+class ActivityListPage(TypedDict):
+    rows: list[ActivityListRow]
+    has_more: bool
+
+
+@app.get("/api/activities-list")
+def get_activities_list(offset: int = 0, limit: int = 50) -> ActivityListPage:
+    """
+    Paginated activity index for activities.html, newest first, run sports
+    only (matches the Run/TrailRun/VirtualRun filter used at sync/inference
+    time). limit is capped at 200 to keep each page cheap to render client-side.
+    """
+    limit = min(limit, 200)
+    conn = _conn()
+    rows = conn.execute(f"""
+        SELECT
+            activity_id,
+            name,
+            start_date,
+            {db.EFFECTIVE_RUN_TYPE_SQL} AS run_type,
+            ROUND(distance_m / 1609.34, 2) AS distance_mi,
+            moving_time_s,
+            CASE WHEN average_speed_mps > 0
+                 THEN ROUND(26.8224 / average_speed_mps, 2)
+                 ELSE NULL END AS pace_min_per_mile,
+            ROUND(average_heartrate) AS avg_hr
+        FROM activities
+        WHERE sport_type IN ('Run', 'TrailRun', 'VirtualRun')
+        ORDER BY start_date DESC
+        LIMIT ? OFFSET ?
+    """, [limit + 1, offset]).fetchall()
+
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    return ActivityListPage(
+        rows=[
+            ActivityListRow(
+                id=r["activity_id"],
+                name=r["name"],
+                start_date=r["start_date"],
+                run_type=r["run_type"],
+                distance_mi=r["distance_mi"],
+                moving_time_s=r["moving_time_s"],
+                pace_min_per_mile=r["pace_min_per_mile"],
+                avg_hr=int(r["avg_hr"]) if r["avg_hr"] is not None else None,
+            )
+            for r in rows
+        ],
+        has_more=has_more,
+    )
+
+
 class ActivityLap(TypedDict):
     lap_index: int
     distance_mi: float | None
@@ -722,6 +787,248 @@ def get_activity_laps(id: int) -> list[ActivityLap]:
         )
         for r in rows
     ]
+
+
+class ActivityDetail(TypedDict):
+    id: int
+    name: str | None
+    description: str | None
+    start_date: str | None
+    distance_mi: float | None
+    moving_time_s: int | None
+    elapsed_time_s: int | None
+    pace_min_per_mile: float | None
+    avg_hr: int | None
+    min_hr: int | None
+    median_hr: int | None
+    max_hr: int | None
+    elevation_gain_ft: float | None
+    elevation_loss_ft: float | None
+    temp_f_avg: float | None
+    humidity_avg: float | None
+    wind_mph_avg: float | None
+    strava_url: str
+
+
+@app.get("/api/activity-detail")
+def get_activity_detail(id: int) -> ActivityDetail:
+    """
+    Header stats for activity.html. Description is lazily fetched from
+    Strava's DetailedActivity (not present on the SummaryActivity rows sync
+    stores) on first view of a given activity, then persisted so it's a
+    one-time cost, not a per-page-view API call. Min/median/max HR and
+    elevation loss come from the cached stream (fetched/cached lazily by
+    /api/activity-streams — call that first; if it hasn't been called yet
+    this falls back to activity-level average/max HR only, with min/median
+    HR and elevation loss left null rather than triggering a second
+    network fetch here).
+    """
+    conn = _conn()
+    row = conn.execute("""
+        SELECT
+            activities.activity_id AS id, name, description, start_date,
+            ROUND(distance_m / 1609.34, 2) AS distance_mi,
+            moving_time_s, elapsed_time_s,
+            CASE WHEN average_speed_mps > 0
+                 THEN ROUND(26.8224 / average_speed_mps, 2)
+                 ELSE NULL END AS pace_min_per_mile,
+            ROUND(average_heartrate) AS avg_hr,
+            ROUND(max_heartrate) AS max_hr,
+            ROUND(total_elevation_gain_m * 3.28084) AS elevation_gain_ft,
+            strava_url,
+            ROUND(weather.temp_c_avg * 9.0 / 5 + 32, 1) AS temp_f_avg,
+            weather.humidity_avg,
+            ROUND(weather.wind_kph_avg * 0.621371, 1) AS wind_mph_avg
+        FROM activities
+        LEFT JOIN weather ON weather.activity_id = activities.activity_id
+        WHERE activities.activity_id = ?
+    """, [id]).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No activity {id}.")
+
+    description = row["description"]
+    if description is None:
+        try:
+            description = strava_client.get_activity_description(id)
+        except Exception:
+            description = None
+        else:
+            db.set_activity_description(conn, id, description)
+
+    min_hr: int | None = None
+    median_hr: int | None = None
+    elevation_loss_ft: float | None = None
+    if streams.has_cached_streams(id):
+        df = streams.fetch_and_cache_streams(id)
+        hr = cast(pd.Series, df["heartrate"]).dropna()
+        if len(hr):
+            min_hr = int(cast(float, hr.min()))
+            median_hr = int(cast(float, hr.median()))
+        altitude = cast(pd.Series, df["altitude_m"]).dropna()
+        if len(altitude) > 1:
+            diffs = altitude.diff().dropna()
+            loss_m = -float(cast(float, diffs[diffs < 0].sum()))
+            elevation_loss_ft = round(loss_m * 3.28084, 1)
+
+    return ActivityDetail(
+        id=cast(int, row["id"]),
+        name=row["name"],
+        description=description,
+        start_date=row["start_date"],
+        distance_mi=row["distance_mi"],
+        moving_time_s=row["moving_time_s"],
+        elapsed_time_s=row["elapsed_time_s"],
+        pace_min_per_mile=row["pace_min_per_mile"],
+        avg_hr=int(row["avg_hr"]) if row["avg_hr"] is not None else None,
+        min_hr=min_hr,
+        median_hr=median_hr,
+        max_hr=int(row["max_hr"]) if row["max_hr"] is not None else None,
+        elevation_gain_ft=row["elevation_gain_ft"],
+        elevation_loss_ft=elevation_loss_ft,
+        temp_f_avg=row["temp_f_avg"],
+        humidity_avg=row["humidity_avg"],
+        wind_mph_avg=row["wind_mph_avg"],
+        strava_url=row["strava_url"],
+    )
+
+
+class LapMarker(TypedDict):
+    lap_index: int
+    time_s: float
+    distance_mi: float | None
+    median_pace_min_per_mile: float | None
+    median_gap_min_per_mile: float | None
+    median_hr: float | None
+    own_distance_mi: float | None
+    duration_s: int | None
+    min_pace_min_per_mile: float | None
+    max_pace_min_per_mile: float | None
+    min_hr: float | None
+    max_hr: float | None
+
+
+class ActivityStreams(TypedDict):
+    time_s: list[float]
+    distance_mi: list[float | None]
+    pace_min_per_mile: list[float | None]
+    gap_min_per_mile: list[float | None]
+    heartrate: list[float | None]
+    elevation_ft: list[float | None]
+    lap_markers: list[LapMarker]
+
+
+def _speed_to_pace(mps: float | None) -> float | None:
+    if mps is None or mps <= 0:
+        return None
+    return 26.8224 / mps
+
+
+@app.get("/api/activity-streams")
+def get_activity_streams(id: int) -> ActivityStreams:
+    """
+    Per-second time series for activity.html's dual-axis chart: pace, GAP,
+    heartrate, elevation, all keyed by elapsed time_s, plus lap markers with
+    per-window median pace/HR. Fetches and parquet-caches raw Strava streams
+    on first call for a given activity (see streams.py); subsequent calls
+    read the cache. 404s only if the activity itself doesn't exist.
+    """
+    conn = _conn()
+    exists = conn.execute("SELECT laps_synced_at FROM activities WHERE activity_id = ?", [id]).fetchone()
+    if exists is None:
+        raise HTTPException(status_code=404, detail=f"No activity {id}.")
+
+    stale_laps = conn.execute(
+        "SELECT 1 FROM laps WHERE activity_id = ? AND elapsed_time_s IS NULL LIMIT 1", [id]
+    ).fetchone()
+    if exists["laps_synced_at"] is None or stale_laps is not None:
+        for _, laps in strava_client.get_activity_laps_batch([id]):
+            if laps:
+                db.upsert_laps(conn, laps)
+        conn.execute(
+            "UPDATE activities SET laps_synced_at = datetime('now') WHERE activity_id = ?", [id]
+        )
+        conn.commit()
+
+    df = streams.fetch_and_cache_streams(id)
+
+    time_s = [float(v) for v in df["time_s"].tolist()]
+    distance_mi = [float(v) / 1609.34 if v is not None and not pd.isna(v) else None for v in df["distance_m"].tolist()]
+    pace_mpm = [_speed_to_pace(float(v)) if v is not None and not pd.isna(v) else None for v in df["velocity_smooth_mps"].tolist()]
+    heartrate = [float(v) if v is not None and not pd.isna(v) else None for v in df["heartrate"].tolist()]
+    elevation_ft = [float(v) * 3.28084 if v is not None and not pd.isna(v) else None for v in df["altitude_m"].tolist()]
+
+    has_velocity = bool(cast(pd.Series, df["velocity_smooth_mps"]).notna().any())
+    has_grade = bool(cast(pd.Series, df["grade_smooth"]).notna().any())
+    gap_mpm: list[float | None]
+    if has_velocity and has_grade:
+        gap_s_per_m = streams.compute_gap_pace_s_per_m(df)
+        df = df.assign(gap_s_per_m=gap_s_per_m)
+        gap_mpm = [
+            float(v) * 1609.34 / 60.0 if v is not None and not pd.isna(v) else None
+            for v in gap_s_per_m.tolist()
+        ]
+    else:
+        gap_mpm = [None] * len(time_s)
+
+    lap_rows = conn.execute("""
+        SELECT lap_index, elapsed_time_s, distance_m
+        FROM laps WHERE activity_id = ? ORDER BY lap_index
+    """, [id]).fetchall()
+
+    lap_markers: list[LapMarker] = []
+    if lap_rows and all(r["elapsed_time_s"] is not None for r in lap_rows):
+        cumulative = 0.0
+        boundaries = [0.0]
+        cum_distance_m = 0.0
+        marker_meta: list[tuple[int, float, float, int]] = []
+        for r in lap_rows:
+            own_distance_m = float(r["distance_m"] or 0.0)
+            duration_s = int(r["elapsed_time_s"])
+            cumulative += float(duration_s)
+            cum_distance_m += own_distance_m
+            boundaries.append(cumulative)
+            marker_meta.append((int(r["lap_index"]), cum_distance_m, own_distance_m, duration_s))
+
+        pace_medians = streams.median_per_window(df, boundaries, "velocity_smooth_mps")
+        hr_medians = streams.median_per_window(df, boundaries, "heartrate")
+        gap_medians = (
+            streams.median_per_window(df, boundaries, "gap_s_per_m")
+            if "gap_s_per_m" in df.columns else [None] * (len(boundaries) - 1)
+        )
+        # Floor matches the chart's 25 min/mi axis clamp — excludes paused/GPS-glitch
+        # near-zero-speed samples, which would otherwise blow out max pace (min speed).
+        min_speed_mps = 26.8224 / 25.0
+        velocity_stats = streams.min_median_max_per_window(df, boundaries, "velocity_smooth_mps", min_value=min_speed_mps)
+        hr_stats = streams.min_median_max_per_window(df, boundaries, "heartrate")
+
+        for (lap_index, cum_distance_m, own_distance_m, duration_s), pace_v, gap_v, hr_v, vstat, hstat, boundary_t in zip(
+            marker_meta, pace_medians, gap_medians, hr_medians, velocity_stats, hr_stats, boundaries[1:]
+        ):
+            # velocity is inverted to pace, so its max speed -> min pace and vice versa.
+            lap_markers.append(LapMarker(
+                lap_index=lap_index,
+                time_s=boundary_t,
+                distance_mi=round(cum_distance_m / 1609.34, 2),
+                median_pace_min_per_mile=_speed_to_pace(pace_v) if pace_v is not None else None,
+                median_gap_min_per_mile=gap_v * 1609.34 / 60.0 if gap_v is not None else None,
+                median_hr=hr_v,
+                own_distance_mi=round(own_distance_m / 1609.34, 2),
+                duration_s=duration_s,
+                min_pace_min_per_mile=_speed_to_pace(vstat["max"]) if vstat["max"] is not None else None,
+                max_pace_min_per_mile=_speed_to_pace(vstat["min"]) if vstat["min"] is not None else None,
+                min_hr=hstat["min"],
+                max_hr=hstat["max"],
+            ))
+
+    return ActivityStreams(
+        time_s=time_s,
+        distance_mi=distance_mi,
+        pace_min_per_mile=pace_mpm,
+        gap_min_per_mile=gap_mpm,
+        heartrate=heartrate,
+        elevation_ft=elevation_ft,
+        lap_markers=lap_markers,
+    )
 
 
 class WorkAgg(TypedDict):

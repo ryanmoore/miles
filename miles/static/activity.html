@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Miles · Activity</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
+  <link rel="stylesheet" href="/theme.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js" integrity="sha384-pPi0zxBAoDu6+JXW/C68UZLvBUUtU+7zonhif43rqj7pxsGyqyqzcian2Rj37Rss" crossorigin="anonymous"></script>
+  <style>
+    .activity-view h1 {
+      font-size: 1.25rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+    }
+    .activity-view .activity-head { display: flex; align-items: baseline; gap: 0.75rem; margin-bottom: 0.25rem; }
+    .activity-view .strava-link { font-size: 0.75rem; font-weight: 500; color: var(--accent); text-decoration: none; }
+    .activity-view .strava-link:hover { text-decoration: underline; }
+    .activity-view .subtitle { font-size: 0.8125rem; color: var(--muted); margin-bottom: 0.75rem; }
+    .activity-view .description {
+      font-size: 0.8125rem;
+      color: var(--text-secondary);
+      white-space: pre-wrap;
+      margin-bottom: 1.25rem;
+      max-width: 60ch;
+    }
+    .activity-view .loading, .activity-view .error { font-size: 0.8125rem; color: var(--muted); padding: 1rem 0; }
+
+    .activity-view .stat-strip {
+      display: flex;
+      flex-wrap: wrap;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+    }
+    .activity-view .stat { padding: 0.625rem 1.25rem; }
+    .activity-view .stat + .stat { border-left: 1px solid var(--border); }
+    .activity-view .stat-label {
+      font-size: 0.625rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 0.1875rem;
+    }
+    .activity-view .stat-value {
+      display: flex;
+      align-items: baseline;
+      gap: 0.375rem;
+      font-size: 1.0625rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--text);
+    }
+    .activity-view .stat-sub { font-size: 0.6875rem; font-weight: 400; color: var(--muted); }
+
+    .activity-view .chart-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.875rem 1.25rem 1rem;
+      margin-bottom: 1rem;
+    }
+    .activity-view .chart-panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-bottom: 0.5rem;
+    }
+    .activity-view .chart-panel-title { font-size: 0.8125rem; font-weight: 600; color: var(--text); }
+    .activity-view .toggles { display: flex; flex-wrap: wrap; gap: 0.125rem 1rem; }
+    .activity-view .toggle {
+      display: flex;
+      align-items: center;
+      gap: 0.3125rem;
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      cursor: pointer;
+      user-select: none;
+    }
+    .activity-view .toggle input { cursor: pointer; }
+    .activity-view .toggle .swatch {
+      width: 0.625rem;
+      height: 0.625rem;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .activity-view #chart-main { height: 380px; }
+    .activity-view #chart-elevation { height: 140px; }
+    .activity-view .dense tbody td { padding: 0.25rem 0.75rem; font-size: 0.75rem; }
+    .activity-view .dense thead th { padding: 0.375rem 0.75rem; font-size: 0.625rem; }
+  </style>
+</head>
+<body>
+<script src="/nav.js"></script>
+<script src="/charts.js"></script>
+
+<main class="activity-view">
+  <div id="root">Loading…</div>
+</main>
+
+<script>
+  const PACE_COLOR = '#3b82f6';
+  const HR_COLOR = '#ef4444';
+  const GAP_COLOR = '#8b5cf6';
+
+  const params = new URLSearchParams(location.search);
+  const activityId = params.get('id');
+
+  const root = document.getElementById('root');
+  let mainChart = null;
+  let elevChart = null;
+  let streamsData = null;
+
+  const toggleState = {
+    pace: true,
+    hr: true,
+    paceMedian: true,
+    hrMedian: true,
+    gap: false,
+  };
+
+  async function main() {
+    if (!activityId) {
+      root.innerHTML = '<div class="error">No activity id given. Use activity.html?id=&lt;activity_id&gt;.</div>';
+      return;
+    }
+
+    let detail;
+    try {
+      const res = await fetch(`/api/activity-detail?id=${activityId}`);
+      if (!res.ok) throw new Error(res.status === 404 ? 'Activity not found.' : 'Failed to load activity.');
+      detail = await res.json();
+    } catch (e) {
+      root.innerHTML = `<div class="error">${e.message}</div>`;
+      return;
+    }
+
+    renderHeader(detail);
+
+    try {
+      const streamsRes = await fetch(`/api/activity-streams?id=${activityId}`);
+      streamsData = await streamsRes.json();
+    } catch (e) {
+      document.getElementById('chart-section').innerHTML =
+        `<div class="error">Failed to load stream data: ${e.message}</div>`;
+      return;
+    }
+
+    // Re-fetch stats now that streams are cached, to pick up min/median HR
+    // and elevation loss, which /api/activity-detail only fills when a
+    // cached stream already existed at the time of the first call.
+    try {
+      const res2 = await fetch(`/api/activity-detail?id=${activityId}`);
+      if (res2.ok) renderHeader(await res2.json());
+    } catch (e) {
+      // Non-fatal — the header just stays without min/median HR and elev loss.
+    }
+
+    renderCharts();
+    renderLapTable();
+  }
+
+  function renderHeader(d) {
+    const dateStr = d.start_date ? new Date(d.start_date).toLocaleDateString(undefined, {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    }) : null;
+
+    root.innerHTML = `
+      <div class="activity-head">
+        <h1>${d.name ?? 'Untitled activity'}</h1>
+        <a class="strava-link" href="${d.strava_url}" target="_blank" rel="noopener">View on Strava ↗</a>
+      </div>
+      <div class="subtitle">${dateStr ?? ''}</div>
+      ${d.description ? `<div class="description">${escapeHtml(d.description)}</div>` : ''}
+      <div class="stat-strip">
+        ${stat('Distance', d.distance_mi != null ? `${d.distance_mi.toFixed(2)}` : '—', 'mi')}
+        ${stat('Moving Time', fmt.time(d.moving_time_s) ?? '—')}
+        ${stat('Avg Pace', d.pace_min_per_mile != null ? fmt.pace(d.pace_min_per_mile) : '—', '/mi')}
+        ${stat('Min / Median / Max HR', hrTriple(d))}
+        ${stat('Elevation Gain', d.elevation_gain_ft != null ? Math.round(d.elevation_gain_ft) : '—', 'ft')}
+        ${stat('Elevation Loss', d.elevation_loss_ft != null ? Math.round(d.elevation_loss_ft) : '—', 'ft')}
+        ${weatherStat(d)}
+      </div>
+      <div id="chart-section">
+        <div class="chart-panel">
+          <div class="chart-panel-head">
+            <div class="chart-panel-title">Pace &amp; Heart Rate</div>
+            <div class="toggles">
+              ${toggle('pace', 'Pace', PACE_COLOR)}
+              ${toggle('gap', 'Use GAP', GAP_COLOR)}
+              ${toggle('hr', 'HR', HR_COLOR)}
+              ${toggle('paceMedian', 'Pace median/lap', PACE_COLOR)}
+              ${toggle('hrMedian', 'HR median/lap', HR_COLOR)}
+            </div>
+          </div>
+          <div id="chart-main"></div>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-panel-head">
+            <div class="chart-panel-title">Laps</div>
+          </div>
+          <div class="scroll dense">
+            <table>
+              <thead>
+                <tr>
+                  <th>Lap</th>
+                  <th class="r">Distance</th>
+                  <th class="r">Duration</th>
+                  <th class="r">Min Pace</th>
+                  <th class="r">Median Pace</th>
+                  <th class="r">Max Pace</th>
+                  <th class="r">Min HR</th>
+                  <th class="r">Median HR</th>
+                  <th class="r">Max HR</th>
+                </tr>
+              </thead>
+              <tbody id="body-laps"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-panel-head">
+            <div class="chart-panel-title">Elevation</div>
+          </div>
+          <div id="chart-elevation"></div>
+        </div>
+      </div>
+    `;
+    wireToggles();
+  }
+
+  function hrTriple(d) {
+    const parts = [d.min_hr, d.median_hr, d.max_hr].map(v => v != null ? Math.round(v) : '—');
+    return parts.join(' / ');
+  }
+
+  function weatherStat(d) {
+    if (d.temp_f_avg == null) return '';
+    const bits = [`${Math.round(d.temp_f_avg)}°F`];
+    if (d.humidity_avg != null) bits.push(`${Math.round(d.humidity_avg)}% hum`);
+    if (d.wind_mph_avg != null) bits.push(`${Math.round(d.wind_mph_avg)} mph wind`);
+    return stat('Weather', bits.join(' · '));
+  }
+
+  function stat(label, value, sub) {
+    return `
+      <div class="stat">
+        <div class="stat-label">${label}</div>
+        <div class="stat-value">${value}${sub ? `<span class="stat-sub">${sub}</span>` : ''}</div>
+      </div>
+    `;
+  }
+
+  function toggle(key, label, color, checked) {
+    const isChecked = checked !== undefined ? checked : toggleState[key];
+    return `
+      <label class="toggle">
+        <input type="checkbox" data-toggle="${key}" ${isChecked ? 'checked' : ''}>
+        <span class="swatch" style="background:${color}"></span>
+        ${label}
+      </label>
+    `;
+  }
+
+  function wireToggles() {
+    document.querySelectorAll('[data-toggle]').forEach(el => {
+      el.addEventListener('change', () => {
+        toggleState[el.dataset.toggle] = el.checked;
+        renderCharts();
+        renderLapTable();
+      });
+    });
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  // Time-windowed (not sample-count) rolling mean — Strava streams can have
+  // gaps (paused/omitted sensor data), so a fixed sample-count window would
+  // span a different real duration wherever the data is sparse.
+  function rollingMeanByTime(t, values, windowS) {
+    const half = windowS / 2;
+    const out = new Array(values.length).fill(null);
+    let lo = 0, hi = 0, sum = 0, count = 0;
+    for (let i = 0; i < t.length; i++) {
+      while (hi < t.length && t[hi] <= t[i] + half) {
+        if (values[hi] != null) { sum += values[hi]; count++; }
+        hi++;
+      }
+      while (lo < i && t[lo] < t[i] - half) {
+        if (values[lo] != null) { sum -= values[lo]; count--; }
+        lo++;
+      }
+      out[i] = count > 0 ? sum / count : null;
+    }
+    return out;
+  }
+
+  // Largest-Triangle-Three-Buckets downsampling. points: [[x,y], ...] with
+  // y possibly null (nulls are excluded from the triangle-area search but
+  // kept in first/last so gaps at slice edges aren't silently dropped).
+  // Requires target >= 3; caller must guard smaller slices.
+  function lttb(points, target) {
+    if (points.length <= target) return points;
+    const out = [points[0]];
+    const bucketSize = (points.length - 2) / (target - 2);
+    let anchor = points[0];
+    for (let i = 0; i < target - 2; i++) {
+      const bucketStart = Math.floor(i * bucketSize) + 1;
+      const bucketEnd = Math.min(Math.floor((i + 1) * bucketSize) + 1, points.length - 1);
+
+      const nextStart = Math.floor((i + 1) * bucketSize) + 1;
+      const nextEnd = Math.min(Math.floor((i + 2) * bucketSize) + 1, points.length);
+      let avgX = 0, avgY = 0, avgCount = 0;
+      for (let j = nextStart; j < nextEnd; j++) {
+        if (points[j][1] == null) continue;
+        avgX += points[j][0]; avgY += points[j][1]; avgCount++;
+      }
+      if (avgCount > 0) { avgX /= avgCount; avgY /= avgCount; }
+
+      let bestArea = -1, bestPoint = null;
+      for (let j = bucketStart; j < bucketEnd; j++) {
+        if (points[j][1] == null) continue;
+        const area = Math.abs(
+          (anchor[0] - avgX) * (points[j][1] - anchor[1]) -
+          (anchor[0] - points[j][0]) * (avgY - anchor[1])
+        ) * 0.5;
+        if (area > bestArea) { bestArea = area; bestPoint = points[j]; }
+      }
+      if (bestPoint) { out.push(bestPoint); anchor = bestPoint; }
+    }
+    out.push(points[points.length - 1]);
+    return out;
+  }
+
+  // Per-lap LTTB: allocates the target point budget proportionally to each
+  // lap's duration, runs LTTB independently per lap, then stitches the
+  // slices back together — keeps lap-transition spikes/valleys sharp
+  // instead of blunting them across an arbitrary global bucket boundary.
+  // Falls back to whole-series LTTB when there are no laps.
+  function lttbPerLap(t, values, lapMarkers, totalTarget) {
+    const points = t.map((x, i) => [x, values[i]]);
+    if (!lapMarkers.length) return lttb(points, totalTarget);
+
+    const totalDuration = t[t.length - 1] - t[0];
+    let cursor = 0;
+    const out = [];
+    let prevBoundary = t[0];
+    for (const marker of lapMarkers) {
+      const lapStart = prevBoundary;
+      const lapEnd = marker.time_s;
+      while (cursor < points.length && points[cursor][0] < lapStart) cursor++;
+      const sliceStart = cursor;
+      while (cursor < points.length && points[cursor][0] <= lapEnd) cursor++;
+      const slice = points.slice(sliceStart, cursor);
+      prevBoundary = lapEnd;
+      if (slice.length === 0) continue;
+
+      const weight = (lapEnd - lapStart) / totalDuration;
+      const target = Math.round(totalTarget * weight);
+      const lapPoints = target < 3 || slice.length <= target ? slice : lttb(slice, target);
+
+      // De-duplicate: this lap's slice start can equal the previous lap's
+      // last kept point (shared boundary timestamp).
+      const startIdx = out.length && lapPoints.length && out[out.length - 1][0] === lapPoints[0][0] ? 1 : 0;
+      out.push(...lapPoints.slice(startIdx));
+    }
+    return out;
+  }
+
+  function renderCharts() {
+    if (!streamsData) return;
+    const theme = chartTheme();
+    const t = streamsData.time_s;
+    const rawPaceSeries = toggleState.gap ? streamsData.gap_min_per_mile : streamsData.pace_min_per_mile;
+    const paceLabel = toggleState.gap ? 'GAP' : 'Pace';
+    const paceColor = toggleState.gap ? GAP_COLOR : PACE_COLOR;
+    const paceSeries = rollingMeanByTime(t, rawPaceSeries, 30);
+
+    const series = [];
+
+    if (toggleState.pace) {
+      series.push({
+        name: paceLabel,
+        type: 'line',
+        yAxisIndex: 0,
+        data: t.map((s, i) => [s, paceSeries[i]]),
+        showSymbol: false,
+        lineStyle: { width: 1.25, color: paceColor },
+        itemStyle: { color: paceColor },
+        z: 2,
+      });
+    }
+
+    if (toggleState.hr) {
+      series.push({
+        name: 'HR',
+        type: 'line',
+        yAxisIndex: 1,
+        data: lttbPerLap(t, streamsData.heartrate, streamsData.lap_markers, 800),
+        showSymbol: false,
+        lineStyle: { width: 1.25, color: HR_COLOR },
+        itemStyle: { color: HR_COLOR },
+        z: 2,
+      });
+    }
+
+    const lapBoundaryTimes = new Set(streamsData.lap_markers.map(m => m.time_s));
+    const boundarySymbol = (value) => lapBoundaryTimes.has(value[0]) ? 'circle' : 'none';
+
+    if (toggleState.paceMedian && streamsData.lap_markers.length) {
+      const medianField = toggleState.gap ? 'median_gap_min_per_mile' : 'median_pace_min_per_mile';
+      series.push({
+        name: `${paceLabel} median/lap`,
+        type: 'line',
+        yAxisIndex: 0,
+        data: lapMedianSeries(streamsData.lap_markers, medianField, t),
+        showSymbol: true,
+        symbol: boundarySymbol,
+        symbolSize: 5,
+        lineStyle: { width: 2, color: paceColor, type: 'dashed' },
+        itemStyle: { color: paceColor },
+        z: 3,
+      });
+    }
+
+    if (toggleState.hrMedian && streamsData.lap_markers.length) {
+      series.push({
+        name: 'HR median/lap',
+        type: 'line',
+        yAxisIndex: 1,
+        data: lapMedianSeries(streamsData.lap_markers, 'median_hr', t),
+        showSymbol: true,
+        symbol: boundarySymbol,
+        symbolSize: 5,
+        lineStyle: { width: 2, color: HR_COLOR, type: 'dashed' },
+        itemStyle: { color: HR_COLOR },
+        z: 3,
+      });
+    }
+
+    const lapMarkLine = streamsData.lap_markers.length ? {
+      symbol: ['none', 'none'],
+      silent: true,
+      lineStyle: { color: theme.gridline, type: 'solid', width: 1, opacity: 0.6 },
+      label: { show: false },
+      data: streamsData.lap_markers.map(m => ({ xAxis: m.time_s })),
+    } : undefined;
+
+    if (lapMarkLine && series.length) series[0].markLine = mergeMarkLines(series[0].markLine, lapMarkLine);
+
+    if (!mainChart) mainChart = echarts.init(document.getElementById('chart-main'));
+    mainChart.setOption({
+      animation: false,
+      grid: { top: 24, right: 56, bottom: 32, left: 56 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: theme.surface,
+        borderColor: theme.gridline,
+        textStyle: { fontSize: 12, color: theme.text },
+        valueFormatter: undefined,
+        formatter(items) {
+          if (!items.length) return '';
+          const secs = items[0].axisValue;
+          const lines = [fmtElapsed(secs)];
+          // Look up each series' own nearest point manually rather than
+          // relying on ECharts' `items` — on a value-type x-axis, the axis
+          // pointer snaps to whichever series has the finest-grained data
+          // (Pace, sampled every second), and any sparser series (HR, LTTB-
+          // downsampled to ~800 points) is silently dropped from `items`
+          // when it has no point at that exact x.
+          for (const s of series) {
+            const val = nearestValueAt(s.data, secs);
+            const marker = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${s.itemStyle.color};margin-right:4px;"></span>`;
+            if (s.name.startsWith('Pace') || s.name.startsWith('GAP')) {
+              lines.push(`${marker}${s.name}: ${val != null ? fmt.pace(val) : '—'} /mi`);
+            } else if (s.name.startsWith('HR')) {
+              lines.push(`${marker}${s.name}: ${val != null ? Math.round(val) : '—'} bpm`);
+            }
+          }
+          return lines.join('<br>');
+        },
+      },
+      xAxis: {
+        type: 'value',
+        min: 0,
+        max: t.length ? t[t.length - 1] : undefined,
+        axisLabel: { formatter: (v) => fmtElapsed(v), color: theme.muted, fontSize: 10 },
+        axisLine: { lineStyle: { color: theme.gridline } },
+        splitLine: { show: false },
+      },
+      yAxis: [
+        {
+          type: 'value',
+          inverse: true,
+          min: 4,
+          max: 25,
+          name: 'min/mi',
+          nameTextStyle: { color: theme.muted, fontSize: 10 },
+          axisLabel: { formatter: (v) => fmt.pace(v), color: PACE_COLOR, fontSize: 10 },
+          splitLine: { lineStyle: { color: theme.gridline, opacity: 0.4 } },
+        },
+        {
+          type: 'value',
+          name: 'bpm',
+          nameTextStyle: { color: theme.muted, fontSize: 10 },
+          axisLabel: { color: HR_COLOR, fontSize: 10 },
+          splitLine: { show: false },
+        },
+      ],
+      series,
+    }, { notMerge: true });
+
+    if (!elevChart) elevChart = echarts.init(document.getElementById('chart-elevation'));
+    elevChart.setOption({
+      animation: false,
+      grid: { top: 12, right: 56, bottom: 28, left: 56 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: theme.surface,
+        borderColor: theme.gridline,
+        textStyle: { fontSize: 12, color: theme.text },
+        formatter(items) {
+          if (!items.length) return '';
+          const v = items[0].data[1];
+          return `${fmtElapsed(items[0].axisValue)}<br>${v != null ? Math.round(v) : '—'} ft`;
+        },
+      },
+      xAxis: {
+        type: 'value',
+        min: 0,
+        max: t.length ? t[t.length - 1] : undefined,
+        axisLabel: { formatter: (v) => fmtElapsed(v), color: theme.muted, fontSize: 10 },
+        axisLine: { lineStyle: { color: theme.gridline } },
+        splitLine: { show: false },
+      },
+      yAxis: {
+        type: 'value',
+        name: 'ft',
+        nameTextStyle: { color: theme.muted, fontSize: 10 },
+        axisLabel: { color: theme.muted, fontSize: 10 },
+        splitLine: { lineStyle: { color: theme.gridline, opacity: 0.4 } },
+      },
+      series: [{
+        name: 'Elevation',
+        type: 'line',
+        data: t.map((s, i) => [s, streamsData.elevation_ft[i]]),
+        showSymbol: false,
+        areaStyle: { color: theme.muted, opacity: 0.15 },
+        lineStyle: { width: 1, color: theme.muted },
+        markLine: lapMarkLine,
+      }],
+    });
+  }
+
+  function mergeMarkLines(existing, addition) {
+    if (!existing) return addition;
+    return { ...existing, data: [...existing.data, ...addition.data] };
+  }
+
+  // Binary search for the [x,y] pair in a sorted-by-x series whose x is
+  // closest to `target`; returns its y (or null). Used by the tooltip
+  // formatter to look up sparse series (LTTB-downsampled HR) at whatever
+  // x the axis pointer snapped to from the densest series (Pace).
+  function nearestValueAt(points, target) {
+    if (!points || !points.length) return null;
+    let lo = 0, hi = points.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (points[mid][0] < target) lo = mid + 1;
+      else hi = mid;
+    }
+    const candidates = [points[lo]];
+    if (lo > 0) candidates.push(points[lo - 1]);
+    let best = candidates[0];
+    for (const c of candidates) {
+      if (Math.abs(c[0] - target) < Math.abs(best[0] - target)) best = c;
+    }
+    return best[1];
+  }
+
+  function renderLapTable() {
+    const body = document.getElementById('body-laps');
+    if (!body || !streamsData) return;
+    const markers = streamsData.lap_markers;
+    if (!markers.length) {
+      body.innerHTML = '<tr><td colspan="9" class="dash">No lap data.</td></tr>';
+      return;
+    }
+    const medianField = toggleState.gap ? 'median_gap_min_per_mile' : 'median_pace_min_per_mile';
+    body.innerHTML = markers.map(m => `
+      <tr>
+        <td>${m.lap_index}</td>
+        <td class="r">${m.own_distance_mi != null ? `${m.own_distance_mi.toFixed(2)} mi` : '—'}</td>
+        <td class="r">${m.duration_s != null ? fmtElapsed(m.duration_s) : '—'}</td>
+        <td class="r">${m.min_pace_min_per_mile != null ? `${fmt.pace(m.min_pace_min_per_mile)}/mi` : '—'}</td>
+        <td class="r">${m[medianField] != null ? `${fmt.pace(m[medianField])}/mi` : '—'}</td>
+        <td class="r">${m.max_pace_min_per_mile != null ? `${fmt.pace(m.max_pace_min_per_mile)}/mi` : '—'}</td>
+        <td class="r">${m.min_hr != null ? Math.round(m.min_hr) : '—'}</td>
+        <td class="r">${m.median_hr != null ? Math.round(m.median_hr) : '—'}</td>
+        <td class="r">${m.max_hr != null ? Math.round(m.max_hr) : '—'}</td>
+      </tr>
+    `).join('');
+  }
+
+  function lapMedianSeries(markers, field, sampleTimes) {
+    // Each marker's median covers the window ending at m.time_s (starting
+    // at the previous marker's time_s, or 0 for the first lap). Emit one
+    // point per underlying stream sample (not just at boundaries) holding
+    // the lap's value flat across its window, so the axis-trigger tooltip
+    // — which only reads real data points, not interpolated step segments —
+    // shows a value anywhere along the flat line, not just at its ends.
+    let markerIdx = 0;
+    return sampleTimes.map(s => {
+      while (markerIdx < markers.length - 1 && s >= markers[markerIdx].time_s) markerIdx++;
+      return [s, markers[markerIdx][field]];
+    });
+  }
+
+  function fmtElapsed(secs) {
+    const s = Math.round(secs);
+    const h = Math.floor(s / 3600);
+    const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+    const sec = String(s % 60).padStart(2, '0');
+    return h > 0 ? `${h}:${m}:${sec}` : `${parseInt(m, 10)}:${sec}`;
+  }
+
+  window.addEventListener('resize', () => {
+    mainChart?.resize();
+    elevChart?.resize();
+  });
+
+  main();
+</script>
+</body>
+</html>

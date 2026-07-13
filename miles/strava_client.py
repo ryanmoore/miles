@@ -6,7 +6,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from stravalib import Client
-from stravalib.model import Lap, SummaryActivity
+from stravalib.model import Lap, Stream, SummaryActivity
 from stravalib.protocol import RequestMethod
 from stravalib.util.limiter import RequestRate, get_rates_from_response_headers
 
@@ -75,6 +75,7 @@ def _lap_row(lap: Lap, activity_id: int) -> LapRow:
         "lap_index": lap.lap_index,
         "distance_m": flt(lap.distance),
         "moving_time_s": secs(lap.moving_time),
+        "elapsed_time_s": secs(lap.elapsed_time),
         "average_speed_mps": flt(lap.average_speed),
         "average_heartrate": lap.average_heartrate,
         "max_heartrate": lap.max_heartrate,
@@ -147,3 +148,21 @@ def row_from_activity(activity: SummaryActivity) -> ActivityRow:
         "start_lng": start_lng,
         "raw_json": activity.model_dump_json(),
     }
+
+
+def get_activity_description(activity_id: int) -> str | None:
+    client = _get_client()
+    detail = client.get_activity(activity_id)
+    return detail.description
+
+
+STREAM_TYPES = [
+    "time", "distance", "altitude", "velocity_smooth",
+    "heartrate", "cadence", "grade_smooth", "moving",
+]
+
+
+def get_activity_streams_raw(activity_id: int) -> dict[str, Stream]:
+    client = _get_client()
+    streams = client.get_activity_streams(activity_id, types=STREAM_TYPES)
+    return {str(k): v for k, v in streams.items()}

@@ -5,6 +5,7 @@ const NAV_LINKS = [
   { href: "/plan.html", label: "Plan" },
   { href: "/races.html", label: "Races" },
   { href: "/builds.html", label: "Builds" },
+  { href: "/activities.html", label: "Activities" },
   { href: "/compare.html", label: "Compare" },
   { href: "/training.html", label: "Training" },
   { href: "/years.html", label: "Years" },

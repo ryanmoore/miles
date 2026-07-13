@@ -22,9 +22,10 @@ const fmt = {
   // decimal minutes per mile (7.82) -> "7:49"
   pace(dec) {
     if (dec == null) return null;
-    const m = Math.floor(dec);
-    const s = String(Math.round((dec - m) * 60)).padStart(2, '0');
-    return `${m}:${s}`;
+    let m = Math.floor(dec);
+    let s = Math.round((dec - m) * 60);
+    if (s === 60) { m += 1; s = 0; }
+    return `${m}:${String(s).padStart(2, '0')}`;
   },
   // "Grandma's Marathon 2023" -> "Grandma's '23"; virtual -> "(v)"
   shortName(name, date) {

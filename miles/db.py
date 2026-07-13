@@ -13,6 +13,7 @@ class LapRow(TypedDict):
     lap_index: int
     distance_m: float | None
     moving_time_s: int | None
+    elapsed_time_s: int | None
     average_speed_mps: float | None
     average_heartrate: float | None
     max_heartrate: float | None
@@ -25,6 +26,7 @@ class LapRow(TypedDict):
 class ActivityRow(TypedDict):
     activity_id: int
     name: str | None
+    description: NotRequired[str | None]
     sport_type: str
     start_date: str | None
     workout_type: int
@@ -191,6 +193,7 @@ def init_db(conn: sqlite3.Connection) -> None:
             lap_index   INTEGER NOT NULL,
             distance_m             REAL,
             moving_time_s          INTEGER,
+            elapsed_time_s         INTEGER,
             average_speed_mps      REAL,
             average_heartrate      REAL,
             max_heartrate          REAL,
@@ -227,12 +230,13 @@ def init_db(conn: sqlite3.Connection) -> None:
         "effort_ratio REAL",
         "dominant_intensity TEXT",
         "laps_synced_at TEXT",
+        "description TEXT",
     ):
         try:
             conn.execute(f"ALTER TABLE activities ADD COLUMN {col}")
         except sqlite3.OperationalError:
             pass
-    for col in ("raw_json TEXT", "lap_type TEXT", "intensity TEXT"):
+    for col in ("raw_json TEXT", "lap_type TEXT", "intensity TEXT", "elapsed_time_s INTEGER"):
         try:
             conn.execute(f"ALTER TABLE laps ADD COLUMN {col}")
         except sqlite3.OperationalError:
@@ -467,16 +471,24 @@ def upsert_laps(conn: sqlite3.Connection, laps: list[LapRow]) -> None:
     conn.executemany("""
         INSERT OR REPLACE INTO laps (
             lap_id, activity_id, lap_index,
-            distance_m, moving_time_s, average_speed_mps,
+            distance_m, moving_time_s, elapsed_time_s, average_speed_mps,
             average_heartrate, max_heartrate, average_cadence,
             total_elevation_gain_m, pace_zone, raw_json
         ) VALUES (
             :lap_id, :activity_id, :lap_index,
-            :distance_m, :moving_time_s, :average_speed_mps,
+            :distance_m, :moving_time_s, :elapsed_time_s, :average_speed_mps,
             :average_heartrate, :max_heartrate, :average_cadence,
             :total_elevation_gain_m, :pace_zone, :raw_json
         )
     """, laps)
+    conn.commit()
+
+
+def set_activity_description(conn: sqlite3.Connection, activity_id: int, description: str | None) -> None:
+    conn.execute(
+        "UPDATE activities SET description = ? WHERE activity_id = ?",
+        [description, activity_id],
+    )
     conn.commit()
 
 

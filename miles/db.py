@@ -135,13 +135,16 @@ WORKOUT_TYPE_MAP: dict[int, str] = {
     1: "race",
     2: "long_run",
     3: "workout",
+    # Athlete-confirmed easy (not from Strava) — distinct from 0 so inference.py skips it.
+    100: "easy",
 }
 
 def effective_run_type_sql(alias: str = "") -> str:
     """SQL expression for the effective run type, with column names optionally
     qualified by a table alias (e.g. "a"). Prefers the inferred label over Strava's
     default "easy" bucket, but only when the athlete never tagged the activity
-    (workout_type == 0 is "unset"). Explicit athlete tags (workout_type 1-3) always win.
+    (workout_type == 0 is "unset"). Explicit athlete tags (workout_type 1-3, or 100
+    for athlete-confirmed easy) always win.
     """
     prefix = f"{alias}." if alias else ""
     return (

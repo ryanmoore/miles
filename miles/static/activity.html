@@ -26,6 +26,46 @@
     }
     .activity-view .loading, .activity-view .error { font-size: 0.8125rem; color: var(--muted); padding: 1rem 0; }
 
+    .activity-view .classify-panel {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    .activity-view .classify-field { display: flex; flex-direction: column; gap: 0.25rem; }
+    .activity-view .classify-field label {
+      font-size: 0.625rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+    }
+    .activity-view .classify-field select {
+      font-size: 0.8125rem;
+      padding: 0.3125rem 0.5rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+    }
+    .activity-view .classify-save {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      padding: 0.375rem 0.875rem;
+      border-radius: 6px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: white;
+      cursor: pointer;
+    }
+    .activity-view .classify-save:disabled { opacity: 0.5; cursor: default; }
+    .activity-view .classify-status { font-size: 0.75rem; color: var(--muted); }
+
     .activity-view .stat-strip {
       display: flex;
       flex-wrap: wrap;
@@ -114,6 +154,7 @@
   let mainChart = null;
   let elevChart = null;
   let streamsData = null;
+  let lastDetail = null;
 
   const toggleState = {
     pace: true,
@@ -139,6 +180,7 @@
       return;
     }
 
+    lastDetail = detail;
     renderHeader(detail);
 
     try {
@@ -155,7 +197,10 @@
     // cached stream already existed at the time of the first call.
     try {
       const res2 = await fetch(`/api/activity-detail?id=${activityId}`);
-      if (res2.ok) renderHeader(await res2.json());
+      if (res2.ok) {
+        lastDetail = await res2.json();
+        renderHeader(lastDetail);
+      }
     } catch (e) {
       // Non-fatal — the header just stays without min/median HR and elev loss.
     }
@@ -185,6 +230,7 @@
         ${stat('Elevation Loss', d.elevation_loss_ft != null ? Math.round(d.elevation_loss_ft) : '—', 'ft')}
         ${weatherStat(d)}
       </div>
+      ${classifyPanel(d)}
       <div id="chart-section">
         <div class="chart-panel">
           <div class="chart-panel-head">
@@ -231,6 +277,91 @@
       </div>
     `;
     wireToggles();
+    wireClassifyPanel();
+  }
+
+  const RUN_TYPES = ['easy', 'race', 'long_run', 'workout'];
+  const RACE_EFFORTS = ['raced', 'hard', 'casual'];
+  const WORKOUT_LABELS = ['MP Flux', 'LT', 'Tempo', 'Strides', 'Fartlek', 'Progression', 'Hills'];
+
+  function classifyPanel(d) {
+    const showRaceEffort = d.run_type === 'race';
+    const showWorkoutLabel = d.run_type === 'workout';
+    return `
+      <div class="classify-panel">
+        <div class="classify-field">
+          <label for="classify-run-type">Run Type</label>
+          <select id="classify-run-type">
+            ${RUN_TYPES.map(t => `<option value="${t}" ${t === d.run_type ? 'selected' : ''}>${t}</option>`).join('')}
+          </select>
+        </div>
+        ${showRaceEffort ? `
+          <div class="classify-field">
+            <label for="classify-race-effort">Race Effort</label>
+            <select id="classify-race-effort">
+              <option value="">—</option>
+              ${RACE_EFFORTS.map(e => `<option value="${e}" ${e === d.race_effort ? 'selected' : ''}>${e}</option>`).join('')}
+            </select>
+          </div>
+        ` : ''}
+        ${showWorkoutLabel ? `
+          <div class="classify-field">
+            <label for="classify-workout-label">Workout Label</label>
+            <select id="classify-workout-label">
+              <option value="">—</option>
+              ${WORKOUT_LABELS.map(l => `<option value="${l}" ${l === d.workout_label ? 'selected' : ''}>${l}</option>`).join('')}
+            </select>
+          </div>
+        ` : ''}
+        <button class="classify-save" id="classify-save">Save</button>
+        <span class="classify-status" id="classify-status"></span>
+      </div>
+    `;
+  }
+
+  // renderHeader replaces root.innerHTML, destroying the chart containers.
+  function reRenderHeader(d) {
+    renderHeader(d);
+    mainChart = null;
+    elevChart = null;
+    renderCharts();
+    renderLapTable();
+  }
+
+  function wireClassifyPanel() {
+    const runTypeEl = document.getElementById('classify-run-type');
+    if (!runTypeEl) return;
+    runTypeEl.addEventListener('change', () => {
+      reRenderHeader({ ...lastDetail, run_type: runTypeEl.value, race_effort: null, workout_label: null });
+    });
+
+    document.getElementById('classify-save').addEventListener('click', async () => {
+      const button = document.getElementById('classify-save');
+      const status = document.getElementById('classify-status');
+      const body = { run_type: runTypeEl.value };
+      const raceEffortEl = document.getElementById('classify-race-effort');
+      const workoutLabelEl = document.getElementById('classify-workout-label');
+      if (raceEffortEl) body.race_effort = raceEffortEl.value || null;
+      if (workoutLabelEl) body.workout_label = workoutLabelEl.value || null;
+
+      button.disabled = true;
+      status.textContent = 'Saving…';
+      try {
+        const res = await fetch(`/api/activity-reclassify?id=${activityId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(`Save failed (${res.status})`);
+        const detailRes = await fetch(`/api/activity-detail?id=${activityId}`);
+        lastDetail = await detailRes.json();
+        reRenderHeader(lastDetail);
+        document.getElementById('classify-status').textContent = 'Saved.';
+      } catch (e) {
+        status.textContent = e.message;
+        button.disabled = false;
+      }
+    });
   }
 
   function hrTriple(d) {

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 import pandas as pd
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
@@ -23,7 +23,7 @@ from starlette.types import Scope
 
 from . import db, plan, strava_client, streams
 from .build_paces import PaceClaim, pace_claims
-from .classifier import LAP_MIN_DISTANCE_M, LAP_MIN_MOVING_TIME_S
+from .classifier import LAP_MIN_DISTANCE_M, LAP_MIN_MOVING_TIME_S, WORKOUT_LABEL_PATTERNS, classify_workout
 from .distance_builds import (
     Bucket,
     router as distance_builds_router,
@@ -34,7 +34,7 @@ from .distance_builds import (
 from .fitness_api import router as fitness_api_router
 from .plan_api import router as plan_api_router
 from .builds import Build, RaceRef, detect_builds
-from .derive import ensure_derived
+from .derive import derive_all, ensure_derived
 from .format import fmt_pace, fmt_time
 from .periods import Gap, Period, WeekAgg, is_active, zero_fill, detect_periods
 from .mcp_server import mcp as _mcp_server
@@ -808,6 +808,9 @@ class ActivityDetail(TypedDict):
     humidity_avg: float | None
     wind_mph_avg: float | None
     strava_url: str
+    run_type: str
+    race_effort: str | None
+    workout_label: str | None
 
 
 @app.get("/api/activity-detail")
@@ -838,7 +841,8 @@ def get_activity_detail(id: int) -> ActivityDetail:
             strava_url,
             ROUND(weather.temp_c_avg * 9.0 / 5 + 32, 1) AS temp_f_avg,
             weather.humidity_avg,
-            ROUND(weather.wind_kph_avg * 0.621371, 1) AS wind_mph_avg
+            ROUND(weather.wind_kph_avg * 0.621371, 1) AS wind_mph_avg,
+            run_type, race_effort, workout_label
         FROM activities
         LEFT JOIN weather ON weather.activity_id = activities.activity_id
         WHERE activities.activity_id = ?
@@ -887,8 +891,105 @@ def get_activity_detail(id: int) -> ActivityDetail:
         elevation_loss_ft=elevation_loss_ft,
         temp_f_avg=row["temp_f_avg"],
         humidity_avg=row["humidity_avg"],
+        run_type=row["run_type"],
+        race_effort=row["race_effort"],
+        workout_label=row["workout_label"],
         wind_mph_avg=row["wind_mph_avg"],
         strava_url=row["strava_url"],
+    )
+
+
+# "easy" pinned to 100, not Strava's 0, so inference.py's workout_type = 0 pass skips it.
+_RUN_TYPE_TO_WORKOUT_TYPE: dict[str, int] = {v: k for k, v in db.WORKOUT_TYPE_MAP.items()}
+_RUN_TYPE_TO_WORKOUT_TYPE["easy"] = 100
+_KNOWN_WORKOUT_LABELS: set[str] = {label for _, label in WORKOUT_LABEL_PATTERNS}
+
+
+class ReclassifyRequest(TypedDict):
+    run_type: NotRequired[str | None]
+    race_effort: NotRequired[str | None]
+    workout_label: NotRequired[str | None]
+
+
+class ReclassifyResponse(TypedDict):
+    run_type: str
+    race_effort: str | None
+    workout_label: str | None
+
+
+@app.post("/api/activity-reclassify")
+def reclassify_activity(id: int, body: ReclassifyRequest) -> ReclassifyResponse:
+    """
+    Manual correction from activity.html; replays sync's downstream steps
+    (lap fetch, label backfill, derive_all, plan auto-complete) immediately.
+    """
+    conn = _conn()
+    row = conn.execute("SELECT activity_id, name FROM activities WHERE activity_id = ?", [id]).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No activity {id}.")
+
+    if "run_type" in body:
+        run_type = body["run_type"]
+        if run_type not in _RUN_TYPE_TO_WORKOUT_TYPE:
+            raise HTTPException(status_code=400, detail=f"Invalid run_type: {run_type!r}")
+        conn.execute(
+            "UPDATE activities SET run_type = ?, workout_type = ?, run_type_inferred = NULL WHERE activity_id = ?",
+            [run_type, _RUN_TYPE_TO_WORKOUT_TYPE[run_type], id],
+        )
+
+    if "race_effort" in body:
+        race_effort = body["race_effort"]
+        if race_effort is not None and race_effort not in ("raced", "hard", "casual"):
+            raise HTTPException(status_code=400, detail=f"Invalid race_effort: {race_effort!r}")
+        conn.execute(
+            "UPDATE activities SET race_effort = ?, effort_ratio = NULL WHERE activity_id = ?",
+            [race_effort, id],
+        )
+
+    if "workout_label" in body:
+        workout_label = body["workout_label"]
+        if workout_label is not None and workout_label not in _KNOWN_WORKOUT_LABELS:
+            raise HTTPException(status_code=400, detail=f"Invalid workout_label: {workout_label!r}")
+        conn.execute("UPDATE activities SET workout_label = ? WHERE activity_id = ?", [workout_label, id])
+
+    conn.commit()
+
+    effective_run_type = conn.execute(
+        f"SELECT {db.EFFECTIVE_RUN_TYPE_SQL} AS t FROM activities WHERE activity_id = ?", [id]
+    ).fetchone()["t"]
+
+    if effective_run_type in ("workout", "race"):
+        needs_laps = conn.execute(
+            "SELECT laps_synced_at FROM activities WHERE activity_id = ?", [id]
+        ).fetchone()["laps_synced_at"] is None
+        if needs_laps:
+            for _activity_id, laps in strava_client.get_activity_laps_batch([id]):
+                if laps:
+                    db.upsert_laps(conn, laps)
+            conn.execute("UPDATE activities SET laps_synced_at = datetime('now') WHERE activity_id = ?", [id])
+            conn.commit()
+
+    if effective_run_type == "workout":
+        current = conn.execute(
+            "SELECT name, workout_label FROM activities WHERE activity_id = ?", [id]
+        ).fetchone()
+        if current["workout_label"] is None and current["name"]:
+            label = classify_workout(current["name"])
+            if label:
+                conn.execute("UPDATE activities SET workout_label = ? WHERE activity_id = ?", [label, id])
+                conn.commit()
+
+    derive_all(conn)
+    plan.auto_complete_plan(conn)
+    conn.commit()
+
+    final = conn.execute(
+        "SELECT run_type, race_effort, workout_label FROM activities WHERE activity_id = ?", [id]
+    ).fetchone()
+    return ReclassifyResponse(
+        run_type=final["run_type"],
+        race_effort=final["race_effort"],
+        workout_label=final["workout_label"],
     )
 
 

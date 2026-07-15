@@ -92,8 +92,9 @@ def fetch_and_cache_streams(activity_id: int) -> pd.DataFrame:
 
 
 # Minetti et al. (2002) energy cost of running on gradients, as a polynomial
-# in grade fraction (not percent). Cost is in J/(kg*m); GAP = pace scaled by
-# the ratio of flat-ground cost to graded cost, holding effort constant.
+# in grade fraction (not percent). Cost is in J/(kg*m); GAP = pace divided by
+# the ratio of graded cost to flat-ground cost, holding effort constant —
+# uphill (higher cost) yields a faster GAP, downhill (lower cost) a slower one.
 def _minetti_cost(grade_fraction: pd.Series) -> pd.Series:
     i = grade_fraction.clip(-0.45, 0.45)
     cost = (
@@ -123,7 +124,7 @@ def compute_gap_pace_s_per_m(df: pd.DataFrame) -> pd.Series:
     grade = df["grade_smooth"].astype(float).rolling(window=7, center=True, min_periods=1).mean()
     cost_ratio = _minetti_cost(grade / 100.0) / _FLAT_COST
     real_pace_s_per_m = 1.0 / velocity.replace(0, pd.NA)
-    return real_pace_s_per_m * cost_ratio
+    return real_pace_s_per_m / cost_ratio
 
 
 def median_per_window(

@@ -1,15 +1,93 @@
 // Shared chrome for every static page: header nav + ECharts theme reader.
 // Include with a single <script src="/nav.js"></script> right after <body>.
 
+// Flat entries are `{ href, label }`; a group entry is `{ label, children }`
+// where children are themselves `{ href, label }` flat entries.
 const NAV_LINKS = [
   { href: "/plan.html", label: "Plan" },
-  { href: "/races.html", label: "Races" },
-  { href: "/builds.html", label: "Builds" },
   { href: "/activities.html", label: "Activities" },
-  { href: "/compare.html", label: "Compare" },
-  { href: "/training.html", label: "Training" },
-  { href: "/years.html", label: "Years" },
+  { href: "/races.html", label: "Races" },
+  {
+    label: "History",
+    children: [
+      { href: "/builds.html", label: "Builds" },
+      { href: "/compare.html", label: "Compare" },
+      { href: "/training.html", label: "Training" },
+      { href: "/years.html", label: "Years" },
+    ],
+  },
 ];
+
+// "/" and "/index.html" land on Plan (index.html redirects there).
+function isLinkActive(href, path) {
+  return href === "/plan.html"
+    ? (path === "/plan.html" || path === "/" || path === "/index.html")
+    : path === href;
+}
+
+// A grouped nav entry: a toggle button plus a menu of plain links. Click
+// (not hover) opens it so it works on touch; outside clicks and Escape
+// close it.
+function renderNavGroup(entry, path) {
+  const wrap = document.createElement("div");
+  wrap.className = "nav-group";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "nav-group-toggle";
+  button.textContent = `${entry.label} ▾`;
+  button.setAttribute("aria-haspopup", "true");
+  button.setAttribute("aria-expanded", "false");
+
+  const menu = document.createElement("div");
+  menu.className = "nav-group-menu";
+
+  const isChildActive = entry.children.some((child) => isLinkActive(child.href, path));
+  if (isChildActive) button.classList.add("active");
+
+  for (const child of entry.children) {
+    const a = document.createElement("a");
+    a.href = child.href;
+    a.textContent = child.label;
+    if (isLinkActive(child.href, path)) a.classList.add("active");
+    menu.appendChild(a);
+  }
+
+  function closeMenu() {
+    wrap.classList.remove("open");
+    button.setAttribute("aria-expanded", "false");
+    document.removeEventListener("click", handleOutsideClick);
+    document.removeEventListener("keydown", handleKeydown);
+  }
+
+  function openMenu() {
+    wrap.classList.add("open");
+    button.setAttribute("aria-expanded", "true");
+    document.addEventListener("click", handleOutsideClick);
+    document.addEventListener("keydown", handleKeydown);
+  }
+
+  function handleOutsideClick(event) {
+    if (!wrap.contains(event.target)) closeMenu();
+  }
+
+  function handleKeydown(event) {
+    if (event.key === "Escape") closeMenu();
+  }
+
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (wrap.classList.contains("open")) {
+      closeMenu();
+    } else {
+      openMenu();
+    }
+  });
+
+  wrap.appendChild(button);
+  wrap.appendChild(menu);
+  return wrap;
+}
 
 function renderNav() {
   const header = document.createElement("header");
@@ -23,15 +101,15 @@ function renderNav() {
 
   const nav = document.createElement("nav");
   const path = location.pathname;
-  for (const { href, label } of NAV_LINKS) {
+  for (const entry of NAV_LINKS) {
+    if (entry.children) {
+      nav.appendChild(renderNavGroup(entry, path));
+      continue;
+    }
     const a = document.createElement("a");
-    a.href = href;
-    a.textContent = label;
-    // "/" and "/index.html" land on Plan (index.html redirects there).
-    const isActive = href === "/plan.html"
-      ? (path === "/plan.html" || path === "/" || path === "/index.html")
-      : path === href;
-    if (isActive) a.classList.add("active");
+    a.href = entry.href;
+    a.textContent = entry.label;
+    if (isLinkActive(entry.href, path)) a.classList.add("active");
     nav.appendChild(a);
   }
   header.appendChild(nav);

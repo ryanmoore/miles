@@ -6,7 +6,9 @@
   <title>Miles · Activity</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
   <link rel="stylesheet" href="/theme.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H" crossorigin="anonymous">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js" integrity="sha384-pPi0zxBAoDu6+JXW/C68UZLvBUUtU+7zonhif43rqj7pxsGyqyqzcian2Rj37Rss" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH" crossorigin="anonymous"></script>
   <style>
     .activity-view h1 {
       font-size: 1.25rem;
@@ -130,6 +132,18 @@
     }
     .activity-view #chart-main { height: 380px; }
     .activity-view #chart-elevation { height: 140px; }
+    .activity-view #map-route {
+      height: 320px;
+      border-radius: 6px;
+      background: var(--bg);
+    }
+    .activity-view .leaflet-tile-pane { filter: saturate(0.85); }
+    .activity-view .route-arrow {
+      color: var(--accent, #3b82f6);
+      font-size: 14px;
+      line-height: 1;
+      transform-origin: center;
+    }
     .activity-view .dense tbody td { padding: 0.25rem 0.75rem; font-size: 0.75rem; }
     .activity-view .dense thead th { padding: 0.375rem 0.75rem; font-size: 0.625rem; }
   </style>
@@ -155,6 +169,7 @@
   let elevChart = null;
   let streamsData = null;
   let lastDetail = null;
+  let routeMap = null;
 
   const toggleState = {
     pace: true,
@@ -274,10 +289,19 @@
           </div>
           <div id="chart-elevation"></div>
         </div>
+        ${d.polyline ? `
+          <div class="chart-panel">
+            <div class="chart-panel-head">
+              <div class="chart-panel-title">Route</div>
+            </div>
+            <div id="map-route"></div>
+          </div>
+        ` : ''}
       </div>
     `;
     wireToggles();
     wireClassifyPanel();
+    if (d.polyline) renderMap(d.polyline);
   }
 
   const RUN_TYPES = ['easy', 'race', 'long_run', 'workout'];
@@ -321,6 +345,7 @@
 
   // renderHeader replaces root.innerHTML, destroying the chart containers.
   function reRenderHeader(d) {
+    routeMap = null; // container was destroyed with root.innerHTML; renderHeader rebuilds the map
     renderHeader(d);
     mainChart = null;
     elevChart = null;
@@ -362,6 +387,102 @@
         button.disabled = false;
       }
     });
+  }
+
+  // Google encoded-polyline decoder (Strava's map.summary_polyline format).
+  // Returns [[lat, lng], ...] at 1e-5 precision.
+  function decodePolyline(encoded) {
+    const points = [];
+    let index = 0, lat = 0, lng = 0;
+    while (index < encoded.length) {
+      let result = 0, shift = 0, b;
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+      result = 0; shift = 0;
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+      points.push([lat / 1e5, lng / 1e5]);
+    }
+    return points;
+  }
+
+  function renderMap(encodedPolyline) {
+    const points = decodePolyline(encodedPolyline);
+    if (points.length < 2) return;
+
+    if (routeMap) { routeMap.remove(); routeMap = null; }
+    routeMap = L.map('map-route', { scrollWheelZoom: false });
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      maxZoom: 19,
+    }).addTo(routeMap);
+
+    const line = L.polyline(points, { color: '#7dd3fc', weight: 4, opacity: 0.9 }).addTo(routeMap);
+    routeMap.fitBounds(line.getBounds(), { padding: [16, 16] });
+
+    const dotIcon = (fill) => L.divIcon({
+      className: '',
+      html: `<svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="${fill}" stroke="white" stroke-width="2"/></svg>`,
+      iconSize: [16, 16],
+      iconAnchor: [8, 8],
+    });
+    const checkeredIcon = L.divIcon({
+      className: '',
+      html: `<svg width="16" height="16" viewBox="0 0 16 16">
+        <defs>
+          <clipPath id="finish-clip"><circle cx="8" cy="8" r="6"/></clipPath>
+        </defs>
+        <circle cx="8" cy="8" r="6" fill="white" stroke="white" stroke-width="2"/>
+        <g clip-path="url(#finish-clip)">
+          <rect x="2" y="2" width="3" height="3" fill="#111"/>
+          <rect x="8" y="2" width="3" height="3" fill="#111"/>
+          <rect x="5" y="5" width="3" height="3" fill="#111"/>
+          <rect x="11" y="5" width="3" height="3" fill="#111"/>
+          <rect x="2" y="8" width="3" height="3" fill="#111"/>
+          <rect x="8" y="8" width="3" height="3" fill="#111"/>
+          <rect x="5" y="11" width="3" height="3" fill="#111"/>
+          <rect x="11" y="11" width="3" height="3" fill="#111"/>
+        </g>
+      </svg>`,
+      iconSize: [16, 16],
+      iconAnchor: [8, 8],
+    });
+
+    L.marker(points[0], { icon: dotIcon('#22c55e') }).addTo(routeMap);
+    L.marker(points[points.length - 1], { icon: checkeredIcon }).addTo(routeMap);
+
+    addDirectionArrows(routeMap, points);
+  }
+
+  // Places rotated arrow glyphs at evenly spaced points along the route
+  // (by point count, since summary_polyline points aren't evenly spaced by
+  // distance) to show direction of travel without a plugin dependency.
+  function addDirectionArrows(map, points) {
+    const targetArrows = Math.min(12, Math.max(3, Math.floor(points.length / 15)));
+    const step = Math.max(1, Math.floor(points.length / targetArrows));
+    for (let i = step; i < points.length - 1; i += step) {
+      const [lat1, lng1] = points[i - 1];
+      const [lat2, lng2] = points[Math.min(i + 1, points.length - 1)];
+      const angle = Math.atan2(lng2 - lng1, lat2 - lat1) * 180 / Math.PI;
+      const icon = L.divIcon({
+        className: '',
+        html: `<div class="route-arrow" style="transform: rotate(${angle}deg)">&#9650;</div>`,
+        iconSize: [14, 14],
+        iconAnchor: [7, 7],
+      });
+      L.marker(points[i], { icon, interactive: false }).addTo(map);
+    }
   }
 
   function hrTriple(d) {
@@ -766,6 +887,7 @@
   window.addEventListener('resize', () => {
     mainChart?.resize();
     elevChart?.resize();
+    routeMap?.invalidateSize();
   });
 
   main();

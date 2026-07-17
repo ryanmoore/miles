@@ -1,4 +1,5 @@
 import html
+import json
 import logging
 import os
 import re
@@ -829,6 +830,7 @@ class ActivityDetail(TypedDict):
     run_type: str
     race_effort: str | None
     workout_label: str | None
+    polyline: str | None
 
 
 @app.get("/api/activity-detail")
@@ -860,13 +862,19 @@ def get_activity_detail(id: int) -> ActivityDetail:
             ROUND(weather.temp_c_avg * 9.0 / 5 + 32, 1) AS temp_f_avg,
             weather.humidity_avg,
             ROUND(weather.wind_kph_avg * 0.621371, 1) AS wind_mph_avg,
-            run_type, race_effort, workout_label
+            run_type, race_effort, workout_label, activities.raw_json AS raw_json
         FROM activities
         LEFT JOIN weather ON weather.activity_id = activities.activity_id
         WHERE activities.activity_id = ?
     """, [id]).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail=f"No activity {id}.")
+
+    polyline: str | None = None
+    if row["raw_json"] is not None:
+        map_data = json.loads(row["raw_json"]).get("map")
+        if map_data is not None:
+            polyline = map_data.get("summary_polyline")
 
     description = row["description"]
     if description is None:
@@ -914,6 +922,7 @@ def get_activity_detail(id: int) -> ActivityDetail:
         workout_label=row["workout_label"],
         wind_mph_avg=row["wind_mph_avg"],
         strava_url=row["strava_url"],
+        polyline=polyline,
     )
 
 

@@ -60,16 +60,15 @@ def test_compute_gap_pace_flat_ground_equals_real_pace():
     assert gap.iloc[5] == pytest.approx(real_pace, rel=1e-6)
 
 
-def test_compute_gap_pace_uphill_is_slower_than_real_pace():
-    # Same speed, but climbing — GAP should read as a *slower* flat-equivalent
-    # pace (larger seconds-per-meter) than the raw measured pace.
+def test_compute_gap_pace_uphill_is_faster_than_real_pace():
+    # Climbing should read as a faster flat-equivalent pace than real pace.
     df = pd.DataFrame({
         "velocity_smooth_mps": [3.0] * 10,
         "grade_smooth": [10.0] * 10,  # 10% grade, in percent (matches Strava's units)
     })
     gap = compute_gap_pace_s_per_m(df)
     real_pace = 1.0 / 3.0
-    assert gap.iloc[5] > real_pace
+    assert gap.iloc[5] < real_pace
 
 
 def test_compute_gap_pace_zero_velocity_does_not_divide_by_zero():

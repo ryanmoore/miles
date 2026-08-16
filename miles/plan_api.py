@@ -1030,6 +1030,10 @@ def _workout_caption(points: Sequence[WorkoutPoint]) -> str:
     )
 
 
+# Weeks of pre-plan history prepended to the Trends charts' x-axis.
+_PLAN_PROGRESSION_LOOKBACK_WEEKS = 4
+
+
 @router.get("/api/plan-progression")
 def get_plan_progression() -> PlanProgressionResponse | None:
     """
@@ -1038,18 +1042,15 @@ def get_plan_progression() -> PlanProgressionResponse | None:
     from /api/plan + /api/plan-adherence's bands; see the module comment
     above).
 
-    `weeks` is the full plan-window Monday list from the latest version (the
-    same list /api/plan reports) — the shared, continuous x-axis for the easy
-    HR/pace chart, so a week with no easy runs synced renders as a gap, never
-    a missing category.
+    `weeks` is the plan-window Monday list, prepended with
+    _PLAN_PROGRESSION_LOOKBACK_WEEKS Mondays before plan start.
 
     `easy`: one row per week in `weeks`; see _easy_progression.
 
-    `workouts`: one point per synced workout matched to a planned workout slot
-    (plan_adherence's matching, reused); see _workout_points.
+    `workouts`: one point per synced workout, chronological. Lookback points
+    carry no target band; in-plan points do, via _workout_points.
 
-    `checkpoints`: monthly 5K-pace fitness_checkpoints rows landing inside the
-    plan window, for the workout chart's background reference.
+    `checkpoints`: monthly 5K-pace fitness_checkpoints rows in the window.
 
     Returns null when there's neither an active nor a completed plan (see
     plan.get_current_or_recent_plan).
@@ -1065,10 +1066,31 @@ def get_plan_progression() -> PlanProgressionResponse | None:
     ).fetchone()
     bundle = plan.get_version(conn, int(latest["version_id"])) if latest is not None else None
     weeks_in = bundle["weeks"] if bundle is not None else []
-    week_starts = [w["week_start"] for w in weeks_in]
+    plan_week_starts = [w["week_start"] for w in weeks_in]
+
+    if plan_week_starts:
+        first_monday = date.fromisoformat(plan_week_starts[0])
+        lookback_starts = [
+            (first_monday - timedelta(weeks=_PLAN_PROGRESSION_LOOKBACK_WEEKS - i)).isoformat()
+            for i in range(_PLAN_PROGRESSION_LOOKBACK_WEEKS)
+        ]
+    else:
+        lookback_starts = []
+    week_starts = lookback_starts + plan_week_starts
 
     easy = _easy_progression(conn, week_starts)
-    workouts = _workout_points(conn, active["plan_id"], weeks_in)
+    lookback_workouts: list[WorkoutPoint] = [
+        WorkoutPoint(
+            date=w["date"], week_start=w["week_start"], title=w["title"], label=w["label"],
+            pace_min_per_mile=w["pace_min_per_mile"], distance_mi=w["distance_mi"],
+            pace_lo=None, pace_hi=None, zone_name=None,
+        )
+        for w in (_progression_workout_points(conn, lookback_starts) if lookback_starts else [])
+    ]
+    workouts = sorted(
+        lookback_workouts + _workout_points(conn, active["plan_id"], weeks_in),
+        key=lambda p: p["date"],
+    )
     checkpoints = _checkpoints_in_window(conn, week_starts)
 
     return PlanProgressionResponse(

@@ -23,7 +23,8 @@ from collections import ChainMap, OrderedDict, defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Collection, Iterable, Iterator, Literal, Mapping, MutableMapping, Sequence, cast
+from functools import lru_cache
+from typing import Callable, Collection, Iterable, Iterator, Literal, Mapping, MutableMapping, NamedTuple, Sequence, cast
 from typing_extensions import NotRequired, TypedDict
 
 from . import areas, drive_starts, network, routes, routes_spatial, sections, terrain
@@ -73,12 +74,16 @@ DIVERSITY_FLOOR = 0.25
 # The share of the time budget the section search may use when the random walk
 # could still have to fill in.
 SECTIONS_BUDGET_SHARE = 0.6
-# Two candidates sharing this share of the longer one's length (by original
-# edge, whatever point a piece was cut at) are one route.
+# Two walks sharing this share of the longer one's length by original edge,
+# whatever point a piece was cut at, are one walk (assemble.py drops the
+# second); the meters each runs on an edge count, so a retraced stretch is not
+# the same walk as a single pass.
 DUPLICATE_SHARE = 0.95
-# A returned candidate sharing more than this share of its own length with one
-# ranked above it is only returned to fill n when nothing more distinct remains.
+# Two candidates are similar when more than this share of the shorter one's
+# ground lies within about FOOTPRINT_CELL_M of the other; a returned shortlist
+# never holds two.
 SIMILAR_SHARE = 0.6
+FOOTPRINT_CELL_M = 30.0
 # A stretch run again earns this share of its value; the request may set it
 # from 0 to 1.
 DEFAULT_REPEAT_VALUE = 0.5
@@ -782,24 +787,50 @@ def _cover(edge_rows: Mapping[int, dict], segments: Sequence[tuple[int, bool]]) 
     return cover
 
 
-def _shared_m(a: Mapping[int, float], b: Mapping[int, float]) -> float:
-    return sum(min(m, b[k]) for k, m in a.items() if k in b)
-
-
 def _duplicate(a: Mapping[int, float], b: Mapping[int, float]) -> bool:
-    return _shared_m(a, b) >= DUPLICATE_SHARE * max(sum(a.values()), sum(b.values()), 1.0)
+    shared_m = sum(min(m, b[k]) for k, m in a.items() if k in b)
+    return shared_m >= DUPLICATE_SHARE * max(sum(a.values()), sum(b.values()), 1.0)
+
+
+class _Footprint(NamedTuple):
+    cells: frozenset[tuple[int, int]]
+    # The cells and every neighbor of them: a point within a cell's width of
+    # the route lies in it.
+    halo: frozenset[tuple[int, int]]
+
+
+@lru_cache(maxsize=16384)
+def _edge_footprint(points_blob: bytes) -> _Footprint:
+    cells = {
+        (int(lat * routes_spatial.METERS_PER_DEG_LAT // FOOTPRINT_CELL_M), int(lng * routes_spatial.meters_per_deg_lng(lat) // FOOTPRINT_CELL_M))
+        for lat, lng, _d, _e in network.unpack_edge_points(points_blob)
+    }
+    return _Footprint(frozenset(cells), frozenset((x + dx, y + dy) for x, y in cells for dx in (-1, 0, 1) for dy in (-1, 0, 1)))
+
+
+def _footprint(edge_rows: Mapping[int, dict], segments: Sequence[tuple[int, bool]]) -> _Footprint:
+    """The ground a route covers, as the grid cells its points fall in."""
+    parts = [_edge_footprint(bytes(edge_rows[eid]["points_blob"])) for eid, _ in segments]
+    return _Footprint(frozenset().union(*(p.cells for p in parts)), frozenset().union(*(p.halo for p in parts)))
+
+
+def _overlap(a: _Footprint, b: _Footprint) -> float:
+    """The share of the smaller route's ground that the other covers, whatever
+    ways each runs on."""
+    small, big = (a, b) if len(a.cells) <= len(b.cells) else (b, a)
+    return len(small.cells & big.halo) / max(len(small.cells), 1)
 
 
 def _diversify(candidates: list[_Candidate], edge_rows: Mapping[int, dict], target_m: float, n: int) -> list[_Candidate]:
-    """Up to n of `candidates`, best first, each penalized for the edges it
+    """Up to n of `candidates`, best first, each penalized for the ground it
     shares with those already selected. A section-built candidate ranks by
     its score scaled to the best in the pool, so the penalty weighs the same
     as for a walk's quality, and one under DIVERSITY_FLOOR of the best waits
-    for the rest. A candidate that duplicates a selected one is dropped, and
-    one sharing more than SIMILAR_SHARE of its length with a selected one waits
-    for the candidates that do not."""
+    for the rest. A candidate sharing more than SIMILAR_SHARE of its ground with
+    a selected one is never returned, so fewer than n come back when the rest
+    are alike."""
     remaining = list(candidates)
-    covers = {id(c): _cover(edge_rows, c.segments) for c in candidates}
+    footprints = {id(c): _footprint(edge_rows, c.segments) for c in candidates}
     selected: list[_Candidate] = []
     best_score = max((cast(dict, c.ranking)["score"] for c in candidates if c.ranking is not None), default=0.0)
 
@@ -810,20 +841,13 @@ def _diversify(candidates: list[_Candidate], edge_rows: Mapping[int, dict], targ
 
     while remaining and len(selected) < n:
         def penalized(c: _Candidate) -> float:
-            if not selected:
-                return base(c)
-            shared_m = sum(_shared_m(covers[id(c)], covers[id(s)]) for s in selected)
-            fraction = min(shared_m / max(cast(float, c.score["distance_m"]), 1.0), 1.0)
-            return base(c) - DIVERSITY_WEIGHT * fraction
-
-        def similar(c: _Candidate) -> bool:
-            own = max(sum(covers[id(c)].values()), 1.0)
-            return any(_shared_m(covers[id(c)], covers[id(s)]) > SIMILAR_SHARE * own for s in selected)
+            shared = min(sum(_overlap(footprints[id(c)], footprints[id(s)]) for s in selected), 1.0)
+            return base(c) - DIVERSITY_WEIGHT * shared
 
         eligible = [c for c in remaining if c.ranking is None or base(c) >= DIVERSITY_FLOOR] or remaining
-        best = max([c for c in eligible if not similar(c)] or eligible, key=penalized)
+        best = max(eligible, key=penalized)
         selected.append(best)
-        remaining = [c for c in remaining if c is not best and not _duplicate(covers[id(c)], covers[id(best)])]
+        remaining = [c for c in remaining if c is not best and _overlap(footprints[id(c)], footprints[id(best)]) <= SIMILAR_SHARE]
     return selected
 
 
@@ -1144,12 +1168,12 @@ def _persist_selected(
             return (len(c.missed), c.built_from != "sections", -(c.ranking["score"] if c.ranking else _quality(c, target_m)))
 
         selected = []
-        covers: list[dict[int, float]] = []
+        footprints: list[_Footprint] = []
         for c in sorted(list(near_misses.values()), key=near_key):
-            cover = _cover(edge_rows, c.segments)
-            if len(selected) < n and not any(_duplicate(cover, other) for other in covers):
+            footprint = _footprint(edge_rows, c.segments)
+            if len(selected) < n and not any(_overlap(footprint, other) > SIMILAR_SHARE for other in footprints):
                 selected.append(c)
-                covers.append(cover)
+                footprints.append(footprint)
     return [_persist_candidate(conn, area_id, edge_rows, c) for c in selected]
 
 

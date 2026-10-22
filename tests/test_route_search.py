@@ -5,7 +5,7 @@ import sqlite3
 import threading
 import time
 import pytest
-from helpers import FakeSampler, ImmediateThread, WayBuilder, climbing_sampler, lerp, none_sampler
+from helpers import ORIGIN_LAT, ORIGIN_LNG, FakeSampler, ImmediateThread, WayBuilder, by_deg_lat, by_deg_lng, climbing_sampler, lerp, none_sampler
 
 from miles import areas, assemble, db, network, route_search, routes as routes_service
 
@@ -188,7 +188,7 @@ def test_diversify_returns_distinct_candidates_and_a_loop_ridden_in_either_direc
     perimeter = _perimeter_length_m(conn, 1)
 
     result = route_search.find_routes(conn, _base_request(1, perimeter * 0.3, perimeter * 1.3, n=4, shape="any", time_budget_s=8.0))
-    assert len(result["candidates"]) >= 3
+    assert len(result["candidates"]) >= 2
 
     # The same loop run clockwise and counter-clockwise is one route, and
     # n copies of it is not a set of options.
@@ -512,11 +512,24 @@ def test_concurrent_searches_run_one_at_a_time_and_each_gets_its_full_budget(tmp
         assert calls[-1][1] - calls[0][0] >= budget_s * 0.8
 
 
-def test_diversify_drops_a_duplicate_cut_at_another_point_and_ranks_a_near_duplicate_after_a_different_route():
-    def edge(length_m: float, origin: int | None = None) -> dict:
-        return {"length_m": length_m} | ({} if origin is None else {"origin": origin})
+def _rows_along(lengths_m: dict[int, float], lat_offsets_m: dict[int, float], start_m: dict[int, float]) -> dict[int, dict]:
+    """Edges running due east, one row each, 20 m between points."""
+    rows = {}
+    for eid, length_m in lengths_m.items():
+        pts = [
+            (ORIGIN_LAT + by_deg_lat(lat_offsets_m.get(eid, 0.0)), ORIGIN_LNG + by_deg_lng(ORIGIN_LAT, start_m.get(eid, 0.0) + d), d, None)
+            for d in range(0, int(length_m) + 1, 20)
+        ]
+        rows[eid] = {"length_m": length_m, "points_blob": network._pack_points([p[:2] for p in pts], [p[2] for p in pts], [None] * len(pts))}
+    return rows
 
-    rows = {1: edge(1000), 2: edge(1000), 3: edge(200), 4: edge(1500), 5: edge(500), -1: edge(900, 1), -2: edge(980, 1)}
+
+def test_diversify_drops_candidates_on_the_same_ground_however_cut_or_mapped_and_does_not_backfill_to_n():
+    rows = _rows_along(
+        {1: 1000.0, 2: 1000.0, 3: 500.0, 4: 1500.0, 5: 2000.0},
+        lat_offsets_m={3: 10.0, 4: 2000.0, 5: 10.0},
+        start_m={2: 1000.0, 3: 0.0, 5: 0.0},
+    )
 
     def candidate(edge_ids: list[int], score: float) -> route_search._Candidate:
         length_m = sum(rows[e]["length_m"] for e in edge_ids)
@@ -524,24 +537,9 @@ def test_diversify_drops_a_duplicate_cut_at_another_point_and_ranks_a_near_dupli
             "out_and_back", {"lat": 0.0, "lng": 0.0}, [(e, True) for e in edge_ids], {"distance_m": length_m}, [], "sections", {"score": score}
         )
 
-    best, duplicate = candidate([1, 2], 10.0), candidate([-2, 2], 9.9)  # the same edges, one cut short
-    near_duplicate, different = candidate([-1, 2, 3], 9.5), candidate([4, 5], 6.0)
+    best = candidate([1, 2], 10.0)
+    parallel = candidate([5], 9.9)  # the same 2 km, mapped as one way 10 m away
+    inside = candidate([3], 9.8)  # 500 m of it, 10 m away
+    different = candidate([4], 5.0)
 
-    picked = route_search._diversify([best, duplicate, near_duplicate, different], rows, 2000.0, 5)
-
-    assert picked == [best, different, near_duplicate]
-
-
-def test_diversify_returns_a_candidate_sharing_most_of_its_length_only_to_fill_n():
-    rows = {k: {"length_m": m} for k, m in {1: 1000.0, 2: 1000.0, 3: 600.0, 4: 1500.0}.items()}
-
-    def candidate(edge_ids: list[int], score: float) -> route_search._Candidate:
-        length_m = sum(rows[e]["length_m"] for e in edge_ids)
-        return route_search._Candidate(
-            "loop", {"lat": 0.0, "lng": 0.0}, [(e, True) for e in edge_ids], {"distance_m": length_m}, [], "sections", {"score": score}
-        )
-
-    best, similar, different = candidate([1, 2], 10.0), candidate([1, 3], 9.9), candidate([2, 4], 5.0)
-
-    assert route_search._diversify([best, similar, different], rows, 2000.0, 2) == [best, different]
-    assert route_search._diversify([best, similar], rows, 2000.0, 2) == [best, similar]
+    assert route_search._diversify([best, parallel, inside, different], rows, 2000.0, 5) == [best, different]

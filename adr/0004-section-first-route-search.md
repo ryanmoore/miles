@@ -238,10 +238,10 @@ out-and-back when its stretch is better.
   `repeat_value` has charged them. It separates a figure eight, a wiggle or a filler spur
   from an open loop; reach was chosen over enclosed area because a loop's area is
   sensitive to a single detour while its reach is not.
-- **The returned candidates differ.** One sharing more than `SIMILAR_SHARE` (60%) of its
-  length, by original edge, with a higher-ranked returned one is passed over while a more
-  distinct one remains, and is returned only to fill `n`. The 95% rule still drops a
-  duplicate from the pool.
+- **The returned candidates differ.** One with more than `SIMILAR_SHARE` (60%) of the
+  shorter route's ground within about 30 m of a higher-ranked returned one (a grid-cell
+  set per route, whatever ways each runs on) is never returned, so a request for `n` can
+  get fewer, with a warning.
 - **Fallback.** The random walk runs only for a request that names no sections and
   has no stops, when no section-built candidate meets the request; the section search
   then uses 60% of the time budget and leaves the rest to the walk.

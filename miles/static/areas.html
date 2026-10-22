@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Miles · Areas</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
+  <link rel="stylesheet" href="/theme.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H" crossorigin="anonymous">
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH" crossorigin="anonymous"></script>
+  <style>
+    .areas-view .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+    .areas-view .head a { font-size: 0.875rem; color: var(--accent); white-space: nowrap; }
+    .areas-view .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
+    .areas-view .field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; color: var(--text-secondary); min-width: 0; }
+    .areas-view .field input {
+      font: inherit; font-size: 0.875rem; padding: 0.375rem 0.5rem; min-width: 0;
+      color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    }
+    .areas-view .locate-row { display: flex; gap: 0.5rem; align-items: flex-end; }
+    .areas-view .locate-row .field { flex: 1; }
+    .areas-view .add-map { height: 240px; border-radius: 6px; margin-top: 0.75rem; }
+    .areas-view .hint { font-size: 0.75rem; color: var(--muted); margin: 0.375rem 0 0; }
+    .areas-view .hint.error { color: var(--series-6); padding: 0; }
+    .areas-view button {
+      font: inherit; font-size: 0.8125rem; padding: 0.375rem 0.875rem; min-height: 2.25rem;
+      color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+    }
+    .areas-view button.primary { font-weight: 600; color: #fff; background: var(--accent); border: 0; }
+    .areas-view button.danger { color: var(--series-6); }
+    .areas-view button:disabled { opacity: 0.5; cursor: default; }
+    .areas-view .area-card { padding: 0.75rem 0; border-top: 1px solid var(--border); }
+    .areas-view .area-card:first-child { border-top: 0; }
+    .areas-view .area-name { font-weight: 600; }
+    .areas-view .area-meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.125rem; }
+    .areas-view .area-status { font-size: 0.8125rem; margin-top: 0.375rem; }
+    .areas-view .area-status.failed { color: var(--series-6); }
+    .areas-view .bar { height: 0.375rem; margin-top: 0.375rem; border-radius: 3px; background: var(--gridline); overflow: hidden; }
+    .areas-view .bar > div { height: 100%; background: var(--accent); }
+    .areas-view .bar.indeterminate > div { width: 30%; animation: area-slide 1.4s ease-in-out infinite alternate; }
+    @keyframes area-slide { from { margin-left: 0; } to { margin-left: 70%; } }
+    .areas-view .area-actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+    .areas-view .skeleton-row { height: 4rem; margin-bottom: 0.5rem; }
+    .areas-view dialog {
+      margin: auto; width: min(30rem, calc(100vw - 2rem)); padding: 1.25rem; border: 1px solid var(--border); border-radius: 10px;
+      background: var(--surface); color: var(--text);
+    }
+    .areas-view dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
+    .areas-view dialog h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+    .areas-view dialog ul { margin: 0.5rem 0; padding-left: 1.25rem; font-size: 0.875rem; }
+    .areas-view dialog li { margin-bottom: 0.375rem; }
+    .areas-view dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+<script src="/nav.js"></script>
+<script src="/charts.js"></script>
+<script src="/map.js"></script>
+<script src="/area-status.js"></script>
+
+<main class="areas-view page-view">
+  <div class="head">
+    <div>
+      <h1>Areas</h1>
+      <p class="subtitle" id="subtitle">Loading…</p>
+    </div>
+    <a href="/create-route.html">Create a route</a>
+  </div>
+
+  <section class="chart-panel" id="list-panel">
+    <div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>
+  </section>
+
+  <section class="chart-panel">
+    <div class="chart-panel-title">Add an area</div>
+    <div class="form-grid">
+      <label class="field">Label<input id="label" type="text" placeholder="Springfield" autocomplete="off"></label>
+      <label class="field">Radius (km)<input id="radius" type="number" min="1" max="60" step="1" value="10"></label>
+    </div>
+    <div class="locate-row" style="margin-top:0.75rem">
+      <label class="field">City or address<input id="place" type="text" placeholder="123 Main St, Springfield" autocomplete="off"></label>
+      <button id="locate" type="button">Locate</button>
+    </div>
+    <div id="add-map" class="add-map"></div>
+    <p class="hint" id="add-hint">Enter a city or address and press Locate, or click the map to place the pin.</p>
+    <button class="primary" id="import" type="button" style="margin-top:0.75rem" disabled>Import…</button>
+  </section>
+
+  <dialog id="confirm-import"></dialog>
+  <dialog id="confirm-remove"></dialog>
+</main>
+
+<script>
+  const listPanel = document.getElementById('list-panel');
+  const subtitle = document.getElementById('subtitle');
+  const hint = document.getElementById('add-hint');
+  const importBtn = document.getElementById('import');
+  const POLL_MS = 3000;
+
+  let areas = [];
+  let pollTimer = null;
+
+  // ---- list -----------------------------------------------------------
+
+  const ago = (iso) => {
+    const days = Math.floor((Date.now() - Date.parse(iso)) / 86400000);
+    return days < 1 ? 'today' : `${days} day${days === 1 ? '' : 's'} ago`;
+  };
+
+  function cardHtml(a) {
+    const p = areaProgress(a);
+    const bar = areaIsBusy(a)
+      ? `<div class="bar${p.fraction == null ? ' indeterminate' : ''}"><div${p.fraction == null ? '' : ` style="width:${Math.round(p.fraction * 100)}%"`}></div></div>`
+      : '';
+    const status = [p.text, p.step, p.detail, p.eta].filter(Boolean).join(' · ');
+    const meta = [
+      `${a.center_lat.toFixed(3)}, ${a.center_lng.toFixed(3)}`,
+      `${a.radius_km} km`,
+      a.data_as_of ? `data from ${a.data_as_of.slice(0, 10)}` : null,
+      `used ${ago(a.last_used_at)}`,
+    ].filter(Boolean).join(' · ');
+    return `<div class="area-card" data-id="${a.area_id}">
+      <div class="area-name">${esc(a.label)}${a.pinned ? '<span class="badge">PINNED</span>' : ''}</div>
+      <div class="area-meta">${esc(meta)}</div>
+      <div class="area-status${a.status === 'error' ? ' failed' : ''}">${esc(status)}</div>${bar}
+      <div class="area-actions">
+        <button type="button" data-act="pin">${a.pinned ? 'Unpin' : 'Pin'}</button>
+        <button type="button" class="danger" data-act="remove"${a.status === 'importing' ? ' disabled title="Importing"' : ''}>Remove</button>
+      </div>
+    </div>`;
+  }
+
+  function renderList() {
+    subtitle.textContent = `${areas.length} area${areas.length === 1 ? '' : 's'}`;
+    listPanel.innerHTML = areas.length
+      ? areas.map(cardHtml).join('')
+      : '<div class="loading">No areas yet. Add one above.</div>';
+  }
+
+  async function refresh() {
+    const res = await getJson('/api/areas');
+    if (res.error) {
+      subtitle.textContent = '';
+      listPanel.innerHTML = `<div class="error">Could not load areas: ${esc(res.error)}</div>`;
+    } else {
+      areas = res.data;
+      renderList();
+    }
+    clearTimeout(pollTimer);
+    if (areas.some(areaIsBusy)) pollTimer = setTimeout(refresh, POLL_MS);
+  }
+
+  const send = (url, method, body) => getJson(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  const areaById = (id) => areas.find(a => a.area_id === id);
+
+  listPanel.addEventListener('click', async (e) => {
+    const button = e.target.closest('button[data-act]');
+    if (!button) return;
+    const area = areaById(Number(button.closest('.area-card').dataset.id));
+    if (button.dataset.act === 'remove') return openRemoveDialog(area);
+    button.disabled = true;
+    const res = await send(`/api/areas/${area.area_id}/pin`, 'POST', { pinned: !area.pinned });
+    if (res.error) alert(res.error);
+    refresh();
+  });
+
+  // ---- remove ---------------------------------------------------------
+
+  function openRemoveDialog(area) {
+    const dialog = document.getElementById('confirm-remove');
+    dialog.innerHTML = `
+      <h2>Remove ${esc(area.label)}?</h2>
+      <p class="area-meta"></p>
+      <ul>
+        ${area.pinned ? '<li>This area is <strong>pinned</strong>, so it would otherwise be kept indefinitely.</li>' : ''}
+        <li>Its cached map data and trail network are deleted.</li>
+        <li>A downloaded regional extract that no other area needs is deleted from the server's disk.</li>
+      </ul>
+      <div class="hint error" id="remove-error"></div>
+      <div class="dialog-actions">
+        <button type="button" id="remove-cancel">Cancel</button>
+        <button type="button" class="danger" id="remove-confirm">Remove</button>
+      </div>`;
+    dialog.querySelector('#remove-cancel').onclick = () => dialog.close();
+    dialog.querySelector('#remove-confirm').onclick = async (e) => {
+      const button = e.currentTarget;
+      button.disabled = true;
+      const res = await send(`/api/areas/${area.area_id}`, 'DELETE');
+      if (res.error) {
+        dialog.querySelector('#remove-error').textContent = res.error;
+        button.disabled = false;
+        return;
+      }
+      dialog.close();
+      refresh();
+    };
+    dialog.showModal();
+  }
+
+  // ---- add ------------------------------------------------------------
+
+  const addMap = L.map('add-map');
+  addBaseLayer(addMap);
+  addMap.setView([20, 0], 2);
+  let pin = null;
+  let circle = null;
+  const radiusKm = () => Number(document.getElementById('radius').value);
+  const radiusValid = () => radiusKm() > 0 && radiusKm() <= 60;
+
+  function setPin(latlng, zoom) {
+    pin ??= L.marker(latlng).addTo(addMap);
+    pin.setLatLng(latlng);
+    circle ??= L.circle(latlng, { color: '#2563eb', weight: 2, fill: false, interactive: false }).addTo(addMap);
+    circle.setLatLng(latlng);
+    drawRadius();
+    if (zoom) addMap.fitBounds(circle.getBounds());
+    importBtn.disabled = false;
+  }
+
+  function drawRadius() {
+    if (circle && radiusValid()) circle.setRadius(radiusKm() * 1000);
+  }
+
+  addMap.on('click', (e) => {
+    setPin(e.latlng);
+    hint.className = 'hint';
+    hint.textContent = `Pin at ${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)}. Click the map to move it.`;
+  });
+  document.getElementById('radius').addEventListener('input', drawRadius);
+
+  document.getElementById('locate').addEventListener('click', async (e) => {
+    const query = document.getElementById('place').value.trim();
+    if (!query) return;
+    const button = e.currentTarget;
+    button.disabled = true;
+    hint.className = 'hint';
+    hint.textContent = 'Looking up…';
+    const res = await getJson(`/api/geocode?q=${encodeURIComponent(query)}`);
+    button.disabled = false;
+    if (res.error) {
+      hint.className = 'hint error';
+      hint.textContent = res.error;
+      return;
+    }
+    setPin(L.latLng(res.data.lat, res.data.lng), true);
+    hint.textContent = `Found ${res.data.display_name}. Click the map to adjust the pin. ${res.data.attribution}`;
+  });
+
+  importBtn.addEventListener('click', async () => {
+    const label = document.getElementById('label').value.trim();
+    const problem = !label ? 'Give the area a label.'
+      : areas.some(a => a.label === label) ? `An area labeled "${label}" already exists.`
+      : !radiusValid() ? 'Radius must be between 1 and 60 km.' : null;
+    if (problem) {
+      hint.className = 'hint error';
+      hint.textContent = problem;
+      return;
+    }
+    const at = pin.getLatLng();
+    importBtn.disabled = true;
+    const res = await getJson(`/api/areas/estimate?lat=${at.lat}&lng=${at.lng}&radius_km=${radiusKm()}`);
+    importBtn.disabled = false;
+    if (res.error) {
+      hint.className = 'hint error';
+      hint.textContent = res.error;
+      return;
+    }
+    openImportDialog(label, at, res.data);
+  });
+
+  function extractLine(est) {
+    const region = est.source.split(':')[1];
+    if (est.source.startsWith('extract:')) {
+      return `It would be cut from the cached extract <strong>${esc(region)}</strong>; nothing is downloaded. Cutting takes about ${Math.max(1, Math.round(est.estimated_seconds / 60))} min.`;
+    }
+    return `It would download the regional extract${region ? ` <strong>${esc(region)}</strong>` : ''}, which is not cached yet, so there is no time estimate for it.`;
+  }
+
+  function openImportDialog(label, at, est) {
+    const dialog = document.getElementById('confirm-import');
+    dialog.innerHTML = `
+      <h2>Import ${esc(label)}?</h2>
+      <ul>
+        <li>The import downloads a regional OpenStreetMap extract unless one is already cached. That can be hundreds of MB, and it is kept on the server's disk for reuse.</li>
+        <li>Cutting the area, fetching elevation and building the trail network take several minutes or more.</li>
+        <li>The area cannot be searched until it is ready.</li>
+        <li>${extractLine(est)}</li>
+      </ul>
+      <div class="hint error" id="import-error"></div>
+      <div class="dialog-actions">
+        <button type="button" id="import-cancel">Cancel</button>
+        <button type="button" class="primary" id="import-confirm">Import</button>
+      </div>`;
+    dialog.querySelector('#import-cancel').onclick = () => dialog.close();
+    dialog.querySelector('#import-confirm').onclick = async (e) => {
+      const button = e.currentTarget;
+      button.disabled = true;
+      const res = await send('/api/areas', 'POST', { label, lat: at.lat, lng: at.lng, radius_km: radiusKm() });
+      if (res.error) {
+        dialog.querySelector('#import-error').textContent = res.error;
+        button.disabled = false;
+        return;
+      }
+      dialog.close();
+      document.getElementById('label').value = '';
+      refresh();
+    };
+    dialog.showModal();
+  }
+
+  refresh();
+</script>
+</body>
+</html>

@@ -17,6 +17,7 @@
       font: inherit; font-size: 0.875rem; padding: 0.375rem 0.5rem; min-width: 0;
       color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
     }
+    .cand-view .manage-link { font-size: 0.75rem; color: var(--accent); }
     .cand-view .field input[type=range] { padding: 0; }
     .cand-view .start-map { height: 220px; border-radius: 6px; }
     .cand-view .start-hint { font-size: 0.75rem; color: var(--muted); margin: 0.375rem 0 0; }
@@ -39,6 +40,7 @@
 <script src="/nav.js"></script>
 <script src="/charts.js"></script>
 <script src="/map.js"></script>
+<script src="/area-status.js"></script>
 <script src="/candidate-cards.js"></script>
 
 <main class="cand-view page-view">
@@ -65,13 +67,17 @@
   let runToken = 0;
 
   const option = (value, label, selected) => `<option value="${value}"${selected ? ' selected' : ''}>${esc(label)}</option>`;
+  const areaOption = (a) => a.status === 'ready'
+    ? option(a.area_id, a.label)
+    : `<option value="${a.area_id}" disabled>${esc(`${a.label} (${areaStatusText(a)})`)}</option>`;
   const choice = (id, label, values) =>
     `<label class="field">${label}<select id="${id}">${values.map(([v, l]) => option(v, l)).join('')}</select></label>`;
 
   function renderForm() {
     formPanel.innerHTML = `
       <div class="form-grid">
-        <label class="field">Area<select id="area">${areas.map(a => option(a.area_id, a.label)).join('')}</select></label>
+        <label class="field">Area<select id="area">${areas.map(areaOption).join('')}</select>
+          <a class="manage-link" href="/areas.html">Manage areas</a></label>
         <label class="field">Distance min (mi)<input id="dmin" type="number" min="0.5" step="0.5" value="5"></label>
         <label class="field">Distance max (mi)<input id="dmax" type="number" min="0.5" step="0.5" value="8"></label>
         ${choice('purpose', 'Purpose', [['', 'None'], ['easy', 'Easy'], ['workout', 'Workout'], ['long', 'Long'], ['hilly', 'Hilly']])}
@@ -251,9 +257,9 @@
       formPanel.innerHTML = `<div class="error">Could not load areas: ${esc(res.error)}</div>`;
       return;
     }
-    areas = res.data.filter(a => a.status === 'ready');
-    if (!areas.length) {
-      formPanel.innerHTML = '<div class="loading">No imported areas are ready. Import one first.</div>';
+    areas = res.data;
+    if (!areas.some(a => a.status === 'ready')) {
+      formPanel.innerHTML = '<div class="loading">No imported areas are ready. <a href="/areas.html">Add or check an area.</a></div>';
       return;
     }
     renderForm();

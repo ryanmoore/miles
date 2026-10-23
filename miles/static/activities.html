@@ -461,7 +461,47 @@
   }
 
   function reload() {
+    saveFilters();
     loadPage(true).catch(showError);
+  }
+
+  // ---- Remembered filters ------------------------------------------------
+  // Per viewer, in localStorage. runTypes is saved as null when Run is
+  // unfiltered, so a run type that appears later is still included.
+
+  const FILTERS_KEY = 'miles.activityFilters';
+
+  function saveFilters() {
+    const runFiltered = state.sports.has('Run') && state.runTypes.size < filters.run_types.length;
+    const saved = {
+      sports: [...state.sports],
+      runTypes: runFiltered ? [...state.runTypes] : null,
+      from: state.from,
+      to: state.to,
+    };
+    try { localStorage.setItem(FILTERS_KEY, JSON.stringify(saved)); } catch { /* not remembered */ }
+  }
+
+  // Drops anything the current data no longer has (a sport since deleted, a
+  // malformed range) rather than restoring a filter that can't be shown.
+  function restoreFilters() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(FILTERS_KEY) || 'null'); } catch { /* storage unavailable */ }
+    if (!saved || typeof saved !== 'object') return;
+
+    const sports = new Set(filters.sports.map(s => s.sport_type));
+    const runTypes = filters.run_types.map(t => t.run_type);
+    if (Array.isArray(saved.sports)) state.sports = new Set(saved.sports.filter(s => sports.has(s)));
+    if (state.sports.has('Run')) {
+      const kept = Array.isArray(saved.runTypes) ? saved.runTypes.filter(t => runTypes.includes(t)) : [];
+      state.runTypes = new Set(kept.length ? kept : runTypes);
+    }
+
+    const month = /^\d{4}-\d{2}$/;
+    if (month.test(saved.from) && month.test(saved.to) && saved.from <= saved.to) {
+      state.from = saved.from;
+      state.to = saved.to;
+    }
   }
 
   function showError(err) {
@@ -680,6 +720,7 @@
       document.getElementById('empty').style.display = '';
       return;
     }
+    restoreFilters();
     buildTypeOptions();
     syncTypeUI();
     syncDateUI();

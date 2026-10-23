@@ -135,6 +135,151 @@
       .activity-view .dense tbody td { padding: 0.25rem 0.75rem; }
       .activity-view .dense thead th { padding: 0.375rem 0.75rem; }
     }
+    .activity-view .columns-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      min-height: 2.75rem;
+      padding: 0 0.75rem;
+      font: inherit;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      cursor: pointer;
+    }
+    .activity-view .columns-btn:hover { background: var(--gridline); }
+    .activity-view .columns-btn svg { width: 0.875rem; height: 0.875rem; flex-shrink: 0; }
+    .activity-view .columns-btn .columns-count {
+      padding: 0 0.375rem;
+      border-radius: 999px;
+      background: var(--accent);
+      color: white;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.125rem;
+    }
+    .activity-view .columns-btn .columns-count:empty { display: none; }
+    @media (min-width: 640px) {
+      .activity-view .columns-btn { min-height: 1.75rem; padding: 0 0.625rem; }
+    }
+
+    /* Column picker: a bottom sheet on phones, a centered card from 640px. */
+    .columns-dialog {
+      box-sizing: border-box;
+      width: 100%;
+      max-width: 100%;
+      margin: auto 0 0;
+      padding: 0;
+      border: none;
+      border-top: 1px solid var(--border);
+      border-radius: 12px 12px 0 0;
+      background: var(--surface);
+      color: var(--text);
+      font-family: var(--font-sans);
+      box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.12);
+    }
+    .columns-dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
+    .columns-dialog form { padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px)); }
+    .columns-dialog .columns-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 0.875rem;
+    }
+    .columns-dialog h2 { font-size: 0.9375rem; font-weight: 650; margin: 0; outline: none; }
+    .columns-dialog .columns-sub { font-size: 0.75rem; color: var(--muted); margin-top: 0.125rem; font-variant-numeric: tabular-nums; }
+    .columns-dialog .columns-close {
+      width: 2.75rem;
+      height: 2.75rem;
+      margin: -0.75rem -0.75rem 0 0;
+      border: none;
+      background: none;
+      color: var(--muted);
+      font-size: 1.25rem;
+      line-height: 1;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+    .columns-dialog .columns-close:hover { color: var(--text); }
+    .columns-dialog .columns-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+    }
+    .columns-dialog .columns-option {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      min-height: 2.75rem;
+      padding: 0 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.8125rem;
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+    }
+    .columns-dialog .columns-option input { position: absolute; opacity: 0; pointer-events: none; }
+    .columns-dialog .columns-check {
+      display: grid;
+      place-items: center;
+      width: 1rem;
+      height: 1rem;
+      flex-shrink: 0;
+      border: 1.5px solid var(--baseline);
+      border-radius: 4px;
+      color: white;
+    }
+    .columns-dialog .columns-check svg { width: 0.625rem; height: 0.625rem; visibility: hidden; }
+    .columns-dialog .columns-option:has(input:checked) {
+      color: var(--text);
+      border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+      background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+    }
+    .columns-dialog .columns-option:has(input:checked) .columns-check { background: var(--accent); border-color: var(--accent); }
+    .columns-dialog .columns-option:has(input:checked) .columns-check svg { visibility: visible; }
+    .columns-dialog .columns-option:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .columns-dialog .columns-option:has(input:disabled) { cursor: not-allowed; opacity: 0.6; }
+    .columns-dialog .columns-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 1rem;
+      padding-top: 0.875rem;
+      border-top: 1px solid var(--gridline);
+    }
+    .columns-dialog .columns-actions button {
+      min-height: 2.75rem;
+      padding: 0 1rem;
+      font: inherit;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .columns-dialog .columns-actions .columns-all { border: none; background: none; color: var(--accent); padding-left: 0; }
+    .columns-dialog .columns-actions .columns-all:disabled { color: var(--muted); cursor: default; }
+    .columns-dialog .columns-actions .columns-done { border: 1px solid var(--accent); background: var(--accent); color: white; }
+    @media (min-width: 640px) {
+      .columns-dialog {
+        width: 22rem;
+        margin: auto;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+      }
+      .columns-dialog form { padding: 1.125rem 1.25rem 1.125rem; }
+      .columns-dialog .columns-option { min-height: 2.25rem; }
+      .columns-dialog .columns-actions button { min-height: 2rem; }
+      .columns-dialog .columns-close { width: 2rem; height: 2rem; margin: -0.375rem -0.5rem 0 0; }
+    }
     .activity-view .terrain-note { font-size: 0.75rem; color: var(--muted); font-style: italic; margin-bottom: 0.5rem; }
   </style>
 </head>
@@ -257,20 +402,21 @@
         <div class="chart-panel">
           <div class="chart-panel-head">
             <div class="chart-panel-title">Laps</div>
+            ${columnsButton('table-laps')}
           </div>
           <div class="scroll dense">
-            <table>
+            <table id="table-laps">
               <thead>
                 <tr>
                   <th>Lap</th>
                   <th class="r">Distance</th>
                   <th class="r">Duration</th>
-                  <th class="r hide-sm">Min Pace</th>
-                  <th class="r"><span class="hide-sm">Median </span>Pace</th>
-                  <th class="r hide-sm">Max Pace</th>
-                  <th class="r hide-sm">Min HR</th>
-                  <th class="r"><span class="hide-sm">Median </span>HR</th>
-                  <th class="r hide-sm">Max HR</th>
+                  <th class="r">Min Pace</th>
+                  <th class="r">Median Pace</th>
+                  <th class="r">Max Pace</th>
+                  <th class="r">Min HR</th>
+                  <th class="r">Median HR</th>
+                  <th class="r">Max HR</th>
                 </tr>
               </thead>
               <tbody id="body-laps"></tbody>
@@ -295,6 +441,7 @@
       </div>
     `;
     wireToggles();
+    initColumnPicker('table-laps');
     wireClassifyPanel();
     if (d.polyline) renderMap(d.polyline);
   }
@@ -511,6 +658,99 @@
         renderLapTable();
       });
     });
+  }
+
+  // Show/hide columns of a table via a "Columns" dialog. Hidden columns are a
+  // generated nth-child rule keyed to the table id, so they survive tbody
+  // re-renders; the choice is remembered per viewer by header label.
+  function columnsButton(tableId) {
+    return `
+      <button type="button" class="columns-btn" data-columns-for="${tableId}" aria-haspopup="dialog">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5"/><path d="M6 2.75v10.5M10 2.75v10.5"/>
+        </svg>
+        Columns<span class="columns-count"></span>
+      </button>`;
+  }
+
+  function initColumnPicker(tableId) {
+    const table = document.getElementById(tableId);
+    const btn = document.querySelector(`[data-columns-for="${tableId}"]`);
+    if (!table || !btn) return;
+    const labels = [...table.tHead.rows[0].cells].map(th => th.textContent.trim());
+    const tableName = btn.closest('.chart-panel-head')?.querySelector('.chart-panel-title')?.textContent.trim() ?? '';
+    const storageKey = `miles.activityColumns.${tableId}`;
+    let hidden = new Set();
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      if (Array.isArray(saved)) hidden = new Set(saved.filter(l => labels.includes(l)));
+    } catch (e) { /* storage unavailable: start with every column */ }
+    if (hidden.size >= labels.length) hidden.clear();
+
+    let style = document.getElementById(`${tableId}-columns`);
+    if (!style) {
+      style = document.createElement('style');
+      style.id = `${tableId}-columns`;
+      document.head.appendChild(style);
+    }
+    document.getElementById(`${tableId}-dialog`)?.remove();
+    const dialog = document.createElement('dialog');
+    dialog.id = `${tableId}-dialog`;
+    dialog.className = 'columns-dialog';
+    dialog.innerHTML = `
+      <form method="dialog">
+        <div class="columns-head">
+          <div>
+            <h2 tabindex="-1" autofocus>${tableName ? `${escapeHtml(tableName)} columns` : 'Columns'}</h2>
+            <div class="columns-sub"></div>
+          </div>
+          <button class="columns-close" value="close" aria-label="Close">&times;</button>
+        </div>
+        <div class="columns-grid">
+          ${labels.map(l => `
+            <label class="columns-option">
+              <input type="checkbox" value="${escapeHtml(l)}" ${hidden.has(l) ? '' : 'checked'}>
+              <span class="columns-check"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1.5 5.25 4 7.5 8.5 2.5"/></svg></span>
+              ${escapeHtml(l)}
+            </label>
+          `).join('')}
+        </div>
+        <div class="columns-actions">
+          <button type="button" class="columns-all">Show all</button>
+          <button class="columns-done" value="done">Done</button>
+        </div>
+      </form>
+    `;
+    document.body.appendChild(dialog);
+    const boxes = [...dialog.querySelectorAll('input[type="checkbox"]')];
+
+    const apply = () => {
+      // Never let the last visible column be unchecked.
+      const visible = boxes.filter(b => b.checked);
+      boxes.forEach(b => { b.disabled = visible.length === 1 && b.checked; });
+      style.textContent = labels.map((l, i) => hidden.has(l)
+        ? `#${tableId} th:nth-child(${i + 1}), #${tableId} td:not([colspan]):nth-child(${i + 1}) { display: none; }`
+        : '').join('\n');
+      const shown = labels.length - hidden.size;
+      btn.querySelector('.columns-count').textContent = hidden.size ? `${shown}/${labels.length}` : '';
+      dialog.querySelector('.columns-sub').textContent = `${shown} of ${labels.length} shown`;
+      dialog.querySelector('.columns-all').disabled = hidden.size === 0;
+      try { localStorage.setItem(storageKey, JSON.stringify([...hidden])); } catch (e) { /* not remembered */ }
+    };
+
+    boxes.forEach(b => b.addEventListener('change', () => {
+      if (b.checked) hidden.delete(b.value); else hidden.add(b.value);
+      apply();
+    }));
+    dialog.querySelector('.columns-all').addEventListener('click', () => {
+      hidden.clear();
+      boxes.forEach(b => { b.checked = true; });
+      apply();
+    });
+    // Tapping the backdrop closes it (the click target is the dialog itself).
+    dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+    btn.addEventListener('click', () => dialog.showModal());
+    apply();
   }
 
   function escapeHtml(s) {
@@ -841,12 +1081,12 @@
         <td>${m.lap_index}</td>
         <td class="r">${m.own_distance_mi != null ? `${m.own_distance_mi.toFixed(2)} mi` : '—'}</td>
         <td class="r">${m.duration_s != null ? fmtElapsed(m.duration_s) : '—'}</td>
-        <td class="r hide-sm">${m.min_pace_min_per_mile != null ? `${fmt.pace(m.min_pace_min_per_mile)}/mi` : '—'}</td>
+        <td class="r">${m.min_pace_min_per_mile != null ? `${fmt.pace(m.min_pace_min_per_mile)}/mi` : '—'}</td>
         <td class="r">${m[medianField] != null ? `${fmt.pace(m[medianField])}/mi` : '—'}</td>
-        <td class="r hide-sm">${m.max_pace_min_per_mile != null ? `${fmt.pace(m.max_pace_min_per_mile)}/mi` : '—'}</td>
-        <td class="r hide-sm">${m.min_hr != null ? Math.round(m.min_hr) : '—'}</td>
+        <td class="r">${m.max_pace_min_per_mile != null ? `${fmt.pace(m.max_pace_min_per_mile)}/mi` : '—'}</td>
+        <td class="r">${m.min_hr != null ? Math.round(m.min_hr) : '—'}</td>
         <td class="r">${m.median_hr != null ? Math.round(m.median_hr) : '—'}</td>
-        <td class="r hide-sm">${m.max_hr != null ? Math.round(m.max_hr) : '—'}</td>
+        <td class="r">${m.max_hr != null ? Math.round(m.max_hr) : '—'}</td>
       </tr>
     `).join('');
   }
@@ -872,6 +1112,7 @@
       return;
     }
     el.innerHTML = terrainSection(analysis, confidence);
+    initColumnPicker('table-climbs');
   }
 
   function terrainSection(analysis, confidence) {
@@ -883,12 +1124,12 @@
       return `
         <tr>
           <td>${c.kind === 'climb' ? 'Climb' : 'Descent'}</td>
-          <td class="r hide-sm">${startMi} mi</td>
-          <td class="r hide-sm">${lengthMi} mi</td>
+          <td class="r">${startMi} mi</td>
+          <td class="r">${lengthMi} mi</td>
           <td class="r">${c.avg_grade_pct.toFixed(1)}%</td>
           <td class="r">${actualPace != null ? `${actualPace}/mi` : '—'}</td>
           <td class="r">${expectedPace}/mi</td>
-          <td class="r hide-sm">${c.percentile != null ? fmt.ordinal(Math.round(c.percentile)) : '—'}</td>
+          <td class="r">${c.percentile != null ? fmt.ordinal(Math.round(c.percentile)) : '—'}</td>
         </tr>
       `;
     }).join('') : '<tr><td colspan="7" class="dash">No sustained climbs or descents.</td></tr>';
@@ -897,19 +1138,20 @@
       <div class="chart-panel">
         <div class="chart-panel-head">
           <div class="chart-panel-title">Climbs &amp; Descents</div>
+          ${columnsButton('table-climbs')}
         </div>
         ${confidence === 'low' ? '<div class="terrain-note">Terrain model confidence is low — expected pace is based on limited history.</div>' : ''}
         <div class="scroll dense">
-          <table>
+          <table id="table-climbs">
             <thead>
               <tr>
                 <th>Kind</th>
-                <th class="r hide-sm">Start</th>
-                <th class="r hide-sm">Length</th>
+                <th class="r">Start</th>
+                <th class="r">Length</th>
                 <th class="r">Grade</th>
                 <th class="r">Actual Pace</th>
                 <th class="r">Expected Pace</th>
-                <th class="r hide-sm">Percentile</th>
+                <th class="r">Percentile</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>

@@ -23,7 +23,8 @@ BEAM_WIDTH walks per layer, ranked by score so far plus an optimistic bound on
 what the miles left can earn. Walks ending at the start inside the range, with
 every stop passed inside its window, are collected. The search runs ROUNDS times,
 each time discounting the stretches of the best walk so far, so the walks that come
-back are not all variations of one.
+back are not all variations of one; an open request also spends rounds on its best
+groups (ANCHORS).
 
 Every mile on a stored stretch earns that stretch's adjusted quality, whether the
 walk runs it as a piece or crosses it inside a connector; only miles on no
@@ -111,6 +112,11 @@ STOP_WINDOW_MI = 1.0
 # round, distinct ones kept per round, and returned.
 ROUNDS = 5
 ROUND_DISCOUNT = 0.4
+# An open request's best survey groups are anchors: after the first round, each
+# gets a round with its stretches worth ANCHOR_BOOST times as much, so the walks
+# start out spread over different parts of the map.
+ANCHORS = 3
+ANCHOR_BOOST = 3.0
 SCANNED_COMPLETIONS = 600
 MAX_COMPLETIONS = 60
 MAX_WALKS = 120
@@ -161,6 +167,8 @@ class BlockPlan:
     # For each section the request names: the blocks it covers and the least
     # a route must cover of them.
     required: list[tuple[list[int], float]] = field(default_factory=list)
+    # For an open request: the blocks of each of the survey's best groups.
+    anchors: list[list[int]] = field(default_factory=list)
 
     def keep_nodes(self, rows: Mapping[int, dict]) -> set[int]:
         """The end nodes of every edge of the blocks to build around, which the
@@ -274,6 +282,13 @@ def plan_blocks(
     plan.blocks.extend(
         planned(s, sections.block_of(s), False) for s in by_id.values() if s.level == sections.STRETCH and s.section_id not in built
     )
+    if not named:
+        for group_id in dict.fromkeys(by_id[i].group_id or i for i in ids):
+            covers = [i for i, pb in enumerate(plan.blocks) if pb.runs and pb.block["section_id"] == group_id]
+            if covers:
+                plan.anchors.append(covers)
+            if len(plan.anchors) == ANCHORS:
+                break
     for section_id in named:
         covers = [i for i, pb in enumerate(plan.blocks) if section_id in (pb.block["section_id"], pb.block["block_id"])]
         plan.required.append((covers, min(MIN_INCLUDE_M, MIN_INCLUDE_SHARE * by_id[section_id].single_path_m)))
@@ -833,7 +848,10 @@ class Assembly:
             share_end = now + (deadline - now) / (len(self.start_nodes) - k)
             self._worth = {i: planned.steer for i, planned in enumerate(self.plan.blocks)}
             self._connect_sinks(node)
-            for _ in range(ROUNDS):
+            for round_no in range(ROUNDS):
+                anchor = self.plan.anchors[round_no - 1] if 1 <= round_no <= len(self.plan.anchors) else ()
+                discounted = self._worth
+                self._worth = {**discounted, **{b: discounted[b] * ANCHOR_BOOST for b in anchor}}
                 fresh: list[Walk] = []
                 states = sorted(self._beam(node, share_end), key=lambda s: (-self._score(s), s.dist_m))
                 for state in itertools.islice(_by_variety(states, lambda s: s.blocks), SCANNED_COMPLETIONS):
@@ -847,11 +865,13 @@ class Assembly:
                     fresh.append(walk)
                     if len(fresh) >= MAX_COMPLETIONS:
                         break
+                self._worth = discounted
                 found.extend(fresh)
-                if not fresh or self.cancelled.is_set():
+                if self.cancelled.is_set() or not (fresh or anchor):
                     break
-                for block in max(fresh, key=lambda w: w.score).block_m:
-                    self._worth[block] = self._worth[block] * ROUND_DISCOUNT
+                if fresh:
+                    for block in max(fresh, key=lambda w: w.score).block_m:
+                        self._worth[block] = self._worth[block] * ROUND_DISCOUNT
         found.sort(key=lambda w: -w.score)
         yield from itertools.islice(_by_variety(found, lambda w: frozenset(i for i, m in w.block_m.items() if m >= MIN_INCLUDE_M)), MAX_WALKS)
 

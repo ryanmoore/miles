@@ -6,7 +6,7 @@ import pytest
 from helpers import ORIGIN_LAT, FakeSampler, by_deg_lat
 from test_sections import Map, pt
 
-from miles import assemble, route_search, routing_mcp, sections, survey
+from miles import assemble, route_search, routing_mcp, sections, survey, terrain
 
 START = pt(0, 0)
 
@@ -572,3 +572,20 @@ def test_a_route_that_doubles_back_alongside_itself_scores_lower_than_one_that_d
 def test_a_deliberate_out_and_back_is_not_penalized_for_retracing_itself():
     out = {1: [(0, 0), (0, 500), (400, 1000)]}
     assert shape_fit_of(out, [(1, True), (1, False)]) == pytest.approx(assemble.SHAPE_MAX)
+
+
+def test_an_open_request_anchors_a_round_on_each_of_the_best_groups_and_a_named_one_on_none(conn: sqlite3.Connection):
+    m = Map()
+    m.line([(0, 0), (0, 300)], "residential", name="Access Street", maxspeed="25 mph")
+    m.square(0, 300, 600, name="Ridge Loop")
+    m.line([(0, 0), (-700, 0), (-700, 300)], "residential", name="Creek Road", maxspeed="25 mph")
+    m.square(-700, 300, 600, name="Creek Loop")
+    m.build(conn)
+    model = terrain.current_model(conn)
+
+    open_plan = assemble.plan_blocks(conn, request(START, 5_000, 9_000), model)
+    anchored = {open_plan.blocks[i].block["name"].split(":")[0] for covers in open_plan.anchors for i in covers}
+    assert {"Ridge Loop", "Creek Loop"} <= anchored
+
+    ids = group_ids(conn)
+    assert assemble.plan_blocks(conn, request(START, 5_000, 9_000, sections=[ids["Ridge Loop"]]), model).anchors == []

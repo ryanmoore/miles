@@ -3,11 +3,31 @@ candidate's classed geometry, and saving one as a route. No auth, like the
 rest of the app."""
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from . import candidate_sets, db, route_search, terrain
 from .fitness import MILE_M
 
 router = APIRouter()
+
+
+class CandidateSetBody(BaseModel):
+    candidate_ids: list[str]
+    title: str
+    notes: dict[str, str] | None = None
+    request: dict | None = None
+
+
+@router.post("/api/candidate-sets")
+def create_candidate_set(body: CandidateSetBody) -> dict[str, str]:
+    with db.connection() as conn:
+        try:
+            set_id, _ = candidate_sets.create_set(conn, body.candidate_ids, body.title, body.notes, body.request)
+            return {"set_id": set_id}
+        except route_search.CandidateNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/api/candidate-sets/{set_id}")

@@ -168,7 +168,9 @@
     resultsEl.innerHTML = '';
     statusEl.innerHTML = '<section class="chart-panel"><div class="skeleton skeleton-field"></div></section>';
 
-    const started = await post('/api/searches', requestBody());
+    history.replaceState(null, '', location.pathname);
+    const request = requestBody();
+    const started = await post('/api/searches', request);
     if (token !== runToken) return;
     if (started.error) {
       button.disabled = false;
@@ -200,6 +202,41 @@
     }
     button.disabled = false;
     renderFinal(view);
+    if (view.candidates.length && view.status !== 'error') await storeResults(view.candidates, request);
+  }
+
+  // Every search's results get a candidate set so the page's own URL reopens them.
+  async function storeResults(candidates, request) {
+    const title = [selectedArea().label, `${request.distance_mi_min}–${request.distance_mi_max} mi`, request.purpose].filter(Boolean).join(' · ');
+    const res = await post('/api/candidate-sets', { candidate_ids: candidates.map(c => c.candidate_id), title, request });
+    if (!res.error) history.replaceState(null, '', `?set=${res.data.set_id}`);
+  }
+
+  function fillForm(r) {
+    const set = (id, value) => { document.getElementById(id).value = value ?? ''; };
+    set('area', r.area_id);
+    centerOnArea();
+    set('dmin', r.distance_mi_min);
+    set('dmax', r.distance_mi_max);
+    set('purpose', r.purpose);
+    set('surface', r.surface_preference);
+    set('shape', r.shape);
+    set('n', r.n);
+    set('repeat', r.repeat_value);
+    document.getElementById('repeat-out').textContent = r.repeat_value;
+    startMap.setView([r.start_lat, r.start_lng], startMap.getZoom());
+    setStart(L.latLng(r.start_lat, r.start_lng));
+  }
+
+  async function loadSet(setId) {
+    const res = await getJson(`/api/candidate-sets/${encodeURIComponent(setId)}`);
+    if (res.error) {
+      history.replaceState(null, '', location.pathname);
+      statusEl.innerHTML = '<section class="chart-panel"><div class="status-note">These results expired; run the search again.</div></section>';
+      return;
+    }
+    if (res.data.request) fillForm(res.data.request);
+    renderFinal({ ...res.data, status: 'done' });
   }
 
   function renderWaiting(view, token) {
@@ -263,6 +300,8 @@
       return;
     }
     renderForm();
+    const setId = new URLSearchParams(location.search).get('set');
+    if (setId) await loadSet(setId);
   }
 
   main();

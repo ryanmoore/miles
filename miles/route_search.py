@@ -1180,9 +1180,8 @@ def _persist_selected(
 def _persist_candidate(
     conn: sqlite3.Connection, area_id: int, edge_rows: Mapping[int, dict], candidate: _Candidate
 ) -> RouteCandidateOut:
-    candidate_id = str(uuid.uuid4())
     out: RouteCandidateOut = {
-        "candidate_id": candidate_id,
+        "candidate_id": "",
         "area_id": area_id,
         "shape": candidate.shape,
         "start": candidate.start,
@@ -1198,10 +1197,15 @@ def _persist_candidate(
         out["stops"] = candidate.stops
     if candidate.ranking is not None:
         out["ranking"] = {k: v for k, v in candidate.ranking.items() if k != "sections_used"}
+    data = json.dumps({k: v for k, v in out.items() if k != "candidate_id"}, sort_keys=True)
+    # The id follows the content, so a route listed mid-search keeps its id in
+    # the final list, and persisting it again never shortens a stored expiry.
+    out["candidate_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, data))
     expires_at = (datetime.now(timezone.utc) + timedelta(hours=CANDIDATE_TTL_HOURS)).isoformat()
     conn.execute(
-        "INSERT INTO net_candidates (candidate_id, expires_at, data) VALUES (?, ?, ?)",
-        [candidate_id, expires_at, json.dumps({k: v for k, v in out.items() if k != "candidate_id"})],
+        "INSERT INTO net_candidates (candidate_id, expires_at, data) VALUES (?, ?, ?) "
+        "ON CONFLICT (candidate_id) DO UPDATE SET expires_at = MAX(expires_at, excluded.expires_at)",
+        [out["candidate_id"], expires_at, data],
     )
     return out
 

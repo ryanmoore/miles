@@ -66,3 +66,12 @@ def test_a_bad_request_is_a_400_with_the_reason_and_an_unknown_search_a_404(clie
     assert client.post("/api/searches", json={**BODY, "area_id": 2}).status_code == 400
     assert client.get("/api/searches/nope").status_code == 404
     assert client.post("/api/searches/nope/cancel").status_code == 404
+
+
+def test_a_candidate_listed_before_the_search_ends_keeps_its_id_in_the_final_list(client: TestClient):
+    search_id = client.post("/api/searches", json=BODY).json()["search_id"]
+    done = client.get(f"/api/searches/{search_id}", params={"wait_s": 30}).json()
+    with db.connection() as conn:
+        listed_midway = search_jobs._jobs[search_id].progress.snapshot(conn)
+    assert done["candidates"]
+    assert [c["candidate_id"] for c in listed_midway] == [c["candidate_id"] for c in done["candidates"]]

@@ -111,9 +111,8 @@ class RoadExposure(TypedDict):
 class PathScore(TypedDict):
     distance_m: float
     trail_distance_m: float
-    # The part of the distance on ways sections.py counts as trail, split by
-    # kind: footpath-width singletrack and road-width tracks. Neither is
-    # exclusive of trail_distance_m or unpaved_road_distance_m.
+    # The part of trail_distance_m split by kind: footpath-width singletrack
+    # and road-width tracks (a highway=track is trail here, not unpaved road).
     singletrack_distance_m: float
     track_distance_m: float
     unpaved_road_distance_m: float
@@ -1163,7 +1162,7 @@ def score_path(
             singletrack_m += length_m
         elif trail_kind == TRAIL_KIND_TRACK:
             track_m += length_m
-        if surface_class == "trail":
+        if surface_class == "trail" or trail_kind is not None:
             trail_m += length_m
         elif surface_class == "unpaved_road":
             unpaved_m += length_m

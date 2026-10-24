@@ -485,3 +485,15 @@ def test_the_preferences_tool_applies_a_patch_and_reports_a_rejected_one_as_an_e
     assert call_tool(server, "set_route_preferences", {"patch": '{"max_continuous_uncomfortable_m": 900}'})["max_continuous_uncomfortable_m"] == 900
     assert "unknown preference key" in call_tool(server, "set_route_preferences", {"patch": {"surface_weight": {}}})["error"]
     assert "positive" in call_tool(server, "set_route_preferences", {"patch": {"max_continuous_uncomfortable_m": -1}})["error"]
+
+
+def test_a_footpath_width_unpaved_track_counts_as_singletrack_and_trail_not_unpaved_road(conn: sqlite3.Connection):
+    payload = [{"elements": [
+        node(70, 40.0, -105.0), node(71, 40.001, -105.0),
+        way(70, [70, 71], {"highway": "track", "surface": "dirt", "width": "1"}),
+    ]}]
+    network.build_network(conn, 1, payload, climbing_sampler())
+    score = _score(conn, [_edge_id_for_way(conn, 70)])
+    assert score["singletrack_distance_m"] == pytest.approx(score["distance_m"])
+    assert score["trail_distance_m"] == pytest.approx(score["distance_m"])
+    assert score["unpaved_road_distance_m"] == 0.0

@@ -851,6 +851,14 @@ def _diversify(candidates: list[_Candidate], edge_rows: Mapping[int, dict], targ
     return selected
 
 
+def _note_distinct(distinct: list[_Footprint], footprint: _Footprint) -> bool:
+    """Add `footprint` to `distinct` unless it is similar to one already there."""
+    if any(_overlap(footprint, other) > SIMILAR_SHARE for other in distinct):
+        return False
+    distinct.append(footprint)
+    return True
+
+
 def _identity(edge_rows: Mapping[int, dict], segments: list[tuple[int, bool]]) -> frozenset[int]:
     """The original edges a route runs, in either direction."""
     return frozenset(edge_rows[eid].get("origin", eid) for eid, _ in segments)
@@ -1054,6 +1062,9 @@ def find_routes(
 
         deadline = time.monotonic() + time_budget_s
         qualifying: dict[frozenset[int], _Candidate] = {}
+        # Footprints of the qualifying candidates covering new ground: only
+        # those fill the pool, so variants of one loop cannot end the search.
+        distinct: list[_Footprint] = []
         near_misses: dict[frozenset[int], _Candidate] = {}
         budget_exceeded = False
         progress.snapshot = lambda c: _persist_selected(c, area_id, edge_rows, qualifying, near_misses, target_m, n)
@@ -1068,7 +1079,7 @@ def find_routes(
             # The walk may have to fill in afterwards, so it keeps a share of the budget.
             sections_end = deadline if plan.explicit or stops_in else deadline - (1.0 - SECTIONS_BUDGET_SHARE) * time_budget_s
             for walk in assembly.walks(sections_end):
-                if len(qualifying) >= pool_target:
+                if len(distinct) >= pool_target:
                     break
                 segments = _flatten(walk.traversal)
                 evaluated = _evaluate(conn, area_id, request, segments, prefs, runnability, edge_rows, plan.gain_band) if segments else None
@@ -1082,6 +1093,8 @@ def find_routes(
                 best = pool.get(identity)
                 if best is None or cast(dict, candidate.ranking)["score"] > cast(dict, best.ranking)["score"]:
                     pool[identity] = candidate
+                    if best is None and not misses:
+                        _note_distinct(distinct, _footprint(edge_rows, segments))
                 progress.qualifying = len(qualifying)
             budget_exceeded = time.monotonic() > deadline and len(qualifying) < n
         elif stops_in:
@@ -1106,8 +1119,8 @@ def find_routes(
             # Generate well past n so diversification has a pool to choose from.
             pool_target = n * POOL_FACTOR
             attempts_since_new = 0
-            while len(qualifying) < pool_target and attempts < MAX_GENERATION_ATTEMPTS:
-                if len(qualifying) >= n and attempts_since_new >= STAGNATION_ATTEMPTS:
+            while len(distinct) < pool_target and attempts < MAX_GENERATION_ATTEMPTS:
+                if len(distinct) >= n and attempts_since_new >= STAGNATION_ATTEMPTS:
                     break
                 if progress.cancelled.is_set():
                     break
@@ -1136,7 +1149,8 @@ def find_routes(
                 if identity not in pool:
                     pool[identity] = candidate
                     if not misses:
-                        attempts_since_new = 0
+                        if _note_distinct(distinct, _footprint(edge_rows, segments)):
+                            attempts_since_new = 0
                         progress.qualifying = len(qualifying)
 
     result_candidates = _persist_selected(conn, area_id, edge_rows, qualifying, near_misses, target_m, n)

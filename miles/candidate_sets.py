@@ -51,10 +51,11 @@ class CandidateSetView(TypedDict):
     created_at: str
     expires_at: str
     candidates: list[CandidateCard]
+    request: dict | None  # the search that produced the set, when it came from one
 
 
 def init_candidate_set_schema(conn: sqlite3.Connection) -> None:
-    # data is {"candidate_ids": [...], "notes": {candidate_id: note}}.
+    # data is {"candidate_ids": [...], "notes": {candidate_id: note}, "request": search request or null}.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS candidate_sets (
             set_id     TEXT PRIMARY KEY,
@@ -67,7 +68,7 @@ def init_candidate_set_schema(conn: sqlite3.Connection) -> None:
 
 
 def create_set(
-    conn: sqlite3.Connection, candidate_ids: list[str], title: str, notes: dict[str, str] | None
+    conn: sqlite3.Connection, candidate_ids: list[str], title: str, notes: dict[str, str] | None, request: dict | None = None
 ) -> tuple[str, str]:
     """(set_id, expires_at). Raises route_search.CandidateNotFoundError for a
     candidate that is unknown or expired, and ValueError for an empty list."""
@@ -85,7 +86,7 @@ def create_set(
     set_id = uuid.uuid4().hex[:12]
     conn.execute(
         "INSERT INTO candidate_sets (set_id, title, created_at, expires_at, data) VALUES (?, ?, ?, ?, ?)",
-        [set_id, title, now.isoformat(), expires_at, json.dumps({"candidate_ids": candidate_ids, "notes": notes or {}})],
+        [set_id, title, now.isoformat(), expires_at, json.dumps({"candidate_ids": candidate_ids, "notes": notes or {}, "request": request})],
     )
     conn.commit()
     return set_id, expires_at
@@ -136,4 +137,5 @@ def get_set(conn: sqlite3.Connection, set_id: str) -> CandidateSetView:
         "candidates": [
             card(route_search.get_route_candidate(conn, cid), data["notes"].get(cid)) for cid in data["candidate_ids"]
         ],
+        "request": data.get("request"),
     }

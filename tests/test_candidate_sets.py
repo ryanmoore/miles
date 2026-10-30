@@ -136,6 +136,24 @@ def test_http_set_candidate_points_and_save():
     assert client.get(f"/api/routes/{saved['route_id']}").status_code == 200
 
 
+def test_http_share_creates_a_set_that_reads_back_and_refuses_bad_ids():
+    with db.connection() as conn:
+        _store(conn, "a")
+        _store(conn, "b")
+    client = TestClient(api.app)
+
+    shared = client.post("/api/candidate-sets", json={"candidate_ids": ["b", "a"], "title": "T", "notes": {"a": "n"}, "request": {"n": 5}})
+    assert shared.status_code == 200
+    view = client.get(f"/api/candidate-sets/{shared.json()['set_id']}").json()
+    assert [c["candidate_id"] for c in view["candidates"]] == ["b", "a"]
+    assert view["candidates"][1]["note"] == "n"
+    assert view["request"] == {"n": 5}
+
+    missing = client.post("/api/candidate-sets", json={"candidate_ids": ["a", "nope"], "title": "T"})
+    assert missing.status_code == 404 and "nope" in missing.json()["detail"]
+    assert client.post("/api/candidate-sets", json={"candidate_ids": [], "title": "T"}).status_code == 400
+
+
 @pytest.mark.parametrize(
     "method, url",
     [("get", "/api/candidate-sets/nope"), ("get", "/api/candidates/nope"), ("post", "/api/candidates/nope/save")],

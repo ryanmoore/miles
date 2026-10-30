@@ -117,3 +117,11 @@ def register_area_tools(mcp: FastMCP) -> None:
         """Return an area to the 60-days-unused collection lifecycle."""
         with db.connection() as conn:
             return json.dumps(areas_service.set_pinned(conn, area_id, False))
+
+    @mcp.tool()
+    @reporting(areas_service.AreaNotFoundError, areas_service.AreaImportError)
+    def delete_area(area_id: int) -> str:
+        """Delete an area and its cached data, plus any downloaded regional
+        extract no remaining area needs. Refused while the area is importing."""
+        with db.connection() as conn:
+            return json.dumps({"freed_extracts": areas_service.remove_area(conn, area_id)})

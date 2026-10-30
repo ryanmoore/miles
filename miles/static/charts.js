@@ -338,9 +338,9 @@ async function failure(res) {
 
 // {data} or {error}: a failed fetch never throws, so each panel decides
 // for itself what a failure means.
-async function getJson(url) {
+async function getJson(url, init) {
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, init);
     return res.ok ? { data: await res.json() } : { error: await failure(res) };
   } catch (e) {
     return { error: 'Network error.' };

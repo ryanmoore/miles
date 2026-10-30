@@ -19,6 +19,7 @@ import threading
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Callable, cast
 from typing_extensions import NotRequired, TypedDict
 
@@ -61,6 +62,11 @@ class AreaSummary(TypedDict):
     created_at: str
     last_used_at: str
     imported_at: str | None
+    phase: str | None
+    done: int | None
+    total: int | None
+    error: str | None
+    data_as_of: NotRequired[str | None]
 
 
 class AreaDetail(AreaSummary):
@@ -196,7 +202,14 @@ _SUMMARY_COLUMNS = (
 
 
 def _row_to_summary(row: sqlite3.Row) -> AreaSummary:
-    return cast(AreaSummary, {**{c: row[c] for c in _SUMMARY_COLUMNS}, "pinned": bool(row["pinned"])})
+    return cast(AreaSummary, {
+        **{c: row[c] for c in _SUMMARY_COLUMNS},
+        "pinned": bool(row["pinned"]),
+        "phase": row["status_phase"],
+        "done": row["status_done"],
+        "total": row["status_total"],
+        "error": row["status_error"],
+    })
 
 
 def _row_to_detail(conn: sqlite3.Connection, row: sqlite3.Row) -> AreaDetail:
@@ -284,7 +297,7 @@ def get_area_status(conn: sqlite3.Connection, area_id: int) -> AreaStatus:
 
 def list_areas(conn: sqlite3.Connection) -> list[AreaSummary]:
     rows = conn.execute("SELECT * FROM areas ORDER BY last_used_at DESC").fetchall()
-    return [_row_to_summary(r) for r in rows]
+    return [{**_row_to_summary(r), "data_as_of": area_freshness(conn, r["area_id"])[0]} for r in rows]
 
 
 def set_pinned(conn: sqlite3.Connection, area_id: int, pinned: bool) -> AreaDetail:
@@ -311,15 +324,23 @@ def gc_areas_and_tiles(conn: sqlite3.Connection) -> None:
         ).fetchall()
     ]
     for area_id in stale_ids:
-        conn.execute("DELETE FROM area_tiles WHERE area_id = ?", (area_id,))
-        conn.execute("DELETE FROM net_edges WHERE area_id = ?", (area_id,))
-        conn.execute("DELETE FROM net_nodes WHERE area_id = ?", (area_id,))
-        conn.execute("DELETE FROM net_graphs WHERE area_id = ?", (area_id,))
-        sections.delete_area_sections(conn, area_id)
-        conn.execute("DELETE FROM areas WHERE area_id = ?", (area_id,))
-    if stale_ids:
-        conn.commit()
+        delete_area(conn, area_id)
+    _drop_orphan_tiles(conn)
 
+
+def delete_area(conn: sqlite3.Connection, area_id: int) -> None:
+    """Delete an area's rows (tiles, network, sections). Shared tiles stay
+    until _drop_orphan_tiles."""
+    conn.execute("DELETE FROM area_tiles WHERE area_id = ?", (area_id,))
+    conn.execute("DELETE FROM net_edges WHERE area_id = ?", (area_id,))
+    conn.execute("DELETE FROM net_nodes WHERE area_id = ?", (area_id,))
+    conn.execute("DELETE FROM net_graphs WHERE area_id = ?", (area_id,))
+    sections.delete_area_sections(conn, area_id)
+    conn.execute("DELETE FROM areas WHERE area_id = ?", (area_id,))
+    conn.commit()
+
+
+def _drop_orphan_tiles(conn: sqlite3.Connection) -> None:
     conn.execute("""
         DELETE FROM map_tiles
         WHERE NOT EXISTS (
@@ -328,6 +349,34 @@ def gc_areas_and_tiles(conn: sqlite3.Connection) -> None:
         )
     """)
     conn.commit()
+
+
+def remove_area(conn: sqlite3.Connection, area_id: int) -> list[str]:
+    """Delete an idle area, its orphaned tiles, and every downloaded regional
+    extract no remaining area would be cut from. Returns the regions freed.
+
+    An extract is needed when extracts.planned_regions names it for a remaining
+    area. If any remaining area has no stored plan the answer is unknown and
+    nothing is freed. Extracts registered from a local file are never deleted."""
+    if _get_area_row(conn, area_id)["status"] == "importing":
+        raise AreaImportError(f"area {area_id} is importing; try again when it finishes")
+    delete_area(conn, area_id)
+    _drop_orphan_tiles(conn)
+
+    needed: set[str] = set()
+    for area in conn.execute("SELECT * FROM areas").fetchall():
+        bbox = tiles.bbox_for_center_radius(area["center_lat"], area["center_lng"], area["radius_km"])
+        planned = extracts.planned_regions(conn, bbox, area["region"])
+        if not planned:
+            return []
+        needed.update(planned)
+    unused = [r for r in extracts.list_extracts(conn)
+              if r["region"] not in needed and not r["region"].startswith(extracts.LOCAL_REGION_PREFIX)]
+    for record in unused:
+        Path(record["path"]).unlink(missing_ok=True)
+        conn.execute("DELETE FROM map_extracts WHERE region = ?", (record["region"],))
+    conn.commit()
+    return [r["region"] for r in unused]
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +497,12 @@ def _estimate_import(conn: sqlite3.Connection, bbox: tuple[float, float, float, 
         "tile_count": len(needed),
         "estimated_seconds": None,
     }
+
+
+def estimate_for(conn: sqlite3.Connection, lat: float, lng: float, radius_km: float) -> ImportEstimate:
+    """What an import of this circle would use and cost, before committing to it."""
+    bbox = tiles.bbox_for_center_radius(lat, lng, _resolve_radius_km(radius_km, None))
+    return _estimate_import(conn, bbox, None)
 
 
 def import_area(

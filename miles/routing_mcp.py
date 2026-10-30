@@ -374,10 +374,11 @@ def register_routing_tools(mcp: FastMCP) -> None:
         quality left after repeats, already in value_per_mile): 0 when the
         athlete wants no repeats, 0.8 to 1 when they do not mind retracing a
         favorite stretch. The returned candidates are meant to differ: one
-        sharing over 60% of its length with a higher-ranked one comes back only
-        to fill n. surface_preference ("singletrack", "track", "paved",
-        "any") and unfamiliar_only are survey_area's, used to choose the
-        sections when none are named.
+        running over the same ground as a higher-ranked one for more than 60%
+        of its length is not returned, so fewer than n can come back.
+        surface_preference ("singletrack", "track", "paved", "any") and
+        unfamiliar_only are survey_area's, used to choose the sections when
+        none are named.
 
         purpose is what the run is for; set it whenever the athlete's words
         say, and tell them which you used. "easy"/"recovery" (up to about 40

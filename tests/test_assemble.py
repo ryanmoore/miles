@@ -6,9 +6,15 @@ import pytest
 from helpers import ORIGIN_LAT, FakeSampler, by_deg_lat
 from test_sections import Map, pt
 
-from miles import assemble, route_search, routing_mcp, sections, survey
+from miles import assemble, route_search, routing_mcp, sections, survey, terrain
 
 START = pt(0, 0)
+
+
+@pytest.fixture
+def keep_similar(monkeypatch: pytest.MonkeyPatch) -> None:
+    """For tests that compare how the candidates on one stretch of ground score."""
+    monkeypatch.setattr(route_search, "SIMILAR_SHARE", 1.0)
 
 
 @pytest.fixture(autouse=True)
@@ -202,6 +208,7 @@ def ring_loop_scores(conn: sqlite3.Connection, **extra) -> dict[str, float]:
     return best
 
 
+@pytest.mark.usefixtures("keep_similar")
 def test_repeat_value_sets_how_much_of_its_value_a_retraced_stretch_keeps(conn: sqlite3.Connection):
     m = Map()
     m.square(0, 400, 400, name="Ridge Loop")
@@ -235,6 +242,7 @@ def test_a_better_out_and_back_still_beats_a_lesser_loop(conn: sqlite3.Connectio
     assert loops and used(loops[0]) == {"Plain Loop"} and loops[0]["ranking"]["score"] < top["ranking"]["score"]
 
 
+@pytest.mark.usefixtures("keep_similar")
 def test_a_loop_over_two_named_sections_is_offered_among_many_walks_of_one_that_outscore_it(conn: sqlite3.Connection):
     m = Map()
     m.line([(0, 0), (300, 0)], "residential", name="Access Street", maxspeed="25 mph")
@@ -250,7 +258,7 @@ def test_a_loop_over_two_named_sections_is_offered_among_many_walks_of_one_that_
     m.build(conn)
     ids = group_ids(conn)
 
-    result = route_search.find_routes(conn, {**request(START, 6_000, 11_000, sections=[ids["Grid Trail"], ids["Birch Trail trail system"]]), "n": 2})
+    result = route_search.find_routes(conn, {**request(START, 6_000, 11_000, sections=[ids["Grid Trail"], ids["Birch Trail trail system"]]), "n": 6})
 
     loop = next(c for c in result["candidates"] if c["shape"] == "loop")
     assert {"Grid Trail", "Birch Trail trail system"} <= used(loop)
@@ -472,6 +480,7 @@ def climbs_hill(candidate: route_search.RouteCandidateOut) -> bool:
     return "Alder Trail" in way_names(candidate)
 
 
+@pytest.mark.usefixtures("keep_similar")
 def test_a_hilly_request_prefers_the_loop_over_the_hill_and_home_by_the_river_to_retracing_the_trail(conn: sqlite3.Connection):
     build_hill_and_river(conn)
 
@@ -495,6 +504,7 @@ def test_an_easy_request_prefers_the_flat_river_to_the_hill(conn: sqlite3.Connec
             assert c["ranking"]["gain_fit"] < 0.5 and c["ranking"]["score"] < top["ranking"]["score"]
 
 
+@pytest.mark.usefixtures("keep_similar")
 def test_the_miles_a_route_runs_on_sections_it_was_not_built_around_earn_their_value(conn: sqlite3.Connection):
     build_hill_and_river(conn)
     ids = group_ids(conn)
@@ -521,6 +531,7 @@ def test_a_candidate_that_runs_none_of_a_named_section_is_excluded(conn: sqlite3
 # --- ranking per mile and shape ----------------------------------------------
 
 
+@pytest.mark.usefixtures("keep_similar")
 def test_inside_the_range_a_shorter_route_of_higher_quality_per_mile_beats_a_padded_one(conn: sqlite3.Connection):
     m = Map()
     m.square(0, 0, 500, name="Ridge Loop")
@@ -561,3 +572,20 @@ def test_a_route_that_doubles_back_alongside_itself_scores_lower_than_one_that_d
 def test_a_deliberate_out_and_back_is_not_penalized_for_retracing_itself():
     out = {1: [(0, 0), (0, 500), (400, 1000)]}
     assert shape_fit_of(out, [(1, True), (1, False)]) == pytest.approx(assemble.SHAPE_MAX)
+
+
+def test_an_open_request_anchors_a_round_on_each_of_the_best_groups_and_a_named_one_on_none(conn: sqlite3.Connection):
+    m = Map()
+    m.line([(0, 0), (0, 300)], "residential", name="Access Street", maxspeed="25 mph")
+    m.square(0, 300, 600, name="Ridge Loop")
+    m.line([(0, 0), (-700, 0), (-700, 300)], "residential", name="Creek Road", maxspeed="25 mph")
+    m.square(-700, 300, 600, name="Creek Loop")
+    m.build(conn)
+    model = terrain.current_model(conn)
+
+    open_plan = assemble.plan_blocks(conn, request(START, 5_000, 9_000), model)
+    anchored = {open_plan.blocks[i].block["name"].split(":")[0] for covers in open_plan.anchors for i in covers}
+    assert {"Ridge Loop", "Creek Loop"} <= anchored
+
+    ids = group_ids(conn)
+    assert assemble.plan_blocks(conn, request(START, 5_000, 9_000, sections=[ids["Ridge Loop"]]), model).anchors == []

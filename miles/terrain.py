@@ -449,9 +449,10 @@ def _data_marker(conn: sqlite3.Connection) -> tuple:
     (every writer replaces an activity's dates row, so its count, sums, and
     needs_dem flags move with additions, deletions, and date or flag changes
     from any process), plus this process's write generation for a replacement
-    that leaves all of those equal."""
+    that leaves all of those equal, and the activities whose HR is flagged."""
     row = conn.execute(
-        "SELECT count(*), total(segment_count), total(needs_dem), total(activity_id), total(julianday(start_date)) "
+        "SELECT count(*), total(segment_count), total(needs_dem), total(activity_id), total(julianday(start_date)), "
+        f"(SELECT count(*) || ':' || total(activity_id) FROM activities WHERE NOT ({db.hr_trusted_sql()})) "
         "FROM terrain_segment_dates"
     ).fetchone()
     return (_segment_generation, *tuple(row))
@@ -484,12 +485,14 @@ def _build_model(conn: sqlite3.Connection, window_days: int, as_of: date) -> Ter
     start_date = (as_of - timedelta(days=window_days)).isoformat()
     end_date = as_of.isoformat()
     cursor = conn.execute(
-        """
+        f"""
         SELECT
             ts.grade_dpct / 10.0 AS grade_pct, ts.speed_cms / 100.0 AS speed_mps,
-            ts.heartrate, ts.cadence_spm, ts.is_walking, ts.elapsed_s, ts.temp_dc / 10.0 AS temp_c
+            {db.hr_sql("ts.heartrate", "a")} AS heartrate,
+            ts.cadence_spm, ts.is_walking, ts.elapsed_s, ts.temp_dc / 10.0 AS temp_c
         FROM terrain_segments ts
         JOIN terrain_segment_dates d ON d.activity_id = ts.activity_id
+        LEFT JOIN activities a ON a.activity_id = ts.activity_id
         WHERE d.start_date >= ? AND d.start_date <= ?
         """,
         [start_date, end_date],

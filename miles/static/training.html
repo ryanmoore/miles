@@ -19,6 +19,13 @@
     .training-view #section-intensity .chart-wrap,
     .training-view #section-load .chart-wrap { height: 300px; }
     .training-view #section-load .chart-wrap.chart-wrap-small { height: 170px; margin-top: 0.75rem; }
+    /* Efficiency period buttons; the buttons and the quarter picker are theme.css's. */
+    .training-view .eff-periods { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .training-view .eff-periods > .filter-btn { flex: 1 1 0; }
+    .training-view .eff-vs { flex: none; font-size: 0.75rem; color: var(--muted); }
+    @media (min-width: 640px) {
+      .training-view .eff-periods > .filter-btn { flex: none; max-width: 16rem; }
+    }
     .training-view .chart-caption {
       font-size: 0.8125rem;
       color: var(--text-secondary);
@@ -66,6 +73,8 @@
     }
     .training-view .evidence-close:hover { background: var(--gridline); }
     .training-view .evidence-panel .scroll { border: none; border-radius: 0; box-shadow: none; }
+    .training-view #eff-detail .scroll { max-height: 22rem; overflow-y: auto; }
+    .training-view #eff-detail .evidence-heading .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.375rem; }
 
     /* Stat strip — ported from races.html's .dist-view pattern, scoped locally. */
     .training-view .stat-strip {
@@ -183,19 +192,71 @@
 
   <section id="section-efficiency" style="display:none">
     <h2>Efficiency</h2>
-    <p class="desc">Work-lap heart rate vs pace by year · are you faster at the same effort? · click chips to combine years · heat-adjusted corrects each lap's pace to cool conditions (temperature + dew point)</p>
-    <div class="chip-row" id="chip-row-hr"></div>
-    <label class="compare-years-toggle">
-      <input type="checkbox" id="compare-years-toggle">
-      Compare years
-    </label>
+    <p class="desc">Lap heart rate vs pace · are you faster at the same effort? · click a dot to list its laps · pick a quarter range, and optionally a second one to compare against · heat-adjusted corrects each lap's pace to cool conditions (temperature + dew point) · steady laps only keeps 6+ min, 1+ km laps outside warmups, cooldowns and recoveries, where HR has caught up with the pace</p>
+    <div class="eff-periods">
+      <button type="button" class="filter-btn" id="eff-btn-a" aria-haspopup="dialog"></button>
+      <span class="eff-vs">vs</span>
+      <button type="button" class="filter-btn" id="eff-btn-b" aria-haspopup="dialog"></button>
+    </div>
     <label class="compare-years-toggle">
       <input type="checkbox" id="heat-adjust-toggle">
       Heat-adjusted pace
     </label>
+    <label class="compare-years-toggle">
+      <input type="checkbox" id="steady-laps-toggle">
+      Steady laps only
+    </label>
     <div class="chart-wrap">
       <div id="chart-hr-pace" style="width:100%;height:100%"></div>
     </div>
+    <p class="chart-caption" id="eff-caption"></p>
+    <div class="evidence-panel" id="eff-detail" style="display:none">
+      <div class="evidence-header">
+        <div>
+          <div class="evidence-heading" id="eff-detail-heading"></div>
+          <div class="evidence-pin-note" id="eff-detail-note"></div>
+        </div>
+        <button class="evidence-close" id="eff-detail-close" aria-label="Close lap list">×</button>
+      </div>
+      <div class="scroll dense">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Run</th>
+              <th class="r">Lap</th>
+              <th class="r" id="eff-detail-pace-head">Pace</th>
+              <th class="r">HR</th>
+            </tr>
+          </thead>
+          <tbody id="eff-detail-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="section-easy-ef" style="display:none">
+    <h2>Easy-run efficiency</h2>
+    <p class="desc">Meters per heartbeat on easy runs (efficiency factor) · higher is fitter · grade-adjusted for hills, optionally heat-adjusted · skips each run's first 10 minutes, pauses and walking, and needs 20+ minutes after that · line is the 28-day rolling median, drawn only where at least 3 of those 4 weeks have an easy run · year over year lines up the same weeks of every year, so summer compares with summer · click a dot to open the run</p>
+    <div class="eff-periods">
+      <button type="button" class="filter-btn" id="easy-ef-range" aria-haspopup="dialog"></button>
+    </div>
+    <div class="mode-tabs" id="easy-ef-tabs">
+      <button class="mode-tab active" data-mode="timeline">Timeline</button>
+      <button class="mode-tab" data-mode="yoy">Year over year</button>
+    </div>
+    <label class="compare-years-toggle">
+      <input type="checkbox" id="easy-ef-grade" checked>
+      Grade-adjusted
+    </label>
+    <label class="compare-years-toggle">
+      <input type="checkbox" id="easy-ef-heat" checked>
+      Heat-adjusted
+    </label>
+    <div class="chart-wrap">
+      <div id="chart-easy-ef" style="width:100%;height:100%"></div>
+    </div>
+    <p class="chart-caption" id="easy-ef-caption"></p>
   </section>
 
   <section id="section-chart" style="display:none">
@@ -207,6 +268,30 @@
   </section>
 
 </main>
+
+<!-- Quarter-range picker shared by the Efficiency charts (quarterPicker). -->
+<dialog class="date-dialog" id="qp-dialog" aria-labelledby="qp-dialog-title">
+  <div class="date-inner">
+    <div class="date-title" id="qp-dialog-title"></div>
+    <div class="date-head">
+      <button type="button" class="year-nav" id="qp-year-prev" aria-label="Previous year">
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M7.5 3l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+      </button>
+      <span class="date-year" id="qp-year"></span>
+      <button type="button" class="year-nav" id="qp-year-next" aria-label="Next year">
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 3l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+      </button>
+    </div>
+    <p class="date-hint" id="qp-hint"></p>
+    <div class="quarter-grid" id="qp-quarter-grid"></div>
+    <div class="date-foot">
+      <button type="button" class="link-btn" id="qp-clear"></button>
+      <span class="spacer"></span>
+      <button type="button" class="filter-btn" id="qp-cancel">Cancel</button>
+      <button type="button" class="primary-btn" id="qp-apply">Apply</button>
+    </div>
+  </div>
+</dialog>
 
 <script>
   function td(val, cls = 'r', title = '') {
@@ -221,6 +306,12 @@
   }
 
   function dayMs(d) { return new Date(d + 'T00:00:00').getTime(); }
+
+  function median(values) {
+    const arr = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(arr.length / 2);
+    return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+  }
 
   async function load() {
     const res = await fetch('/api/weekly-history');
@@ -500,6 +591,10 @@
   const PACE_BUCKET_WIDTH_S = 20;
   const HR_FLOOR = 120; // drop laps below this HR
   const PACE_CEIL_S = 15 * 60; // drop laps slower than this pace
+  // Steady laps thin out above threshold; a median of one or two laps is noise.
+  const STEADY_MEDIAN_MIN_LAPS = 3;
+  const EFF_STORE_KEY = 'miles.efficiency';
+  const QUARTER_MONTHS = ['Jan–Mar', 'Apr–Jun', 'Jul–Sep', 'Oct–Dec'];
 
   function paceBucketLabel(bucketS) {
     const m = Math.floor(bucketS / 60);
@@ -515,229 +610,293 @@
     return out;
   }
 
-  function yearColor(theme, rank) {
-    return rank < theme.series.length ? theme.series[rank] : theme.muted;
+  const quarterLabel = q => `${q.slice(5)} ${q.slice(0, 4)}`;
+  function quarterRangeText(r) {
+    return r.from === r.to ? quarterLabel(r.from) : `${quarterLabel(r.from)} – ${quarterLabel(r.to)}`;
   }
 
-  function initHrPace(points) {
+  // One dialog for every quarter-range button on the page, mirroring
+  // activities.html's month picker in quarters. open() takes the range being
+  // edited, the selectable span, and callbacks; clearLabel shows a link that
+  // calls onClear (e.g. dropping a comparison).
+  const quarterPicker = (() => {
+    const dialog = document.getElementById('qp-dialog');
+    const $ = id => document.getElementById(id);
+    const draft = { from: null, to: null, year: null };
+    let opts = null;
+
+    function render() {
+      $('qp-year').textContent = draft.year;
+      $('qp-year-prev').disabled = draft.year <= Number(opts.firstQ.slice(0, 4));
+      $('qp-year-next').disabled = draft.year >= Number(opts.lastQ.slice(0, 4));
+      const hi = draft.to ?? draft.from;
+      $('qp-quarter-grid').innerHTML = QUARTER_MONTHS.map((months, i) => {
+        const key = `${draft.year}-Q${i + 1}`;
+        const outside = key < opts.firstQ || key > opts.lastQ;
+        const cls = ['quarter-btn'];
+        if (draft.from && key >= draft.from && key <= hi) cls.push('in-range');
+        if (key === draft.from || key === draft.to) cls.push('edge');
+        return `<button type="button" class="${cls.join(' ')}" data-quarter="${key}"${outside ? ' disabled' : ''}>Q${i + 1}<small>${months}</small></button>`;
+      }).join('');
+      $('qp-hint').textContent =
+        !draft.from ? 'Select a start quarter'
+        : !draft.to ? `${quarterLabel(draft.from)} – select an end quarter, or Apply for one quarter`
+        : quarterRangeText(draft);
+      $('qp-apply').disabled = !draft.from;
+    }
+
+    $('qp-quarter-grid').addEventListener('click', e => {
+      const btn = e.target.closest('[data-quarter]');
+      if (!btn || btn.disabled) return;
+      const key = btn.dataset.quarter;
+      if (!draft.from || draft.to) {
+        draft.from = key;
+        draft.to = null;
+      } else if (key < draft.from) {
+        draft.to = draft.from;
+        draft.from = key;
+      } else {
+        draft.to = key;
+      }
+      render();
+    });
+    $('qp-year-prev').addEventListener('click', () => { draft.year--; render(); });
+    $('qp-year-next').addEventListener('click', () => { draft.year++; render(); });
+    $('qp-cancel').addEventListener('click', () => dialog.close());
+    // A click on the dialog element itself (not its inner panel) is a backdrop click.
+    dialog.addEventListener('click', e => { if (e.target === dialog) dialog.close(); });
+    $('qp-apply').addEventListener('click', () => {
+      if (!draft.from) return;
+      dialog.close();
+      opts.onApply({ from: draft.from, to: draft.to ?? draft.from });
+    });
+    $('qp-clear').addEventListener('click', () => {
+      dialog.close();
+      opts.onClear?.();
+    });
+
+    return {
+      open(o) {
+        opts = o;
+        draft.from = o.range?.from ?? null;
+        draft.to = o.range?.to ?? null;
+        draft.year = Number((o.range?.to ?? o.lastQ).slice(0, 4));
+        $('qp-dialog-title').innerHTML = `<span class="dot" style="background:${o.color}"></span>${esc(o.title)}`;
+        $('qp-clear').hidden = !o.clearLabel;
+        $('qp-clear').textContent = o.clearLabel ?? '';
+        render();
+        dialog.showModal();
+      },
+    };
+  })();
+
+  // Quarter ("2025-Q4") of a local start date.
+  const quarterOf = date => `${date.slice(0, 4)}-Q${Math.floor((Number(date.slice(5, 7)) + 2) / 3)}`;
+
+  // A saved {from, to} still valid for the span firstQ..lastQ (quarters
+  // without data inside the span are pickable too), else null.
+  function validQuarterRange(r, firstQ, lastQ) {
+    const ok = q => typeof q === 'string' && /^\d{4}-Q[1-4]$/.test(q) && q >= firstQ && q <= lastQ;
+    return r && ok(r.from) && ok(r.to) && r.from <= r.to ? { from: r.from, to: r.to } : null;
+  }
+
+  // Period A, optionally compared against period B; each a quarter range.
+  function initHrPace({ points, activities }) {
     const section = document.getElementById('section-efficiency');
     if (!points.length) return;
     section.style.display = '';
 
     const theme = chartTheme();
-    const allYears = [...new Set(points.map(p => p.year))].sort((a, b) => a - b);
-    const byRecency = [...allYears].sort((a, b) => b - a);
-    const ranks = new Map(byRecency.map((y, i) => [y, i]));
-    const pointsByYear = new Map(allYears.map(y => [y, points.filter(p => p.year === y)]));
-    let selected = new Set([allYears[allYears.length - 1]]);
+    const colors = { a: theme.series[0], b: theme.series[1] };
+    const quarters = [...new Set(points.map(p => p.quarter))].sort();
+    const firstQ = quarters[0], lastQ = quarters[quarters.length - 1];
 
     const chart = echarts.init(document.getElementById('chart-hr-pace'));
-    const compareToggle = document.getElementById('compare-years-toggle');
     const heatToggle = document.getElementById('heat-adjust-toggle');
+    const steadyToggle = document.getElementById('steady-laps-toggle');
+    const caption = document.getElementById('eff-caption');
+    const runsById = new Map(activities.map(a => [a.activity_id, a]));
     // Re-key pace_bucket to the raw or heat-adjusted bucket so the rest of
     // render() stays field-agnostic.
     const withPace = p => ({ ...p, pace_bucket: heatToggle.checked ? p.pace_bucket_heat_adj : p.pace_bucket_raw });
     for (const p of points) p.pace_bucket_raw = p.pace_bucket;
+    const inScope = p => p.hr_bucket >= HR_FLOOR && p.pace_bucket < PACE_CEIL_S && (!steadyToggle.checked || p.steady);
+    const minLaps = () => (steadyToggle.checked ? STEADY_MEDIAN_MIN_LAPS : 1);
 
-    function renderChips() {
-      const html = allYears.map(y => {
-        const color = yearColor(theme, ranks.get(y));
-        const sel = selected.has(y) ? ' selected' : '';
-        return `<button class="chip${sel}" data-year="${y}">
-          <span class="dot" style="background:${color}"></span>${y}
-        </button>`;
+    // ---- Period state (localStorage) ----
+    function defaultState() {
+      const n = quarters.length;
+      return {
+        a: { from: quarters[Math.max(0, n - 4)], to: lastQ },
+        b: n > 4 ? { from: quarters[Math.max(0, n - 8)], to: quarters[n - 5] } : null,
+        heat: false,
+        steady: false,
+      };
+    }
+    function restoreState() {
+      const fallback = defaultState();
+      let saved;
+      try { saved = JSON.parse(localStorage.getItem(EFF_STORE_KEY)); } catch (_) { return fallback; }
+      if (!saved || typeof saved !== 'object') return fallback;
+      const range = r => validQuarterRange(r, firstQ, lastQ);
+      return {
+        a: range(saved.a) ?? fallback.a,
+        b: saved.b === null ? null : range(saved.b) ?? fallback.b,
+        heat: typeof saved.heat === 'boolean' ? saved.heat : false,
+        steady: typeof saved.steady === 'boolean' ? saved.steady : false,
+      };
+    }
+    const state = restoreState();
+    heatToggle.checked = state.heat;
+    steadyToggle.checked = state.steady;
+    function saveState() {
+      state.heat = heatToggle.checked;
+      state.steady = steadyToggle.checked;
+      try { localStorage.setItem(EFF_STORE_KEY, JSON.stringify(state)); } catch (_) {}
+    }
+
+    function syncButtons() {
+      const btnA = document.getElementById('eff-btn-a');
+      const btnB = document.getElementById('eff-btn-b');
+      btnA.innerHTML = `<span class="dot" style="background:${colors.a}"></span><span class="filter-label">${quarterRangeText(state.a)}</span>`;
+      btnB.innerHTML = state.b
+        ? `<span class="dot" style="background:${colors.b}"></span><span class="filter-label">${quarterRangeText(state.b)}</span>`
+        : '<span class="filter-label">Add comparison</span>';
+      btnB.classList.toggle('muted', !state.b);
+    }
+
+    function openPicker(period) {
+      quarterPicker.open({
+        title: period === 'a' ? 'Period' : 'Compare against',
+        color: colors[period],
+        range: state[period],
+        firstQ, lastQ,
+        clearLabel: period === 'b' && state.b ? 'No comparison' : null,
+        onApply: range => { state[period] = range; render(); },
+        onClear: () => { state.b = null; render(); },
       });
-      document.getElementById('chip-row-hr').innerHTML = html.join('');
     }
+    document.getElementById('eff-btn-a').addEventListener('click', () => openPicker('a'));
+    document.getElementById('eff-btn-b').addEventListener('click', () => openPicker('b'));
 
-    function median(sortedSubset) {
-      const arr = [...sortedSubset].sort((a, b) => a - b);
-      const mid = Math.floor(arr.length / 2);
-      return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
-    }
+    // ---- Chart ----
+    // Same-cell dots from the two periods are offset side by side rather than
+    // stacked, so overlapping colors stay visible. Category axes place data at
+    // fixed integer pixel ticks, so the offset is applied in pixel space via
+    // symbolOffset, not the data value.
+    const RING_SPREAD_PX = 8;
 
-    // Same-cell dots from different years are offset side by side (Olympic
-    // rings style) rather than stacked, so overlapping colors stay visible.
-    // Category axes place data at fixed integer pixel ticks, so the offset
-    // has to be applied in pixel space via symbolOffset, not the data value.
-    const RING_SPREAD_PX = 16;
-    function ringOffsetPx(slot, total) {
-      if (total <= 1) return 0;
-      return (slot - (total - 1) / 2) * (RING_SPREAD_PX / Math.max(total - 1, 1));
+    function periodPoints(range) {
+      return points.filter(p => p.quarter >= range.from && p.quarter <= range.to).map(withPace).filter(inScope);
     }
 
     function render() {
-      renderChips();
-      const compareYears = compareToggle.checked;
-      const activeYears = allYears.filter(y => selected.has(y));
-      const activePoints = activeYears.flatMap(y => pointsByYear.get(y)).map(withPace)
-        .filter(p => p.hr_bucket >= HR_FLOOR && p.pace_bucket < PACE_CEIL_S);
+      syncButtons();
+      saveState();
+      const periods = [{ key: 'a', range: state.a }];
+      if (state.b) periods.push({ key: 'b', range: state.b });
+      for (const p of periods) p.points = periodPoints(p.range);
+      const allPoints = periods.flatMap(p => p.points);
 
-      if (!activePoints.length) {
+      if (!allPoints.length) {
         chart.setOption({
-          title: { text: 'No lap HR/pace data for the selected year(s)', left: 'center', top: 'middle', textStyle: { fontSize: 13, color: theme.muted, fontWeight: 400 } },
+          title: { show: true, text: 'No lap HR/pace data for the selected quarters', left: 'center', top: 'middle', textStyle: { fontSize: 13, color: theme.muted, fontWeight: 400 } },
           xAxis: { show: false }, yAxis: { show: false }, series: [],
         }, { replaceMerge: ['series'] });
+        caption.textContent = '';
         return;
       }
 
-      const hrBuckets = bucketRange(activePoints.map(p => p.hr_bucket), HR_BUCKET_WIDTH);
-      const paceBuckets = bucketRange(activePoints.map(p => p.pace_bucket), PACE_BUCKET_WIDTH_S);
+      const hrBuckets = bucketRange(allPoints.map(p => p.hr_bucket), HR_BUCKET_WIDTH);
+      const paceBuckets = bucketRange(allPoints.map(p => p.pace_bucket), PACE_BUCKET_WIDTH_S);
       const hrIndex = new Map(hrBuckets.map((b, i) => [b, i]));
       const paceIndex = new Map(paceBuckets.map((b, i) => [b, i]));
+      const single = periods.length === 1;
 
-      const tooltipFormatter = compareYears
-        ? (p) => {
-            if (p.seriesType !== 'scatter') {
-              const hr = hrBuckets[Math.round(p.value[0])];
-              return `<div style="font-weight:600;color:${theme.text}">${p.seriesName}</div>
-                <div>${hr}–${hr + HR_BUCKET_WIDTH} bpm · median pace ${fmt.pace((paceBuckets[0] + p.value[1] * PACE_BUCKET_WIDTH_S) / 60)} /mi</div>`;
-            }
-            const hr = hrBuckets[p.data.hrIdx];
-            const pace = paceBuckets[p.data.paceIdx];
-            const count = p.data.rawCount;
-            return `<div style="font-weight:600;margin-bottom:4px;color:${theme.text}">${p.seriesName}</div>
-              <div>${hr}–${hr + HR_BUCKET_WIDTH} bpm</div>
-              <div>Pace ${paceBucketLabel(pace)}–${paceBucketLabel(pace + PACE_BUCKET_WIDTH_S)} /mi</div>
-              <div><b>${count}</b> lap${count === 1 ? '' : 's'}</div>`;
-          }
-        : (p) => {
-            if (p.seriesName === 'Laps') {
-              const hr = hrBuckets[p.value[0]];
-              const pace = paceBuckets[p.value[1]];
-              const count = p.data.rawCount;
-              return `<div style="font-weight:600;margin-bottom:4px;color:${theme.text}">${hr}–${hr + HR_BUCKET_WIDTH} bpm</div>
-                <div>Pace ${paceBucketLabel(pace)}–${paceBucketLabel(pace + PACE_BUCKET_WIDTH_S)} /mi</div>
-                <div><b>${count}</b> lap${count === 1 ? '' : 's'} · ${Math.round(p.value[2] * 100)}% of this HR bucket's peak</div>`;
-            }
-            const hr = hrBuckets[p.value[0]];
-            return `<div style="font-weight:600;color:${theme.text}">${hr}–${hr + HR_BUCKET_WIDTH} bpm</div>
-              <div>Median pace ${fmt.pace((paceBuckets[0] + p.value[1] * PACE_BUCKET_WIDTH_S) / 60)} /mi</div>`;
-          };
-
-      let series;
-      if (compareYears) {
-        series = [];
-        activeYears.forEach((year, i) => {
-          const color = yearColor(theme, ranks.get(year));
-          const yearPoints = pointsByYear.get(year).map(withPace)
-            .filter(p => p.hr_bucket >= HR_FLOOR && p.pace_bucket < PACE_CEIL_S);
-          const offsetPx = ringOffsetPx(i, activeYears.length);
-
-          const counts = new Map();
-          const pacesByHr = new Map();
-          for (const p of yearPoints) {
-            const key = `${p.hr_bucket}:${p.pace_bucket}`;
-            counts.set(key, (counts.get(key) ?? 0) + 1);
-            if (!pacesByHr.has(p.hr_bucket)) pacesByHr.set(p.hr_bucket, []);
-            pacesByHr.get(p.hr_bucket).push(p.pace_bucket);
-          }
-          // Normalized per HR column, within this year, so sizing reflects
-          // how concentrated that year's laps are at a given effort level.
-          const maxCountByHr = new Map();
-          for (const [key, count] of counts) {
-            const hr = Number(key.split(':')[0]);
-            maxCountByHr.set(hr, Math.max(maxCountByHr.get(hr) ?? 0, count));
-          }
-          const dotData = [...counts.entries()].map(([key, count]) => {
-            const [hr, pace] = key.split(':').map(Number);
-            return {
-              value: [hrIndex.get(hr), paceIndex.get(pace), count / maxCountByHr.get(hr)],
-              hrIdx: hrIndex.get(hr),
-              paceIdx: paceIndex.get(pace),
-              rawCount: count,
-            };
-          });
-
-          const lineData = [...pacesByHr.entries()]
-            .sort((a, b) => a[0] - b[0])
-            .map(([hr, paces]) => [hrIndex.get(hr), (median(paces) - paceBuckets[0]) / PACE_BUCKET_WIDTH_S]);
-
-          series.push({
-            name: String(year),
-            type: 'scatter',
-            symbol: 'circle',
-            symbolSize: value => 5 + value[2] * 14,
-            symbolOffset: [offsetPx, 0],
-            data: dotData,
-            itemStyle: { color: withAlpha(color, theme.isDark ? 0.75 : 0.65), borderColor: theme.surface, borderWidth: 1 },
-            emphasis: { itemStyle: { borderColor: theme.text, borderWidth: 1.5 } },
-          });
-          series.push({
-            name: `${year} median`,
-            type: 'line',
-            data: lineData,
-            symbol: 'circle',
-            symbolSize: 5,
-            connectNulls: true,
-            lineStyle: { color, width: 2 },
-            itemStyle: { color },
-            z: 10,
-          });
-        });
-      } else {
+      const series = [];
+      for (const [slot, period] of periods.entries()) {
+        const color = colors[period.key];
+        const name = quarterRangeText(period.range);
         const counts = new Map();
+        const lapsByCell = new Map();
         const pacesByHr = new Map();
-        for (const p of activePoints) {
+        for (const p of period.points) {
           const key = `${p.hr_bucket}:${p.pace_bucket}`;
           counts.set(key, (counts.get(key) ?? 0) + 1);
+          if (!lapsByCell.has(key)) lapsByCell.set(key, []);
+          lapsByCell.get(key).push(p);
           if (!pacesByHr.has(p.hr_bucket)) pacesByHr.set(p.hr_bucket, []);
           pacesByHr.get(p.hr_bucket).push(p.pace_bucket);
         }
-
-        // Normalized per HR column, not globally.
+        // Normalized per HR column, within this period, so sizing reflects
+        // how concentrated its laps are at a given effort level.
         const maxCountByHr = new Map();
         for (const [key, count] of counts) {
           const hr = Number(key.split(':')[0]);
           maxCountByHr.set(hr, Math.max(maxCountByHr.get(hr) ?? 0, count));
         }
-        const heatData = [...counts.entries()].map(([key, count]) => {
+        const dotData = [...counts.entries()].map(([key, count]) => {
           const [hr, pace] = key.split(':').map(Number);
-          return { value: [hrIndex.get(hr), paceIndex.get(pace), count / maxCountByHr.get(hr)], rawCount: count };
+          return {
+            value: [hrIndex.get(hr), paceIndex.get(pace), count / maxCountByHr.get(hr)],
+            hr, pace, rawCount: count, period: period.key, laps: lapsByCell.get(key),
+          };
         });
+        // Median per HR bucket; it can land between two bucket ticks, and
+        // buckets too thin to trust are left out of the line.
+        const medians = new Map([...pacesByHr.entries()]
+          .filter(([, paces]) => paces.length >= minLaps())
+          .map(([hr, paces]) => [hr, median(paces)]));
+        period.medians = medians;
+        const lineData = [...medians.entries()].sort((a, b) => a[0] - b[0])
+          .map(([hr, m]) => ({ value: [hrIndex.get(hr), (m - paceBuckets[0]) / PACE_BUCKET_WIDTH_S], hr, pace: m }));
 
-        // Fractional index: median can land between two bucket ticks.
-        const lineData = [...pacesByHr.entries()]
-          .sort((a, b) => a[0] - b[0])
-          .map(([hr, paces]) => [hrIndex.get(hr), (median(paces) - paceBuckets[0]) / PACE_BUCKET_WIDTH_S]);
-
-        series = [
-          {
-            name: 'Laps',
-            type: 'scatter',
-            symbol: 'circle',
-            symbolSize: value => 6 + value[2] * 18,
-            data: heatData,
-            itemStyle: { color: withAlpha(theme.accent, theme.isDark ? 0.75 : 0.65), borderColor: theme.surface, borderWidth: 1 },
-            emphasis: { itemStyle: { borderColor: theme.text, borderWidth: 1.5 } },
-          },
-          {
-            name: 'Median pace',
-            type: 'line',
-            data: lineData,
-            symbol: 'circle',
-            symbolSize: 6,
-            connectNulls: true,
-            lineStyle: { color: theme.series[5], width: 2.5 },
-            itemStyle: { color: theme.series[5] },
-            z: 10,
-          },
-        ];
+        series.push({
+          name,
+          type: 'scatter',
+          symbol: 'circle',
+          symbolSize: single ? (v => 6 + v[2] * 18) : (v => 5 + v[2] * 14),
+          symbolOffset: [single ? 0 : (slot - 0.5) * RING_SPREAD_PX, 0],
+          data: dotData,
+          itemStyle: { color: withAlpha(color, theme.isDark ? 0.75 : 0.65), borderColor: theme.surface, borderWidth: 1 },
+          emphasis: { itemStyle: { borderColor: theme.text, borderWidth: 1.5 } },
+          cursor: 'pointer',
+        });
+        series.push({
+          name: `${name} median`,
+          type: 'line',
+          data: lineData,
+          symbol: 'circle',
+          symbolSize: 5,
+          connectNulls: true,
+          lineStyle: { color, width: 2.5 },
+          itemStyle: { color },
+          z: 10,
+        });
       }
 
       chart.setOption({
         animation: false,
+        title: { show: false },
         grid: { top: 24, right: 24, bottom: 48, left: 64 },
         tooltip: {
           backgroundColor: theme.surface,
           borderColor: theme.gridline,
           textStyle: { fontSize: 12, color: theme.text },
-          formatter: tooltipFormatter,
+          formatter: p => {
+            const d = p.data;
+            const head = `<div style="font-weight:600;margin-bottom:4px;color:${theme.text}">${p.seriesName.replace(/ median$/, '')}</div>
+              <div>${d.hr}–${d.hr + HR_BUCKET_WIDTH} bpm</div>`;
+            if (p.seriesType !== 'scatter') return `${head}<div>Median pace ${fmt.pace(d.pace / 60)} /mi</div>`;
+            return `${head}<div>Pace ${paceBucketLabel(d.pace)}–${paceBucketLabel(d.pace + PACE_BUCKET_WIDTH_S)} /mi</div>
+              <div><b>${d.rawCount}</b> lap${d.rawCount === 1 ? '' : 's'} · click to list them</div>`;
+          },
         },
         xAxis: {
+          show: true,
           type: 'category',
-          data: hrBuckets.map(b => b),
-          axisLabel: { fontSize: 11, color: theme.muted, formatter: v => v },
+          data: hrBuckets,
+          axisLabel: { fontSize: 11, color: theme.muted },
           axisLine: { lineStyle: { color: theme.gridline } },
           axisTick: { show: false },
           splitLine: { show: false },
@@ -747,6 +906,7 @@
           nameTextStyle: { fontSize: 11, color: theme.muted },
         },
         yAxis: {
+          show: true,
           type: 'category',
           data: paceBuckets.map(paceBucketLabel),
           inverse: true, // faster (lower) pace reads as "up", per the Fitness chart above
@@ -761,23 +921,319 @@
         },
         series,
       }, { replaceMerge: ['series'] });
+
+      caption.textContent = efficiencyCaption(periods);
+      // Keep the open lap list on the same cell under the new toggles and
+      // ranges; close it when that cell has no laps left.
+      if (selected) {
+        const dot = series.filter(s => s.type === 'scatter').flatMap(s => s.data)
+          .find(d => d.period === selected.period && d.hr === selected.hr && d.pace === selected.pace);
+        if (dot) showLaps(dot, periods); else hideLaps();
+      }
     }
 
-    document.getElementById('chip-row-hr').addEventListener('click', e => {
-      const btn = e.target.closest('.chip');
-      if (!btn) return;
-      const year = Number(btn.dataset.year);
-      if (!allYears.includes(year)) return;
-      if (selected.has(year)) {
-        if (selected.size > 1) selected.delete(year);
-      } else {
-        selected.add(year);
-      }
-      render();
+    // ---- Lap list for a clicked dot ----
+    const detail = document.getElementById('eff-detail');
+    let selected = null;
+    function hideLaps() {
+      selected = null;
+      detail.style.display = 'none';
+    }
+    function showLaps(dot, periods) {
+      selected = { period: dot.period, hr: dot.hr, pace: dot.pace };
+      const period = periods.find(p => p.key === dot.period);
+      const laps = [...dot.laps].sort((x, y) =>
+        (runsById.get(y.activity_id)?.date ?? '').localeCompare(runsById.get(x.activity_id)?.date ?? '')
+        || x.activity_id - y.activity_id || x.lap_index - y.lap_index);
+      const runCount = new Set(laps.map(l => l.activity_id)).size;
+      document.getElementById('eff-detail-heading').innerHTML =
+        `<span class="dot" style="background:${colors[dot.period]}"></span>${quarterRangeText(period.range)} · ` +
+        `${dot.hr}–${dot.hr + HR_BUCKET_WIDTH} bpm · ${paceBucketLabel(dot.pace)}–${paceBucketLabel(dot.pace + PACE_BUCKET_WIDTH_S)} /mi`;
+      document.getElementById('eff-detail-note').textContent =
+        `${laps.length} lap${laps.length === 1 ? '' : 's'} from ${runCount} run${runCount === 1 ? '' : 's'} · click another dot to switch`;
+      document.getElementById('eff-detail-pace-head').textContent = heatToggle.checked ? 'Pace (heat-adj)' : 'Pace';
+      // A run's laps share its date and name; repeat them only on its first row.
+      let prev = null;
+      document.getElementById('eff-detail-body').innerHTML = laps.map(l => {
+        const run = runsById.get(l.activity_id);
+        const first = l.activity_id !== prev;
+        prev = l.activity_id;
+        const pace = heatToggle.checked ? l.pace_s_heat_adj : l.pace_s;
+        return `<tr>
+          <td class="dim">${first ? (run?.date ?? '') : ''}</td>
+          <td>${first ? `<a href="/activity.html?id=${l.activity_id}">${esc(run?.name ?? 'Run')}</a>` : ''}</td>
+          <td class="r">${l.lap_index}</td>
+          <td class="r">${fmt.pace(pace / 60)}</td>
+          <td class="r">${Math.round(l.hr)}</td>
+        </tr>`;
+      }).join('');
+      detail.style.display = '';
+    }
+    chart.on('click', p => {
+      if (p.seriesType !== 'scatter') return;
+      const periods = [{ key: 'a', range: state.a }, ...(state.b ? [{ key: 'b', range: state.b }] : [])];
+      showLaps(p.data, periods);
     });
+    document.getElementById('eff-detail-close').addEventListener('click', hideLaps);
 
-    compareToggle.addEventListener('change', () => render());
+    // Laps per period, plus how far apart the medians sit across the HR
+    // buckets both periods have one for.
+    function efficiencyCaption(periods) {
+      const parts = periods.map(p => `${quarterRangeText(p.range)}: ${p.points.length} lap${p.points.length === 1 ? '' : 's'}`);
+      if (periods.length === 2) {
+        const [a, b] = periods.map(p => p.medians);
+        const shared = [...a.keys()].filter(hr => b.has(hr)).sort((x, y) => x - y);
+        if (shared.length) {
+          const diff = shared.reduce((sum, hr) => sum + (b.get(hr) - a.get(hr)), 0) / shared.length;
+          const word = diff >= 0 ? 'faster' : 'slower';
+          parts.push(`${quarterRangeText(periods[0].range)} median ${Math.abs(Math.round(diff))} s/mi ${word} at the same HR (${shared[0]}–${shared[shared.length - 1] + HR_BUCKET_WIDTH} bpm)`);
+        }
+      }
+      return parts.join(' · ');
+    }
+
     heatToggle.addEventListener('change', () => render());
+    steadyToggle.addEventListener('change', () => render());
+
+    render();
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  // ---- Easy-run efficiency -------------------------------------------------
+
+  const EASY_EF_STORE_KEY = 'miles.easyEfficiency';
+  const EASY_EF_WINDOW_DAYS = 28;
+  // A window's median counts only when at most one of its weeks has no easy
+  // run: a sparser window (a break, an injury, a block of workouts) is a
+  // couple of runs' median, so the line breaks there instead.
+  const EASY_EF_WINDOW_WEEKS = EASY_EF_WINDOW_DAYS / 7;
+  const EASY_EF_MAX_MISSING_WEEKS = 1;
+
+  async function loadEasyEfficiency() {
+    const res = await fetch('/api/easy-efficiency');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  function initEasyEfficiency(runs) {
+    if (!runs || !runs.length) return;
+    document.getElementById('section-easy-ef').style.display = '';
+    const theme = chartTheme();
+    const chart = echarts.init(document.getElementById('chart-easy-ef'));
+    const gradeToggle = document.getElementById('easy-ef-grade');
+    const heatToggle = document.getElementById('easy-ef-heat');
+    const caption = document.getElementById('easy-ef-caption');
+    const DAY = 86400000;
+
+    const quarters = [...new Set(runs.map(r => quarterOf(r.start_date)))].sort();
+    const firstQ = quarters[0], lastQ = quarters[quarters.length - 1];
+    let range = { from: firstQ, to: lastQ };
+    const rangeBtn = document.getElementById('easy-ef-range');
+
+    let mode = 'timeline';
+    try {
+      const saved = JSON.parse(localStorage.getItem(EASY_EF_STORE_KEY));
+      if (saved && typeof saved === 'object') {
+        range = validQuarterRange(saved.range, firstQ, lastQ) ?? range;
+        if (saved.mode === 'timeline' || saved.mode === 'yoy') mode = saved.mode;
+        if (typeof saved.grade === 'boolean') gradeToggle.checked = saved.grade;
+        if (typeof saved.heat === 'boolean') heatToggle.checked = saved.heat;
+      }
+    } catch (_) {}
+    function syncTabs() {
+      document.querySelectorAll('#easy-ef-tabs .mode-tab').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+    }
+
+    for (const r of runs) r.t = dayMs(r.start_date.slice(0, 10));
+
+    // Median of runsIn, the runs of the 28 days ending on day end, or null
+    // when more than EASY_EF_MAX_MISSING_WEEKS of those weeks have no run.
+    function windowStat(runsIn, end) {
+      const weeks = new Set(runsIn.map(r => Math.floor((end - r.t) / (7 * DAY))));
+      return weeks.size >= EASY_EF_WINDOW_WEEKS - EASY_EF_MAX_MISSING_WEEKS ? { m: median(runsIn.map(r => r.value)), n: runsIn.length } : null;
+    }
+    function windowMedian(data, end) {
+      return windowStat(data.filter(r => r.t > end - EASY_EF_WINDOW_DAYS * DAY && r.t <= end), end);
+    }
+
+    // EF under the current toggles, plus the trailing 28-day median at each
+    // run (null where the window isn't consistent). runs is date-sorted, so
+    // the window slides: lo is its first run, hi one past its last (a later
+    // run on the same day is inside it).
+    function withEf() {
+      const out = runs.map(r => ({
+        ...r,
+        value: (gradeToggle.checked ? r.ef_gap : r.ef) * (heatToggle.checked ? r.heat_factor : 1),
+      }));
+      let lo = 0, hi = 0;
+      for (const r of out) {
+        while (hi < out.length && out[hi].t <= r.t) hi++;
+        while (out[lo].t <= r.t - EASY_EF_WINDOW_DAYS * DAY) lo++;
+        r.rolling = windowStat(out.slice(lo, hi), r.t)?.m ?? null;
+      }
+      return out;
+    }
+
+    function runTooltip(r) {
+      const pace = gradeToggle.checked ? r.gap_pace_s : r.pace_s;
+      const heatPct = Math.round((r.heat_factor - 1) * 1000) / 10;
+      return `<div style="font-weight:600;margin-bottom:4px;color:${theme.text}">${esc(r.name ?? 'Run')}</div>
+        <div>${r.start_date.slice(0, 10)} · ${Math.round(r.minutes)} min counted</div>
+        <div><b>${r.value.toFixed(3)}</b> m/beat</div>
+        <div>${fmt.pace(pace / 60)} /mi${gradeToggle.checked ? ' grade-adjusted' : ''} at ${Math.round(r.avg_hr)} bpm</div>
+        ${heatPct > 0 ? `<div style="color:${theme.muted}">heat slowdown ${heatPct}%${heatToggle.checked ? ' (adjusted)' : ''}</div>` : ''}`;
+    }
+
+    // "Last 28 days" of the range against the same 28 days a year earlier,
+    // on the rolling-median basis the chart draws: both windows read every
+    // run (all), so a year-ago window before the range still counts.
+    function captionText(all, data) {
+      const end = data[data.length - 1].t;
+      const now = windowMedian(all, end);
+      if (!now) return `More than ${EASY_EF_MAX_MISSING_WEEKS} week of the last ${EASY_EF_WINDOW_DAYS} days of runs has no easy run, so no median`;
+      const parts = [`Last ${EASY_EF_WINDOW_DAYS} days of runs: ${now.m.toFixed(3)} m/beat (${now.n} runs)`];
+      const yearAgo = windowMedian(all, end - 365 * DAY);
+      if (yearAgo) {
+        const pct = (now.m / yearAgo.m - 1) * 100;
+        parts.push(`${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}% vs the same weeks a year earlier (${yearAgo.m.toFixed(3)})`);
+      }
+      return parts.join(' · ');
+    }
+
+    const yAxis = {
+      type: 'value',
+      scale: true,
+      name: theme.compact ? '' : 'm / beat',
+      nameTextStyle: { fontSize: 11, color: theme.muted },
+      axisLabel: { fontSize: 11, color: theme.muted, formatter: v => v.toFixed(2) },
+      splitLine: { lineStyle: { color: theme.gridline } },
+    };
+    const tooltipBase = {
+      backgroundColor: theme.surface,
+      borderColor: theme.gridline,
+      textStyle: { fontSize: 12, color: theme.text },
+    };
+
+    function renderTimeline(data) {
+      chart.setOption({
+        animation: false,
+        legend: { show: false },
+        grid: theme.compact ? { top: 24, right: 12, bottom: 32, left: 44 } : { top: 32, right: 24, bottom: 36, left: 56 },
+        tooltip: {
+          ...tooltipBase,
+          trigger: 'item',
+          formatter: p => p.seriesType === 'scatter'
+            ? runTooltip(p.data.run)
+            : `<div style="font-weight:600;color:${theme.text}">${new Date(p.value[0]).toISOString().slice(0, 10)}</div><div>${EASY_EF_WINDOW_DAYS}-day median ${p.value[1].toFixed(3)} m/beat</div>`,
+        },
+        xAxis: {
+          type: 'time',
+          axisLabel: { fontSize: 11, color: theme.muted, hideOverlap: true },
+          axisLine: { lineStyle: { color: theme.gridline } },
+          splitLine: { show: false },
+        },
+        yAxis,
+        series: [
+          {
+            name: 'Runs',
+            type: 'scatter',
+            symbolSize: theme.compact ? 4 : 6,
+            data: data.map(r => ({ value: [r.t, r.value], run: r })),
+            itemStyle: { color: withAlpha(theme.accent, theme.isDark ? 0.45 : 0.35) },
+            emphasis: { itemStyle: { color: theme.accent } },
+            cursor: 'pointer',
+          },
+          {
+            name: `${EASY_EF_WINDOW_DAYS}-day median`,
+            type: 'line',
+            showSymbol: false,
+            data: data.map(r => [r.t, r.rolling]), // nulls break the line
+            lineStyle: { color: theme.accent, width: 2.5 },
+            itemStyle: { color: theme.accent },
+            z: 10,
+          },
+        ],
+      }, { replaceMerge: ['series', 'xAxis', 'legend'] });
+    }
+
+    // Every year's rolling median on one Jan–Dec axis (dates moved to the
+    // leap year 2000 so Feb 29 has a slot); the most recent years the
+    // palette covers are in color, any older ones muted.
+    function renderYoy(data) {
+      const years = [...new Set(data.map(r => Number(r.start_date.slice(0, 4))))].sort((a, b) => b - a);
+      const onAxis = r => dayMs(`2000${r.start_date.slice(4, 10)}`);
+      const series = years.map((year, rank) => {
+        const colored = rank < theme.series.length;
+        const color = colored ? theme.series[rank] : theme.muted;
+        const yearRuns = data.filter(r => r.start_date.startsWith(String(year)));
+        return {
+          name: String(year),
+          type: 'line',
+          showSymbol: false,
+          data: yearRuns.map(r => ({ value: [onAxis(r), r.rolling], date: r.start_date.slice(0, 10) })),
+          lineStyle: { color, width: colored ? (rank === 0 ? 3 : 2) : 1, opacity: colored ? 1 : 0.5 },
+          itemStyle: { color },
+          z: colored ? 10 - rank : 1,
+        };
+      });
+      chart.setOption({
+        animation: false,
+        legend: {
+          show: true,
+          top: 0,
+          type: 'scroll',
+          textStyle: { fontSize: 11, color: theme.muted },
+          itemWidth: 14,
+          itemHeight: 8,
+        },
+        grid: theme.compact ? { top: 36, right: 12, bottom: 32, left: 44 } : { top: 40, right: 24, bottom: 36, left: 56 },
+        tooltip: {
+          ...tooltipBase,
+          trigger: 'item',
+          formatter: p => `<div style="font-weight:600;color:${theme.text}">${p.data.date}</div><div>${EASY_EF_WINDOW_DAYS}-day median ${p.value[1].toFixed(3)} m/beat</div>`,
+        },
+        xAxis: {
+          type: 'time',
+          min: dayMs('2000-01-01'),
+          max: dayMs('2000-12-31'),
+          axisLabel: { fontSize: 11, color: theme.muted, formatter: '{MMM}', hideOverlap: true },
+          axisLine: { lineStyle: { color: theme.gridline } },
+          splitLine: { show: false },
+        },
+        yAxis,
+        series,
+      }, { replaceMerge: ['series', 'xAxis', 'legend'] });
+    }
+
+    function render() {
+      syncTabs();
+      try { localStorage.setItem(EASY_EF_STORE_KEY, JSON.stringify({ mode, range, grade: gradeToggle.checked, heat: heatToggle.checked })); } catch (_) {}
+      rangeBtn.innerHTML = `<span class="dot" style="background:${theme.accent}"></span><span class="filter-label">${quarterRangeText(range)}</span>`;
+      // Rolling medians come from every run, so a range's first weeks still
+      // have a full window behind them.
+      const all = withEf();
+      const data = all.filter(r => { const q = quarterOf(r.start_date); return q >= range.from && q <= range.to; });
+      if (!data.length) {
+        chart.clear();
+        caption.textContent = 'No easy runs in this range';
+        return;
+      }
+      if (mode === 'yoy') renderYoy(data); else renderTimeline(data);
+      caption.textContent = captionText(all, data);
+    }
+
+    chart.on('click', p => {
+      if (p.seriesType === 'scatter' && p.data?.run) window.location.href = `/activity.html?id=${p.data.run.activity_id}`;
+    });
+    document.querySelectorAll('#easy-ef-tabs .mode-tab').forEach(btn => {
+      btn.addEventListener('click', () => { mode = btn.dataset.mode; render(); });
+    });
+    rangeBtn.addEventListener('click', () => quarterPicker.open({
+      title: 'Runs from', color: theme.accent, range, firstQ, lastQ,
+      onApply: r => { range = r; render(); },
+    }));
+    gradeToggle.addEventListener('change', render);
+    heatToggle.addEventListener('change', render);
 
     render();
     window.addEventListener('resize', () => chart.resize());
@@ -1106,7 +1562,7 @@
   Promise.all([
     load(),
     loadFitnessFull().catch(() => []),
-    loadHrPace().catch(() => []),
+    loadHrPace().catch(() => ({ points: [], activities: [] })),
     loadIntensity().catch(sectionError('section-intensity', 'intensity-caption', 'intensity')),
     loadLoad().catch(sectionError('section-load', 'load-caption', 'load')),
   ]).then(([data, fitness, hrPace, intensity, loadData]) => {
@@ -1118,6 +1574,7 @@
     initLoad(loadData);
     initIntensity(intensity);
     initHrPace(hrPace);
+    loadEasyEfficiency().then(initEasyEfficiency).catch(sectionError('section-easy-ef', 'easy-ef-caption', 'easy-run efficiency'));
     renderChart(data);
     renderStatStrip(data);
   }).catch(err => {

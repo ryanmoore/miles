@@ -11,7 +11,7 @@ from typing import Literal, NotRequired
 
 from typing_extensions import TypedDict
 
-from .db import effective_run_type_sql, get_athlete
+from .db import effective_run_type_sql, get_athlete, hr_trusted_sql
 from .format import fmt_pace
 from .races import NOMINAL_METERS, classify_race_distance, riegel_time, run_sport_filter
 
@@ -412,7 +412,7 @@ def hr_ceiling(conn: sqlite3.Connection, as_of: date) -> float | None:
     window_start = (as_of - timedelta(days=365)).isoformat()
     rows = conn.execute(f"""
         SELECT max_heartrate FROM activities
-        WHERE {sport_clause} AND max_heartrate IS NOT NULL
+        WHERE {sport_clause} AND max_heartrate IS NOT NULL AND {hr_trusted_sql()}
           AND DATE(start_date) >= ? AND DATE(start_date) < ?
     """, params + [window_start, as_of.isoformat()]).fetchall()
     values = [float(r["max_heartrate"]) for r in rows]
@@ -420,7 +420,7 @@ def hr_ceiling(conn: sqlite3.Connection, as_of: date) -> float | None:
     if len(values) < 10:
         rows = conn.execute(f"""
             SELECT max_heartrate FROM activities
-            WHERE {sport_clause} AND max_heartrate IS NOT NULL
+            WHERE {sport_clause} AND max_heartrate IS NOT NULL AND {hr_trusted_sql()}
               AND DATE(start_date) < ?
         """, params + [as_of.isoformat()]).fetchall()
         values = [float(r["max_heartrate"]) for r in rows]

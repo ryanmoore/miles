@@ -103,7 +103,7 @@ def daily_loads(conn: sqlite3.Connection, start: date, end: date, max_hr: int) -
 
     ph = ",".join("?" * len(RUN_SPORT_TYPES))
     other_rows = conn.execute(f"""
-        SELECT DATE(start_date) AS d, moving_time_s, average_heartrate
+        SELECT DATE(start_date) AS d, moving_time_s, {db.hr_sql("average_heartrate")} AS average_heartrate
         FROM activities
         WHERE sport_type NOT IN ({ph}) AND moving_time_s > 0
           AND DATE(start_date) >= ? AND DATE(start_date) <= ?

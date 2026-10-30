@@ -104,39 +104,6 @@
     .activities-view .filter-bar > .filter-btn, .activities-view .type-filter { flex: 1 1 0; min-width: 0; }
     .activities-view .type-filter { position: relative; display: flex; }
     .activities-view .type-filter > .filter-btn { flex: 1 1 auto; }
-    .filter-btn, .primary-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.375rem;
-      min-width: 0;
-      min-height: 2.75rem;
-      padding: 0 0.875rem;
-      font: inherit;
-      font-size: 0.8125rem;
-      font-weight: 500;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--surface);
-      color: var(--text);
-      cursor: pointer;
-    }
-    .filter-btn:hover { background: var(--pr-bg-hover); }
-    .filter-btn.active { border-color: var(--accent); color: var(--accent); }
-    .filter-btn .filter-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .filter-btn .chev { width: 0.75rem; height: 0.75rem; flex: none; }
-    .primary-btn { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-    .link-btn {
-      min-height: 2.75rem;
-      padding: 0 0.25rem;
-      font: inherit;
-      font-size: 0.8125rem;
-      border: none;
-      background: none;
-      color: var(--accent);
-      cursor: pointer;
-    }
-
     .type-backdrop { position: fixed; inset: 0; z-index: 89; background: rgba(0, 0, 0, 0.35); }
     .type-panel {
       position: fixed;
@@ -199,58 +166,9 @@
     .type-expand[aria-expanded="true"] svg { transform: none; }
     .panel-done { flex: none; width: 100%; margin-top: 0.5rem; }
 
-    .date-dialog {
-      margin: auto 0 0;
-      width: 100%;
-      max-width: 100%;
-      padding: 0;
-      border: none;
-      border-radius: 12px 12px 0 0;
-      background: var(--surface);
-      color: var(--text);
-    }
-    .date-dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
-    .date-inner { padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px)); }
-    .date-head { display: flex; align-items: center; justify-content: space-between; }
-    .date-year { font-size: 1rem; font-weight: 650; font-variant-numeric: tabular-nums; }
-    .year-nav {
-      width: 2.75rem;
-      height: 2.75rem;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--surface);
-      color: var(--text);
-      cursor: pointer;
-    }
-    .year-nav svg { width: 0.875rem; height: 0.875rem; }
-    .year-nav:disabled { opacity: 0.35; cursor: default; }
-    .date-hint { min-height: 1.25rem; margin: 0.5rem 0; font-size: 0.75rem; color: var(--muted); text-align: center; }
-    .month-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.375rem; }
-    .month-btn {
-      min-height: 2.75rem;
-      font: inherit;
-      font-size: 0.875rem;
-      border: 1px solid transparent;
-      border-radius: 6px;
-      background: none;
-      color: var(--text);
-      cursor: pointer;
-    }
-    .month-btn:hover:not(:disabled) { border-color: var(--border); }
-    .month-btn:disabled { color: var(--baseline); cursor: default; }
-    .month-btn.in-range { background: color-mix(in srgb, var(--accent) 15%, transparent); }
-    .month-btn.edge { background: var(--accent); color: #fff; font-weight: 600; }
-    .date-foot { display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem; }
-    .date-foot .spacer { flex: 1; }
-
     @media (min-width: 640px) {
       .activities-view .filter-bar > .filter-btn, .activities-view .type-filter { flex: none; }
-      .filter-btn, .primary-btn { min-height: 2rem; font-size: 0.75rem; }
       .activities-view .filter-bar .filter-btn { max-width: 16rem; }
-      .link-btn { min-height: 2rem; font-size: 0.75rem; }
       .type-backdrop { display: none; }
       .type-panel {
         position: absolute;
@@ -268,10 +186,6 @@
       .type-row { min-height: 2rem; font-size: 0.8125rem; }
       .type-expand { width: 2rem; height: 2rem; }
       .panel-done { display: none; }
-      .date-dialog { margin: auto; width: 20rem; border: 1px solid var(--border); border-radius: 10px; }
-      .date-inner { padding: 1rem; }
-      .year-nav { width: 2rem; height: 2rem; }
-      .month-btn { min-height: 2.25rem; font-size: 0.8125rem; }
     }
   </style>
 </head>
@@ -461,7 +375,47 @@
   }
 
   function reload() {
+    saveFilters();
     loadPage(true).catch(showError);
+  }
+
+  // ---- Remembered filters ------------------------------------------------
+  // Per viewer, in localStorage. runTypes is saved as null when Run is
+  // unfiltered, so a run type that appears later is still included.
+
+  const FILTERS_KEY = 'miles.activityFilters';
+
+  function saveFilters() {
+    const runFiltered = state.sports.has('Run') && state.runTypes.size < filters.run_types.length;
+    const saved = {
+      sports: [...state.sports],
+      runTypes: runFiltered ? [...state.runTypes] : null,
+      from: state.from,
+      to: state.to,
+    };
+    try { localStorage.setItem(FILTERS_KEY, JSON.stringify(saved)); } catch { /* not remembered */ }
+  }
+
+  // Drops anything the current data no longer has (a sport since deleted, a
+  // malformed range) rather than restoring a filter that can't be shown.
+  function restoreFilters() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(FILTERS_KEY) || 'null'); } catch { /* storage unavailable */ }
+    if (!saved || typeof saved !== 'object') return;
+
+    const sports = new Set(filters.sports.map(s => s.sport_type));
+    const runTypes = filters.run_types.map(t => t.run_type);
+    if (Array.isArray(saved.sports)) state.sports = new Set(saved.sports.filter(s => sports.has(s)));
+    if (state.sports.has('Run')) {
+      const kept = Array.isArray(saved.runTypes) ? saved.runTypes.filter(t => runTypes.includes(t)) : [];
+      state.runTypes = new Set(kept.length ? kept : runTypes);
+    }
+
+    const month = /^\d{4}-\d{2}$/;
+    if (month.test(saved.from) && month.test(saved.to) && saved.from <= saved.to) {
+      state.from = saved.from;
+      state.to = saved.to;
+    }
   }
 
   function showError(err) {
@@ -680,6 +634,7 @@
       document.getElementById('empty').style.display = '';
       return;
     }
+    restoreFilters();
     buildTypeOptions();
     syncTypeUI();
     syncDateUI();

@@ -844,8 +844,8 @@ def _easy_progression(conn: sqlite3.Connection, week_starts: list[str]) -> list[
             {db.monday_sql("a.start_date")} AS monday,
             SUM(a.distance_m) AS total_distance_m,
             SUM(a.moving_time_s) AS total_time_s,
-            SUM(CASE WHEN a.average_heartrate IS NOT NULL THEN a.distance_m * a.average_heartrate ELSE 0 END) AS hr_weighted,
-            SUM(CASE WHEN a.average_heartrate IS NOT NULL THEN a.distance_m ELSE 0 END) AS hr_weight,
+            SUM(CASE WHEN a.average_heartrate IS NOT NULL AND {db.hr_trusted_sql("a")} THEN a.distance_m * a.average_heartrate ELSE 0 END) AS hr_weighted,
+            SUM(CASE WHEN a.average_heartrate IS NOT NULL AND {db.hr_trusted_sql("a")} THEN a.distance_m ELSE 0 END) AS hr_weight,
             AVG(w.apparent_temp_c_max) AS avg_apparent_temp_c,
             COUNT(*) AS run_count
         FROM activities a

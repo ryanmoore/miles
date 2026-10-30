@@ -189,7 +189,7 @@ def get_activities(
             ROUND(a.distance_m / 1609.34, 2) AS miles,
             a.moving_time_s,
             {db.pace_sql("a.average_speed_mps")} AS pace_min_per_mile,
-            a.average_heartrate,
+            {db.hr_sql("a.average_heartrate", "a")} AS average_heartrate,
             a.total_elevation_gain_m,
             a.strava_url,
             w.temp_c_start,
@@ -225,7 +225,7 @@ def get_training_block(start_date: str, end_date: str) -> str:
             COUNT(*) AS runs,
             ROUND(SUM(distance_m) / 1609.34, 2)  AS total_miles,
             ROUND(AVG(distance_m) / 1609.34, 2)  AS avg_miles,
-            ROUND(AVG(average_heartrate), 1)       AS avg_hr,
+            ROUND(AVG({db.hr_sql("average_heartrate")}), 1) AS avg_hr,
             {db.pace_sql("AVG(average_speed_mps)")} AS avg_pace_min_per_mile,
             ROUND(SUM(total_elevation_gain_m) * 3.28084, 0) AS total_elevation_ft
         FROM activities
@@ -924,16 +924,16 @@ def get_workout_laps(
     for act in activities:
         laps = conn.execute(f"""
             SELECT
-                lap_index,
-                lap_type,
-                intensity,
-                ROUND(distance_m / 1609.34, 3) AS distance_miles,
-                {db.pace_sql("average_speed_mps")} AS pace_min_per_mile,
-                average_heartrate AS avg_hr,
-                max_heartrate AS max_hr
-            FROM laps
-            WHERE activity_id = ?
-            ORDER BY lap_index
+                l.lap_index,
+                l.lap_type,
+                l.intensity,
+                ROUND(l.distance_m / 1609.34, 3) AS distance_miles,
+                {db.pace_sql("l.average_speed_mps")} AS pace_min_per_mile,
+                {db.hr_sql("l.average_heartrate", "a")} AS avg_hr,
+                {db.hr_sql("l.max_heartrate", "a")} AS max_hr
+            FROM laps l JOIN activities a ON a.activity_id = l.activity_id
+            WHERE l.activity_id = ?
+            ORDER BY l.lap_index
         """, [act["activity_id"]]).fetchall()
 
         keep = ("lap_index", "distance_miles", "pace_min_per_mile", "avg_hr", "max_hr", "lap_type", "intensity")
@@ -1105,7 +1105,7 @@ def get_build_snapshot(race_date: str | None = None, build_weeks: int = 12) -> s
         ORDER BY week_offset
     """, [build_start, build_weeks] + type_params + [build_start, race_date_str]).fetchall()
 
-    workouts = conn.execute("""
+    workouts = conn.execute(f"""
         SELECT
             a.activity_id,
             a.name,
@@ -1113,7 +1113,7 @@ def get_build_snapshot(race_date: str | None = None, build_weeks: int = 12) -> s
             a.workout_label,
             COUNT(l.lap_id) AS rep_count,
             ROUND(AVG(26.8224 / l.average_speed_mps), 2) AS avg_rep_pace,
-            ROUND(AVG(l.average_heartrate), 1) AS avg_rep_hr,
+            ROUND(AVG({db.hr_sql("l.average_heartrate", "a")}), 1) AS avg_rep_hr,
             w.temp_c_start,
             w.temp_c_max,
             w.apparent_temp_c_max,
@@ -1136,7 +1136,7 @@ def get_build_snapshot(race_date: str | None = None, build_weeks: int = 12) -> s
             DATE(a.start_date) AS date,
             ROUND(a.distance_m / 1609.34, 1) AS miles,
             {db.pace_sql("a.average_speed_mps")} AS avg_pace,
-            ROUND(a.average_heartrate) AS avg_hr,
+            ROUND({db.hr_sql("a.average_heartrate", "a")}) AS avg_hr,
             a.activity_id,
             w.temp_c_start,
             w.temp_c_max,
@@ -1198,19 +1198,19 @@ def get_workout_session(activity_id: int) -> str:
 
     laps = conn.execute(f"""
         SELECT
-            lap_index,
-            lap_type,
-            intensity,
-            ROUND(distance_m / 1609.34, 3) AS distance_miles,
-            moving_time_s AS duration_s,
-            {db.pace_sql("average_speed_mps")} AS pace_min_mi,
-            ROUND(average_heartrate) AS avg_hr,
-            ROUND(max_heartrate) AS max_hr
-        FROM laps
-        WHERE activity_id = ?
-          AND distance_m >= 200 AND moving_time_s >= 45
-          AND average_speed_mps IS NOT NULL AND average_speed_mps > 0
-        ORDER BY lap_index
+            l.lap_index,
+            l.lap_type,
+            l.intensity,
+            ROUND(l.distance_m / 1609.34, 3) AS distance_miles,
+            l.moving_time_s AS duration_s,
+            {db.pace_sql("l.average_speed_mps")} AS pace_min_mi,
+            ROUND({db.hr_sql("l.average_heartrate", "a")}) AS avg_hr,
+            ROUND({db.hr_sql("l.max_heartrate", "a")}) AS max_hr
+        FROM laps l JOIN activities a ON a.activity_id = l.activity_id
+        WHERE l.activity_id = ?
+          AND l.distance_m >= 200 AND l.moving_time_s >= 45
+          AND l.average_speed_mps IS NOT NULL AND l.average_speed_mps > 0
+        ORDER BY l.lap_index
     """, [activity_id]).fetchall()
 
     keep = ("lap_index", "distance_miles", "duration_s", "pace_min_mi", "avg_hr", "max_hr", "intensity")
@@ -1264,18 +1264,18 @@ def get_race_splits(activity_id: int) -> str:
 
     laps = conn.execute(f"""
         SELECT
-            lap_index,
-            distance_m,
-            ROUND(distance_m / 1609.34, 3) AS distance_miles,
-            moving_time_s AS duration_s,
-            {db.pace_sql("average_speed_mps")} AS pace_min_mi,
-            ROUND(average_heartrate) AS avg_hr,
-            ROUND(max_heartrate) AS max_hr
-        FROM laps
-        WHERE activity_id = ?
-          AND distance_m >= 200 AND moving_time_s >= 45
-          AND average_speed_mps IS NOT NULL AND average_speed_mps > 0
-        ORDER BY lap_index
+            l.lap_index,
+            l.distance_m,
+            ROUND(l.distance_m / 1609.34, 3) AS distance_miles,
+            l.moving_time_s AS duration_s,
+            {db.pace_sql("l.average_speed_mps")} AS pace_min_mi,
+            ROUND({db.hr_sql("l.average_heartrate", "a")}) AS avg_hr,
+            ROUND({db.hr_sql("l.max_heartrate", "a")}) AS max_hr
+        FROM laps l JOIN activities a ON a.activity_id = l.activity_id
+        WHERE l.activity_id = ?
+          AND l.distance_m >= 200 AND l.moving_time_s >= 45
+          AND l.average_speed_mps IS NOT NULL AND l.average_speed_mps > 0
+        ORDER BY l.lap_index
     """, [activity_id]).fetchall()
 
     if not laps:
@@ -1377,7 +1377,7 @@ def get_easy_hr_trend(months: int = 36) -> str:
         FROM activities
         WHERE {type_clause}
           AND run_type = 'easy'
-          AND average_heartrate IS NOT NULL
+          AND average_heartrate IS NOT NULL AND {db.hr_trusted_sql()}
           AND start_date >= ?
         GROUP BY month
         ORDER BY month
@@ -1391,7 +1391,7 @@ def get_easy_hr_trend(months: int = 36) -> str:
         LEFT JOIN weather w ON w.activity_id = a.activity_id
         WHERE {type_clause}
           AND a.run_type = 'easy'
-          AND a.average_heartrate IS NOT NULL
+          AND a.average_heartrate IS NOT NULL AND {db.hr_trusted_sql("a")}
           AND a.average_speed_mps > 0
           AND a.start_date >= ?
     """, type_params + [cutoff]).fetchall():
@@ -1446,10 +1446,10 @@ def compare_workouts_by_build(
     id_list = [int(row["activity_id"]) for row in session_rows]
     placeholders = ",".join("?" * len(id_list))
     lap_rows = conn.execute(f"""
-        SELECT activity_id, average_speed_mps, average_heartrate
-        FROM laps
-        WHERE activity_id IN ({placeholders}) AND lap_type = 'work'
-        ORDER BY activity_id, lap_index
+        SELECT l.activity_id, l.average_speed_mps, {db.hr_sql("l.average_heartrate", "a")} AS average_heartrate
+        FROM laps l JOIN activities a ON a.activity_id = l.activity_id
+        WHERE l.activity_id IN ({placeholders}) AND l.lap_type = 'work'
+        ORDER BY l.activity_id, l.lap_index
     """, id_list).fetchall()
 
     # Group rep laps by activity
@@ -2507,8 +2507,11 @@ def run_sql(query: str) -> str:
       workout_label, distance_m, moving_time_s, elapsed_time_s, total_elevation_gain_m,
       average_speed_mps, max_speed_mps, average_heartrate, max_heartrate,
       average_cadence, gear_id, strava_url, synced_at, start_lat, start_lng,
-      race_effort, effort_ratio, dominant_intensity
-      (run_type_inferred is inferred for untagged rows; COALESCE with run_type via
+      race_effort, effort_ratio, dominant_intensity, hr_excluded_at
+      (hr_excluded_at is set when the athlete flagged the activity's HR as wrong
+      from its page; leave its HR, and its laps', out of anything HR-based:
+      AND hr_excluded_at IS NULL.
+      run_type_inferred is inferred for untagged rows; COALESCE with run_type via
       workout_type=0 for the effective type — see EFFECTIVE_RUN_TYPE_SQL in db.py.
       race_effort/effort_ratio are derived, rebuilt each sync — raced/hard/casual
       judged against the fitness estimate as of the day before the race plus HR;

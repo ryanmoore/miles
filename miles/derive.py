@@ -24,7 +24,7 @@ from typing import cast, get_args
 
 from . import db
 from .classifier import classify_laps
-from .db import effective_run_type_sql, get_meta, set_meta
+from .db import effective_run_type_sql, get_meta, hr_sql, set_meta
 from .fitness import (
     EFFORT_RACED_MAX,
     MILE_M,
@@ -87,9 +87,11 @@ def _type_laps(conn: sqlite3.Connection, *, since: str | None = None) -> int:
 
     typed = 0
     for activity_id in activity_ids:
-        laps = conn.execute("""
-            SELECT lap_id, distance_m, moving_time_s, average_speed_mps, average_heartrate
-            FROM laps WHERE activity_id = ? ORDER BY lap_index
+        laps = conn.execute(f"""
+            SELECT l.lap_id, l.distance_m, l.moving_time_s, l.average_speed_mps,
+                   {hr_sql("l.average_heartrate", "a")} AS average_heartrate
+            FROM laps l JOIN activities a ON a.activity_id = l.activity_id
+            WHERE l.activity_id = ? ORDER BY l.lap_index
         """, [activity_id]).fetchall()
 
         # classify_laps sees every lap (not just floor-passing ones) so it can
@@ -236,7 +238,8 @@ def _race_effort_pass(conn: sqlite3.Connection, *, since: str | None = None) -> 
 
     effective = effective_run_type_sql()
     query = f"""
-        SELECT activity_id, distance_m, moving_time_s, average_heartrate, DATE(start_date) AS date
+        SELECT activity_id, distance_m, moving_time_s, {hr_sql("average_heartrate")} AS average_heartrate,
+               DATE(start_date) AS date
         FROM activities WHERE {effective} = 'race'
     """
     params: list[str] = []
@@ -276,8 +279,9 @@ def _pace_based_race_inference(conn: sqlite3.Connection) -> int:
     """Untagged, unnamed races the name-based pass (step 1) missed: no name signal
     required, just a checkpoint-fast pace corroborated by near-max HR. Sets
     run_type_inferred='race' and persists effort columns inline. Returns count."""
-    rows = conn.execute("""
-        SELECT activity_id, distance_m, moving_time_s, average_heartrate, DATE(start_date) AS date
+    rows = conn.execute(f"""
+        SELECT activity_id, distance_m, moving_time_s, {hr_sql("average_heartrate")} AS average_heartrate,
+               DATE(start_date) AS date
         FROM activities WHERE workout_type = 0 AND run_type_inferred IS NULL
     """).fetchall()
 

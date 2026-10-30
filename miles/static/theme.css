@@ -634,6 +634,108 @@ tr.sub3:hover td { background: var(--sub3-bg-hover); }
   .skeleton { animation: none; }
 }
 
+/* Filter buttons and the range-picker dialog (activities.html's month
+   range, training.html's quarter ranges): a bottom sheet on phones, a
+   centered dialog from 640px. Each page lays the buttons out itself. */
+.filter-btn, .primary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0 0.875rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.filter-btn:hover { background: var(--pr-bg-hover); }
+.filter-btn.active { border-color: var(--accent); color: var(--accent); }
+.filter-btn.muted { color: var(--muted); border-style: dashed; }
+.filter-btn .filter-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filter-btn .chev { width: 0.75rem; height: 0.75rem; flex: none; }
+.filter-btn .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.primary-btn { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.primary-btn:disabled { opacity: 0.5; cursor: default; }
+.link-btn {
+  min-height: 2.75rem;
+  padding: 0 0.25rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+}
+.link-btn[hidden] { display: none; }
+
+.date-dialog {
+  margin: auto 0 0;
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 12px 12px 0 0;
+  background: var(--surface);
+  color: var(--text);
+}
+.date-dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
+.date-inner { padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px)); }
+.date-title { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.75rem; font-size: 0.8125rem; font-weight: 600; }
+.date-title .dot { width: 8px; height: 8px; border-radius: 50%; }
+.date-head { display: flex; align-items: center; justify-content: space-between; }
+.date-year { font-size: 1rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+.year-nav {
+  width: 2.75rem;
+  height: 2.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.year-nav svg { width: 0.875rem; height: 0.875rem; }
+.year-nav:disabled { opacity: 0.35; cursor: default; }
+.date-hint { min-height: 1.25rem; margin: 0.5rem 0; font-size: 0.75rem; color: var(--muted); text-align: center; }
+.month-grid, .quarter-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.375rem; }
+.month-btn, .quarter-btn {
+  min-height: 2.75rem;
+  font: inherit;
+  font-size: 0.875rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+}
+/* A quarter button carries its months on a second line. */
+.quarter-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 3.25rem; }
+.quarter-btn small { font-size: 0.6875rem; color: var(--muted); }
+.month-btn:hover:not(:disabled), .quarter-btn:hover:not(:disabled) { border-color: var(--border); }
+.month-btn:disabled, .quarter-btn:disabled, .quarter-btn:disabled small { color: var(--baseline); cursor: default; }
+.month-btn.in-range, .quarter-btn.in-range { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.month-btn.edge, .quarter-btn.edge { background: var(--accent); color: #fff; font-weight: 600; }
+.quarter-btn.edge small { color: #fff; }
+.date-foot { display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem; }
+.date-foot .spacer { flex: 1; }
+@media (min-width: 640px) {
+  .filter-btn, .primary-btn { min-height: 2rem; font-size: 0.75rem; }
+  .link-btn { min-height: 2rem; font-size: 0.75rem; }
+  .date-dialog { margin: auto; width: 20rem; border: 1px solid var(--border); border-radius: 10px; }
+  .date-inner { padding: 1rem; }
+  .year-nav { width: 2rem; height: 2rem; }
+  .month-btn { min-height: 2.25rem; font-size: 0.8125rem; }
+  .quarter-btn { min-height: 2.75rem; font-size: 0.8125rem; }
+}
+
 /* Route-candidate cards (candidate-cards.js), inside a .cand-view page. */
 .cand-view { max-width: 760px; }
 .cand-view .subtitle { margin-bottom: 1rem; }

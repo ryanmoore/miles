@@ -86,7 +86,7 @@ def race_rows(
             ROUND(a.distance_m / 1609.34, 2) AS distance_miles,
             a.moving_time_s,
             {db.pace_sql("a.average_speed_mps")} AS pace_min_per_mile,
-            ROUND(a.average_heartrate, 1) AS avg_hr,
+            ROUND({db.hr_sql("a.average_heartrate", "a")}, 1) AS avg_hr,
             CASE WHEN a.workout_type = 0 AND a.run_type_inferred IS NOT NULL
                  THEN 'inferred' ELSE 'strava' END AS run_type_source,
             a.race_effort,

@@ -38,6 +38,7 @@ from .distance_builds import (
 from .areas_api import router as areas_api_router
 from .candidates_api import router as candidates_api_router
 from .fitness_api import router as fitness_api_router
+from .easy_efficiency import router as easy_efficiency_router
 from .health_api import router as health_api_router
 from .load_api import router as load_api_router
 from .plan_api import router as plan_api_router
@@ -477,7 +478,7 @@ def get_build_detail(race_date: str) -> BuildDetail:
             ROUND(distance_m / 1609.34, 2) AS distance_mi,
             moving_time_s,
             {db.pace_sql("average_speed_mps")} AS pace_min_per_mile,
-            ROUND(average_heartrate) AS avg_hr,
+            ROUND({db.hr_sql("average_heartrate")}) AS avg_hr,
             {effective_run_type} AS run_type,
             workout_label
         FROM activities
@@ -756,6 +757,7 @@ class ActivityDetail(TypedDict):
     run_type: str
     race_effort: str | None
     workout_label: str | None
+    hr_excluded: bool  # the athlete flagged this HR as wrong: shown here, left out of every chart
     polyline: str | None
 
 
@@ -786,7 +788,7 @@ def get_activity_detail(id: int) -> ActivityDetail:
             ROUND(weather.temp_c_avg * 9.0 / 5 + 32, 1) AS temp_f_avg,
             weather.humidity_avg,
             ROUND(weather.wind_kph_avg * 0.621371, 1) AS wind_mph_avg,
-            run_type, race_effort, workout_label, activities.raw_json AS raw_json
+            run_type, race_effort, workout_label, hr_excluded_at, activities.raw_json AS raw_json
         FROM activities
         LEFT JOIN weather ON weather.activity_id = activities.activity_id
         WHERE activities.activity_id = ?
@@ -846,6 +848,7 @@ def get_activity_detail(id: int) -> ActivityDetail:
         run_type=row["run_type"],
         race_effort=row["race_effort"],
         workout_label=row["workout_label"],
+        hr_excluded=row["hr_excluded_at"] is not None,
         wind_mph_avg=row["wind_mph_avg"],
         weather_attribution=WEATHER_ATTRIBUTION if row["temp_f_avg"] is not None else None,
         strava_url=row["strava_url"],
@@ -863,12 +866,14 @@ class ReclassifyRequest(TypedDict):
     run_type: NotRequired[str | None]
     race_effort: NotRequired[str | None]
     workout_label: NotRequired[str | None]
+    hr_excluded: NotRequired[bool]
 
 
 class ReclassifyResponse(TypedDict):
     run_type: str
     race_effort: str | None
     workout_label: str | None
+    hr_excluded: bool
 
 
 @app.post("/api/activity-reclassify")
@@ -910,6 +915,9 @@ def reclassify_activity(id: int, body: ReclassifyRequest) -> ReclassifyResponse:
             raise HTTPException(status_code=400, detail=f"Invalid workout_label: {workout_label!r}")
         conn.execute("UPDATE activities SET workout_label = ? WHERE activity_id = ?", [workout_label, id])
 
+    if "hr_excluded" in body:
+        db.set_hr_excluded(conn, id, body["hr_excluded"])
+
     conn.commit()
 
     effective_run_type = conn.execute(
@@ -938,12 +946,13 @@ def reclassify_activity(id: int, body: ReclassifyRequest) -> ReclassifyResponse:
     conn.commit()
 
     final = conn.execute(
-        "SELECT run_type, race_effort, workout_label FROM activities WHERE activity_id = ?", [id]
+        "SELECT run_type, race_effort, workout_label, hr_excluded_at FROM activities WHERE activity_id = ?", [id]
     ).fetchone()
     return ReclassifyResponse(
         run_type=final["run_type"],
         race_effort=final["race_effort"],
         workout_label=final["workout_label"],
+        hr_excluded=final["hr_excluded_at"] is not None,
     )
 
 
@@ -1148,7 +1157,7 @@ def get_build_workout_groups(race_date: str) -> list[WorkoutGroup]:
             {effective_run_type} AS run_type,
             ROUND(distance_m / 1609.34, 2) AS distance_mi,
             {db.pace_sql("average_speed_mps")} AS pace_min_per_mile,
-            ROUND(average_heartrate) AS avg_hr,
+            ROUND({db.hr_sql("average_heartrate")}) AS avg_hr,
             ROUND(weather.temp_c_avg * 9.0 / 5 + 32) AS temp_f
         FROM activities
         LEFT JOIN weather ON weather.activity_id = activities.activity_id
@@ -1164,16 +1173,16 @@ def get_build_workout_groups(race_date: str) -> list[WorkoutGroup]:
         placeholders = ",".join("?" * len(ids))
         work_rows = conn.execute(f"""
             SELECT
-                activity_id,
+                l.activity_id,
                 COUNT(*) AS n_laps,
-                SUM(distance_m) AS dist_m,
-                SUM(moving_time_s) AS time_s,
-                AVG(average_heartrate) AS avg_hr
-            FROM laps
-            WHERE activity_id IN ({placeholders})
-              AND lap_type = 'work'
-              AND moving_time_s >= {_WORK_LAP_MIN_TIME_S} AND distance_m >= {_WORK_LAP_MIN_DIST_M}
-            GROUP BY activity_id
+                SUM(l.distance_m) AS dist_m,
+                SUM(l.moving_time_s) AS time_s,
+                AVG({db.hr_sql("l.average_heartrate", "a")}) AS avg_hr
+            FROM laps l JOIN activities a ON a.activity_id = l.activity_id
+            WHERE l.activity_id IN ({placeholders})
+              AND l.lap_type = 'work'
+              AND l.moving_time_s >= {_WORK_LAP_MIN_TIME_S} AND l.distance_m >= {_WORK_LAP_MIN_DIST_M}
+            GROUP BY l.activity_id
         """, ids).fetchall()
         for r in work_rows:
             dist_m: float = r["dist_m"] or 0.0
@@ -1484,31 +1493,73 @@ _PACE_BUCKET_WIDTH_S = 20
 
 class HrPacePoint(TypedDict):
     year: int
+    quarter: str  # "2025-Q4", from the local start date
     hr_bucket: int  # bpm, bucket lower bound
     pace_bucket: int  # seconds/mile, bucket lower bound
     pace_bucket_heat_adj: int  # same, from the heat-adjusted pace (heat.py); equals pace_bucket without weather
+    steady: bool  # long enough for HR to settle and not a warmup/cooldown/recovery lap (see _is_steady_lap)
+    activity_id: int
+    lap_index: int
+    hr: float  # the lap's own average, before bucketing
+    pace_s: float  # seconds/mile, the lap's own
+    pace_s_heat_adj: float
+
+
+class HrPaceActivity(TypedDict):
+    activity_id: int
+    name: str | None
+    date: str  # local start date
+
+
+class HrPaceHeatmap(TypedDict):
+    points: list[HrPacePoint]
+    activities: list[HrPaceActivity]  # each run with a point, once, so a clicked dot can list its runs
+
+
+# A lap's average HR only describes its pace once HR has caught up with it:
+# short reps average in the 2-3 min climb, and warmup/cooldown/recovery laps
+# carry HR left over from the effort around them. Mixing those with steady
+# miles bends the median line wherever workouts start, so the client can
+# restrict the chart to steady laps.
+_STEADY_LAP_MIN_TIME_S = 360
+_STEADY_LAP_MIN_DIST_M = 1000
+_UNSTEADY_LAP_TYPES = frozenset({"warmup", "cooldown", "recovery", "float"})
+
+
+def _is_steady_lap(moving_time_s: float, distance_m: float, lap_type: str | None) -> bool:
+    return (
+        moving_time_s >= _STEADY_LAP_MIN_TIME_S
+        and distance_m >= _STEADY_LAP_MIN_DIST_M
+        and lap_type not in _UNSTEADY_LAP_TYPES
+    )
 
 
 @app.get("/api/hr-pace-heatmap")
-def get_hr_pace_heatmap() -> list[HrPacePoint]:
+def get_hr_pace_heatmap() -> HrPaceHeatmap:
     """
     One point per lap (avg HR, avg pace), bucketed into a 5bpm x 20s/mi grid.
     Excludes trivial laps (< 200m or < 45s) and laps missing HR. Returns raw
     points, not pre-aggregated cells, so the client can combine any set of
-    selected years.
+    selected years; each point names its run and lap, with the runs' names
+    and dates listed once beside them.
     """
     conn = _conn()
     tc, tp = run_sport_filter()
     rows = conn.execute(f"""
         SELECT
             CAST(strftime('%Y', a.start_date) AS INTEGER) AS year,
+            strftime('%Y', a.start_date) || '-Q' || ((CAST(strftime('%m', a.start_date) AS INTEGER) + 2) / 3) AS quarter,
             a.activity_id AS activity_id,
+            a.name AS name,
+            DATE(a.start_date) AS date,
+            l.lap_index AS lap_index,
             l.average_heartrate AS hr,
             l.distance_m AS distance_m,
-            l.moving_time_s AS moving_time_s
+            l.moving_time_s AS moving_time_s,
+            l.lap_type AS lap_type
         FROM laps l
         JOIN activities a ON a.activity_id = l.activity_id
-        WHERE {tc}
+        WHERE {tc} AND {db.hr_trusted_sql("a")}
           AND l.average_heartrate IS NOT NULL
           AND l.distance_m >= {LAP_MIN_DISTANCE_M}
           AND l.moving_time_s >= {LAP_MIN_MOVING_TIME_S}
@@ -1516,6 +1567,7 @@ def get_hr_pace_heatmap() -> list[HrPacePoint]:
 
     factors = heat.activity_heat_factors(conn, list({int(r["activity_id"]) for r in rows}))
     out: list[HrPacePoint] = []
+    activities: dict[int, HrPaceActivity] = {}
     for r in rows:
         miles = r["distance_m"] / 1609.34
         pace_s_per_mile = r["moving_time_s"] / miles
@@ -1523,8 +1575,16 @@ def get_hr_pace_heatmap() -> list[HrPacePoint]:
         hr_bucket = int(r["hr"] // _HR_BUCKET_WIDTH) * _HR_BUCKET_WIDTH
         pace_bucket = int(pace_s_per_mile // _PACE_BUCKET_WIDTH_S) * _PACE_BUCKET_WIDTH_S
         adj_bucket = int(adj_pace_s_per_mile // _PACE_BUCKET_WIDTH_S) * _PACE_BUCKET_WIDTH_S
-        out.append(HrPacePoint(year=r["year"], hr_bucket=hr_bucket, pace_bucket=pace_bucket, pace_bucket_heat_adj=adj_bucket))
-    return out
+        out.append(HrPacePoint(
+            year=r["year"], quarter=r["quarter"], hr_bucket=hr_bucket, pace_bucket=pace_bucket, pace_bucket_heat_adj=adj_bucket,
+            steady=_is_steady_lap(r["moving_time_s"], r["distance_m"], r["lap_type"]),
+            activity_id=int(r["activity_id"]), lap_index=int(r["lap_index"]), hr=round(float(r["hr"]), 1),
+            pace_s=round(pace_s_per_mile, 1), pace_s_heat_adj=round(adj_pace_s_per_mile, 1),
+        ))
+        aid = int(r["activity_id"])
+        if aid not in activities:
+            activities[aid] = HrPaceActivity(activity_id=aid, name=r["name"], date=r["date"])
+    return HrPaceHeatmap(points=out, activities=list(activities.values()))
 
 
 class WorkbookEntry(TypedDict):
@@ -1615,6 +1675,7 @@ app.include_router(candidates_api_router)
 app.include_router(distance_builds_router)
 app.include_router(fitness_api_router)
 app.include_router(health_api_router)
+app.include_router(easy_efficiency_router)
 app.include_router(load_api_router)
 app.include_router(plan_api_router)
 app.include_router(routes_api_router)

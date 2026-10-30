@@ -70,7 +70,8 @@ class RunRow(TypedDict):
     date: str
     moving_time_s: float
     distance_m: float
-    average_heartrate: float | None
+    average_heartrate: float | None  # None too when the athlete flagged the run's HR
+    hr_trusted: bool  # False when flagged: its segment HR is not read either
 
 
 def _zero() -> ZoneSeconds:
@@ -89,7 +90,8 @@ def runs_between(conn: sqlite3.Connection, start: date, end: date) -> list[RunRo
     """Runs with a positive moving time on start..end inclusive, oldest first."""
     clause, params = run_sport_filter()
     rows = conn.execute(f"""
-        SELECT activity_id, DATE(start_date) AS d, moving_time_s, distance_m, average_heartrate
+        SELECT activity_id, DATE(start_date) AS d, moving_time_s, distance_m,
+               {db.hr_sql("average_heartrate")} AS average_heartrate, {db.hr_trusted_sql()} AS hr_trusted
         FROM activities
         WHERE {clause} AND moving_time_s > 0
           AND DATE(start_date) >= ? AND DATE(start_date) <= ?
@@ -100,6 +102,7 @@ def runs_between(conn: sqlite3.Connection, start: date, end: date) -> list[RunRo
             activity_id=int(r["activity_id"]), date=r["d"], moving_time_s=float(r["moving_time_s"]),
             distance_m=float(r["distance_m"] or 0.0),
             average_heartrate=float(r["average_heartrate"]) if r["average_heartrate"] is not None else None,
+            hr_trusted=bool(r["hr_trusted"]),
         )
         for r in rows
     ]
@@ -109,10 +112,10 @@ def hr_pct_seconds(conn: sqlite3.Connection, runs: list[RunRow], max_hr: int) ->
     """Per run, moving seconds at each whole % of max HR. Segment time is
     weighted by 1/speed (segments are equal length) and scaled to the run's
     moving time; runs without HR segments fall back to their average HR for
-    the whole run. Runs with neither are absent."""
+    the whole run. Runs with neither, or with their HR flagged, are absent."""
     out: dict[int, dict[int, float]] = {}
     by_id = {r["activity_id"]: r for r in runs}
-    ids = list(by_id)
+    ids = [aid for aid, r in by_id.items() if r["hr_trusted"]]
     for i in range(0, len(ids), 500):
         chunk = ids[i:i + 500]
         rows = conn.execute(f"""

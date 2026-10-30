@@ -69,10 +69,19 @@
     }
     .activity-view .classify-save:disabled { opacity: 0.5; cursor: default; }
     .activity-view .classify-status { font-size: 0.75rem; color: var(--muted); }
+    .activity-view .classify-check {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      min-height: 2.75rem;
+      font-size: 0.8125rem;
+      color: var(--text);
+      cursor: pointer;
+    }
     @media (min-width: 640px) {
       .activity-view .classify-panel { padding: 0.75rem 1.25rem; }
       .activity-view .classify-field { flex: 0 1 auto; }
-      .activity-view .classify-field select, .activity-view .classify-save { min-height: 0; }
+      .activity-view .classify-field select, .activity-view .classify-save, .activity-view .classify-check { min-height: 0; }
       .activity-view .classify-field select { font-size: 0.8125rem; }
     }
 
@@ -378,7 +387,7 @@
         ${statTile('Distance', d.distance_mi != null ? `${d.distance_mi.toFixed(2)}` : '—', 'mi')}
         ${statTile('Moving Time', fmt.time(d.moving_time_s) ?? '—')}
         ${statTile('Avg Pace', d.pace_min_per_mile != null ? fmt.pace(d.pace_min_per_mile) : '—', '/mi')}
-        ${statTile('Min / Median / Max HR', hrTriple(d))}
+        ${statTile('Min / Median / Max HR', hrTriple(d), null, d.hr_excluded ? 'Flagged wrong · left out of charts' : null)}
         ${statTile('Elevation Gain', d.elevation_gain_ft != null ? Math.round(d.elevation_gain_ft) : '—', 'ft')}
         ${statTile('Elevation Loss', d.elevation_loss_ft != null ? Math.round(d.elevation_loss_ft) : '—', 'ft')}
         ${weatherStat(d)}
@@ -479,6 +488,10 @@
             </select>
           </div>
         ` : ''}
+        <label class="classify-check" title="Bad strap or optical HR: leave this activity's HR out of every chart, trend and load figure. It still shows here.">
+          <input type="checkbox" id="classify-hr-excluded" ${d.hr_excluded ? 'checked' : ''}>
+          HR is wrong
+        </label>
         <button class="classify-save" id="classify-save">Save</button>
         <span class="classify-status" id="classify-status"></span>
       </div>
@@ -500,17 +513,28 @@
     const runTypeEl = document.getElementById('classify-run-type');
     if (!runTypeEl) return;
     runTypeEl.addEventListener('change', () => {
-      reRenderHeader({ ...lastDetail, run_type: runTypeEl.value, race_effort: null, workout_label: null });
+      reRenderHeader({
+        ...lastDetail, run_type: runTypeEl.value, race_effort: null, workout_label: null,
+        hr_excluded: document.getElementById('classify-hr-excluded').checked,
+      });
     });
 
     document.getElementById('classify-save').addEventListener('click', async () => {
       const button = document.getElementById('classify-save');
       const status = document.getElementById('classify-status');
-      const body = { run_type: runTypeEl.value };
+      const classification = { run_type: runTypeEl.value };
       const raceEffortEl = document.getElementById('classify-race-effort');
       const workoutLabelEl = document.getElementById('classify-workout-label');
-      if (raceEffortEl) body.race_effort = raceEffortEl.value || null;
-      if (workoutLabelEl) body.workout_label = workoutLabelEl.value || null;
+      if (raceEffortEl) classification.race_effort = raceEffortEl.value || null;
+      if (workoutLabelEl) classification.workout_label = workoutLabelEl.value || null;
+      const hrExcluded = document.getElementById('classify-hr-excluded').checked;
+      const hrChanged = hrExcluded !== Boolean(lastDetail.hr_excluded);
+      const classChanged = Object.entries(classification).some(([k, v]) => v !== (lastDetail[k] ?? null));
+      // Flipping only the HR box sends only the flag: saving the run type too
+      // would pin it as athlete-confirmed (and give a non-run a run type).
+      // A Save with nothing changed still confirms the classification.
+      const body = hrChanged && !classChanged ? {} : classification;
+      if (hrChanged) body.hr_excluded = hrExcluded;
 
       button.disabled = true;
       status.textContent = 'Saving…';

@@ -44,7 +44,7 @@ def run_type_stats(conn: sqlite3.Connection, start: str, end: str, run_type_expr
             COUNT(*)                                     AS runs,
             ROUND(SUM(distance_m) / 1609.34, 2)         AS total_miles,
             ROUND(AVG(distance_m) / 1609.34, 2)         AS avg_miles,
-            ROUND(AVG(average_heartrate), 1)             AS avg_hr,
+            ROUND(AVG({db.hr_sql("average_heartrate")}), 1) AS avg_hr,
             {db.pace_sql("AVG(average_speed_mps)")}      AS avg_pace_min_per_mile
         FROM activities
         WHERE {tc}

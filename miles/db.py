@@ -169,6 +169,23 @@ def effective_run_type_sql(alias: str = "") -> str:
     )
 
 
+def hr_trusted_sql(alias: str = "") -> str:
+    """SQL condition that the athlete has not flagged the activity's heart
+    rate as wrong (activities.hr_excluded_at, set from activity.html). Every
+    reader that aggregates or derives from HR, the activity's own or its laps'
+    or segments', filters on it or reads its HR through hr_sql; the
+    activity's own page still shows what was recorded."""
+    prefix = f"{alias}." if alias else ""
+    return f"{prefix}hr_excluded_at IS NULL"
+
+
+def hr_sql(column: str, alias: str = "") -> str:
+    """SQL expression for an HR column (e.g. "average_heartrate", or a laps
+    or segments column with that table's alias) that is NULL when the
+    activity's HR is flagged; `alias` qualifies the activities table."""
+    return f"CASE WHEN {hr_trusted_sql(alias)} THEN {column} END"
+
+
 def pace_sql(speed_expr: str) -> str:
     """SQL expression for min/mile from an m/s speed expression (a column or an
     aggregate of one); NULL when the speed is not positive."""
@@ -207,7 +224,7 @@ def connection(opener: Callable[[], sqlite3.Connection] | None = None) -> Iterat
         conn.close()
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def add_missing_columns(conn: sqlite3.Connection, table: str, *columns: str) -> bool:
@@ -311,6 +328,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         "dominant_intensity TEXT",
         "laps_synced_at TEXT",
         "description TEXT",
+        "hr_excluded_at TEXT",
     )
     add_missing_columns(conn, "laps", "raw_json TEXT", "lap_type TEXT", "intensity TEXT", "elapsed_time_s INTEGER")
     add_missing_columns(conn, "weather", "raw_json TEXT")
@@ -907,6 +925,15 @@ def set_activity_description(conn: sqlite3.Connection, activity_id: int, descrip
         [description, activity_id],
     )
     conn.commit()
+
+
+def set_hr_excluded(conn: sqlite3.Connection, activity_id: int, excluded: bool) -> None:
+    """Flag or unflag an activity's HR as wrong. Athlete-authored: sync's
+    upsert never writes the column. The caller marks derive dirty and commits."""
+    conn.execute(
+        "UPDATE activities SET hr_excluded_at = CASE WHEN ? THEN COALESCE(hr_excluded_at, ?) END WHERE activity_id = ?",
+        [excluded, datetime.now(timezone.utc).isoformat(timespec="seconds"), activity_id],
+    )
 
 
 def last_synced_date(conn: sqlite3.Connection) -> str | None:

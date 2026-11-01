@@ -29,7 +29,7 @@ def register_notes_tools(mcp: FastMCP) -> None:
             hike...), which may differ from the Strava tag
           elements: [{type: strides|hill_sprints|reps|progression|descent_practice,
             count, duration_s, source: laps|stream|athlete}]
-          feel: the athlete's own words, quoted
+          feel: the athlete's own words, quoted (their run description counts)
           tags: open list, normalized to lowercase snake_case (heat, altitude,
             poor_sleep, sick, travel, new_shoes...)
           fueling: {carbs_g, fluid_ml, notes}

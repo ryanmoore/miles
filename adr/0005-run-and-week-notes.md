@@ -28,8 +28,10 @@ nowhere to live.
 - **Week notes record what life did; plan adjustments record what the plan
   changed.** They stay separate tables with separate tools.
 - **One read for recent history.** `get_recent_history` folds notes, computed
-  workout structure, and stream detail into one compact answer whose detail
-  fades with age.
+  workout structure, stream detail, the athlete's Strava description, and the
+  planned days of this week and next into one compact answer whose detail fades
+  with age. A session is compared with the latest earlier one of similar
+  structure, else the latest of its label.
 
 ## Consequences
 

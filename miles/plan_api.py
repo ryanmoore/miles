@@ -136,7 +136,7 @@ class WeekSoFarOut(TypedDict):
     target_workouts: int
     expected_miles_by_now: float | None  # None when the week has no mileage target, or no planned days
     remaining_planned_miles: float | None  # sum of target_miles over remaining_days; None when none of them has target_miles
-    remaining_days: list[RemainingDayOut]  # non-rest days after week_cutoff_date, in date order
+    remaining_days: list[RemainingDayOut]  # non-rest days not yet counted (see _counted_through), in date order
     phase: str
     note: str | None
 
@@ -145,22 +145,22 @@ class VsLastWeekDayOut(TypedDict):
     offset: int  # 0=Monday..6=Sunday
     date: str
     last_week_date: str
-    miles: float
+    miles: float  # 0 past cutoff_offset: this week hasn't happened yet
     last_week_miles: float
 
 
 class VsLastWeekOut(TypedDict):
     """Actual miles through the same weekday cutoff last week, both sides
-    truncated to the sync cutoff so a stale sync never compares a partial
-    week to a complete one. None (at the response level) when the cutoff
-    predates this week's Monday."""
+    truncated to the counted-through date (see _counted_through) so a stale
+    sync never compares a partial week to a complete one. None (at the
+    response level) when nothing in this week is counted yet."""
     week_start: str
     last_week_start: str
     cutoff_offset: int  # last elapsed weekday index (0=Mon), inclusive, both weeks
     this_week_miles: float
     last_week_miles: float
     delta_miles: float
-    days: list[VsLastWeekDayOut]  # per-day (not cumulative), offsets 0..cutoff_offset
+    days: list[VsLastWeekDayOut]  # per-day (not cumulative), all seven offsets; this week's miles stop at cutoff_offset
 
 
 class PlanResponse(TypedDict):
@@ -328,17 +328,25 @@ def _actual_week_totals(conn: sqlite3.Connection, monday: date, cutoff_date: dat
     )
 
 
+def _counted_through(conn: sqlite3.Connection, today: date, cutoff_date: date) -> date:
+    """Last date whose planned miles count as elapsed: the sync cutoff, except
+    that today only counts once a run has synced for it, so a long run planned
+    for this morning is still ahead of the athlete rather than missed."""
+    if cutoff_date == today and not _daily_miles(conn, today.isoformat(), today.isoformat()).get(today.isoformat()):
+        return today - timedelta(days=1)
+    return cutoff_date
+
+
 def _vs_last_week_block(conn: sqlite3.Connection, monday: date, elapsed: int) -> VsLastWeekOut:
-    """The first `elapsed` days of monday's week vs the same weekday span the
-    week before."""
+    """The first `elapsed` + 1 days of monday's week vs the same weekday span
+    the week before; days also carries the rest of last week."""
     monday_iso = monday.isoformat()
     week_cutoff_date = monday + timedelta(days=elapsed)
     last_week_monday = monday - timedelta(days=7)
-    last_week_cutoff = last_week_monday + timedelta(days=elapsed)
     daily_this = _daily_miles(conn, monday_iso, week_cutoff_date.isoformat())
-    daily_last = _daily_miles(conn, last_week_monday.isoformat(), last_week_cutoff.isoformat())
+    daily_last = _daily_miles(conn, last_week_monday.isoformat(), (last_week_monday + timedelta(days=6)).isoformat())
     days_out: list[VsLastWeekDayOut] = []
-    for offset in range(elapsed + 1):
+    for offset in range(7):
         d_this = (monday + timedelta(days=offset)).isoformat()
         d_last = (last_week_monday + timedelta(days=offset)).isoformat()
         days_out.append(VsLastWeekDayOut(
@@ -346,7 +354,7 @@ def _vs_last_week_block(conn: sqlite3.Connection, monday: date, elapsed: int) ->
             miles=daily_this.get(d_this, 0.0), last_week_miles=daily_last.get(d_last, 0.0),
         ))
     this_week_miles = round(sum(x["miles"] for x in days_out), 2)
-    last_week_miles = round(sum(x["last_week_miles"] for x in days_out), 2)
+    last_week_miles = round(sum(x["last_week_miles"] for x in days_out[:elapsed + 1]), 2)
     return VsLastWeekOut(
         week_start=monday_iso,
         last_week_start=last_week_monday.isoformat(),
@@ -401,11 +409,12 @@ def _today_blocks(
     week_started = totals["week_started"]
     week_cutoff_date = date.fromisoformat(totals["week_cutoff_date"])
     actual_miles_so_far, actual_workouts_so_far = totals["actual_miles"], totals["actual_workout_count"]
-    elapsed = _week_elapsed_days(monday, cutoff_date)
+    through = _counted_through(conn, today, cutoff_date)
+    elapsed = _week_elapsed_days(monday, through)
 
     planned_days = [d for d in week_days if d["slot"] != "rest"]
-    elapsed_planned = [d for d in planned_days if d["date"] <= week_cutoff_date.isoformat()]
-    remaining_planned = [d for d in planned_days if d["date"] > week_cutoff_date.isoformat()]
+    elapsed_planned = [d for d in planned_days if d["date"] <= through.isoformat()]
+    remaining_planned = [d for d in planned_days if d["date"] > through.isoformat()]
 
     # Mileage-weighted pro-rate: a day's share is its own target_miles (days
     # with target_miles = None weigh 0), so a heavy long-run day is not
@@ -455,7 +464,7 @@ def _today_blocks(
         note=week["note"],
     )
 
-    vs_last_week = _vs_last_week_block(conn, monday, elapsed) if week_started and elapsed is not None else None
+    vs_last_week = _vs_last_week_block(conn, monday, elapsed) if elapsed is not None else None
 
     return today_out, week_so_far, vs_last_week
 
@@ -609,7 +618,7 @@ def get_today() -> TodayResponse:
     cutoff_date = _sync_cutoff_date(conn, today)
 
     totals = _actual_week_totals(conn, monday, cutoff_date)
-    elapsed = _week_elapsed_days(monday, cutoff_date)
+    elapsed = _week_elapsed_days(monday, _counted_through(conn, today, cutoff_date))
     vs_last_week = _vs_last_week_block(conn, monday, elapsed) if elapsed is not None else None
 
     last_week_monday = monday - timedelta(days=7)

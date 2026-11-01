@@ -6,7 +6,7 @@
   <title>Miles · Plan</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
   <link rel="stylesheet" href="/theme.css">
-  <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js" integrity="sha384-pPi0zxBAoDu6+JXW/C68UZLvBUUtU+7zonhif43rqj7pxsGyqyqzcian2Rj37Rss" crossorigin="anonymous"></script>
+  <script id="echarts-script" defer src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js" integrity="sha384-pPi0zxBAoDu6+JXW/C68UZLvBUUtU+7zonhif43rqj7pxsGyqyqzcian2Rj37Rss" crossorigin="anonymous"></script>
   <style>
     .plan-view h1 {
       font-size: 1.25rem;
@@ -127,18 +127,31 @@
       transform: translateY(-1px);
     }
 
-    /* Calendar — one row per plan week, Monday through Sunday columns.
-       min-width keeps the grid's 8 columns legible; below the width that
-       fits it (720px grid + main's 2rem gutters = 784px) the grid (.cal)
-       gives way entirely to .cal-cards — a second,
-       independently-rendered markup for the same weeks/days (see
-       weekCardMobileHTML) rather than a pure CSS reflow of the grid, since
-       the day content's internal shape (stacked cell vs horizontal row)
-       differs too much for one DOM to serve both cleanly. */
+    /* Calendar — each week is a summary row (.cwk-sum) over a collapsible
+       body holding its days: a Monday through Sunday grid, or below the
+       width that fits it (720px grid + main's 2rem gutters = 784px) stacked
+       day rows (.cal-cards) — a second markup for the same days rather than
+       a CSS reflow, since the day content's internal shape (stacked cell vs
+       horizontal row) differs too much for one DOM to serve both cleanly. */
+    .plan-view .cwk { margin-bottom: 0.5rem; scroll-margin-top: 4rem; }
+    .plan-view .cwk-sum {
+      display: block; width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer;
+      background: var(--surface); border: 1px solid var(--gridline); border-radius: 8px; padding: 0.5rem 0.75rem;
+    }
+    .plan-view .cwk.current .cwk-sum { background: var(--pr-bg); }
+    .plan-view .cwk-head { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; font-weight: 650; }
+    .plan-view .cwk-head .band-chip { margin: 0; }
+    .plan-view .cwk-chev { margin-left: auto; color: var(--muted); transition: transform 0.15s; }
+    .plan-view .cwk-sum[aria-expanded="true"] .cwk-chev { transform: rotate(90deg); }
+    .plan-view .cwk-line { display: flex; flex-wrap: wrap; gap: 0 0.75rem; font-size: 0.6875rem; color: var(--muted); margin-top: 0.1875rem; font-variant-numeric: tabular-nums; }
+    .plan-view .cwk-note { font-size: 0.6875rem; color: var(--text-secondary); margin-top: 0.1875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .plan-view .cwk-body { margin-top: 0.375rem; }
+    .plan-view .cal-nav { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .plan-view .cal-divider { font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 1rem 0 0.5rem; }
     .plan-view .cal { border: 1px solid var(--gridline); border-radius: 8px; overflow-x: auto; overflow-y: hidden; }
     .plan-view .cal-header, .plan-view .cal-row {
       display: grid;
-      grid-template-columns: 112px repeat(7, minmax(0, 1fr));
+      grid-template-columns: repeat(7, minmax(0, 1fr));
       min-width: 720px;
     }
     .plan-view .cal-cards { display: none; }
@@ -158,23 +171,6 @@
       background: var(--bg);
       border-bottom: 1px solid var(--gridline);
     }
-    .plan-view .cal-header .cal-hcell:first-child { background: transparent; border-bottom: none; }
-    .plan-view .cal-leader {
-      padding: 0.375rem 0.625rem;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      font-size: 0.75rem;
-      font-weight: 600;
-      color: var(--text);
-      background: var(--bg);
-      border-right: 1px solid var(--gridline);
-      border-top: 1px solid var(--gridline);
-      margin-top: -1px;
-    }
-    .plan-view .cal-row:first-child .cal-leader { border-top: none; margin-top: 0; }
-    .plan-view .cal-leader .tile-sub { font-size: 0.6875rem; margin-top: 0.125rem; color: var(--muted); }
-    .plan-view .cal-row.current .cal-leader { background: var(--pr-bg); }
     .plan-view .cal-row.current .cal-day { background: var(--pr-bg); }
     .plan-view .cal-day {
       min-height: 68px;
@@ -235,42 +231,12 @@
     .plan-view .plan-slot.slot-strength { border-color: var(--series-5); }
     .plan-view .plan-slot.slot-strength .plan-slot-num { color: var(--series-5); }
 
-    /* Week note on the calendar leader — always-visible affordance (plain
-       truncated text with a title for overflow), never hover-only. */
-    .plan-view .cal-week-note {
-      font-size: 0.625rem;
-      color: var(--text-secondary);
-      margin-top: 0.125rem;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 100%;
-    }
-
     .plan-view .cal-day { cursor: pointer; }
 
-    /* Mobile calendar — one full-width card per week (see weekCardMobileHTML),
-       leader info as a header, day rows below it. No horizontal scroll: the
-       weekday-column idiom only exists on the grid. */
+    /* Mobile calendar — a week's day rows as one full-width card. No
+       horizontal scroll: the weekday-column idiom only exists on the grid. */
     .plan-view .mcal-week { border: 1px solid var(--gridline); border-radius: 8px; overflow: hidden; background: var(--surface); }
     .plan-view .mcal-week.current { background: var(--pr-bg); }
-    /* Clears the sticky #plan-tabs row when scrolled to (scrollToCurrentWeek). */
-    .plan-view .mcal-week { scroll-margin-top: 4rem; }
-    .plan-view .mcal-week-head { padding: 0.5rem 0.75rem; background: var(--bg); border-bottom: 1px solid var(--gridline); }
-    .plan-view .mcal-week.current .mcal-week-head { background: var(--pr-bg-hover); }
-    .plan-view .mcal-week-range { font-size: 0.8125rem; font-weight: 650; color: var(--text); }
-    .plan-view .mcal-week-sub {
-      display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      font-size: 0.6875rem;
-      color: var(--muted);
-      margin-top: 0.1875rem;
-    }
-    /* Full note, wrapping — the mobile card's whole point is nothing gets
-       truncated the way the grid leader's title= tooltip does. */
-    .plan-view .mcal-week-note { font-size: 0.6875rem; color: var(--text-secondary); line-height: 1.45; margin-top: 0.25rem; }
     .plan-view .mcal-day-row {
       display: flex;
       gap: 0.5rem;
@@ -443,8 +409,8 @@
     .plan-view .meter-range { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 4px; }
     .plan-view .meter-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text-secondary); }
 
-    .plan-view .paired-bar-wrap { margin: 0.375rem 0; }
-    .plan-view .paired-bar-wrap svg { display: block; }
+    .plan-view .vs-chart-wrap { margin: 0.375rem 0; flex: 1 1 240px; max-width: 360px; }
+    .plan-view .vs-chart-wrap svg { display: block; width: 100%; height: auto; }
 
     /* Day detail popover — shared by the calendar and the Today strip. */
     .plan-view .day-popover-backdrop {
@@ -766,12 +732,12 @@
   }
 
   // A week's target_miles/target_miles_hi as the label a coach would say:
-  // "38–42" for a range, "38.0" for a point, "workouts only" when both are
+  // "38–42" for a range, "38" for a point, "workouts only" when both are
   // NULL (deliberately unspecified — scored on workouts alone, see roadmap).
   function targetMilesLabel(w) {
     if (w.target_miles == null) return 'workouts only';
     if (w.target_miles_hi != null) return `${w.target_miles.toFixed(0)}–${w.target_miles_hi.toFixed(0)}`;
-    return w.target_miles.toFixed(1);
+    return trimMiles(w.target_miles);
   }
 
   // Natural-language rendering of one plan_days row's target: rep range/
@@ -816,35 +782,34 @@
     return lines;
   }
 
-  // "long run and one workout still ahead" — the shape of what's left this
-  // week, from the plan's remaining (non-rest) days, never from a raw count.
-  function remainingShape(remainingDays) {
-    if (!remainingDays || !remainingDays.length) return 'nothing left on the schedule this week';
-    const counts = {};
-    remainingDays.forEach(d => { counts[d.slot] = (counts[d.slot] || 0) + 1; });
-    const parts = [];
-    if (counts.long) parts.push('the long run');
-    if (counts.workout) parts.push(counts.workout === 1 ? 'one workout' : `${counts.workout} workouts`);
-    if (counts.strength) parts.push(counts.strength === 1 ? 'one strength day' : `${counts.strength} strength days`);
-    if (counts.easy) parts.push(`${counts.easy} easy day${counts.easy > 1 ? 's' : ''}`);
-    if (counts.race) parts.push('race day');
-    if (!parts.length) return 'nothing left on the schedule this week';
-    return `${parts.join(' and ')} still ahead`;
+  const REMAINING_WORD = { long: 'long run', easy: 'easy', workout: 'workout', strength: 'strength', race: 'race' };
+
+  // "Left: 12 mi — Sun long run", or the week's-done line.
+  function leftLine(ws) {
+    if (!ws.remaining_days.length) return `Week's running is done`;
+    const sessions = ws.remaining_days.map(d => {
+      const wd = new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+      return `${wd} ${REMAINING_WORD[d.slot] ?? d.slot}`;
+    }).join(', ');
+    const miles = ws.remaining_planned_miles != null ? `${trimMiles(ws.remaining_planned_miles)} mi — ` : '';
+    return `Left: ${miles}${sessions}`;
   }
 
-  // "23.8 mi to go · 26.0 mi scheduled over the long run and 2 easy days
-  // still ahead" — how much of this week's target remains, then what's
-  // actually still on the schedule to cover it. Degrades to the shape-only
-  // sentence when the plan doesn't carry enough per-day mileage to total
-  // remaining_planned_miles (e.g. only strength days left) or has no weekly
-  // mileage target at all (workouts-only week).
-  function remainingLine(ws) {
-    const shape = remainingShape(ws.remaining_days);
-    if (ws.target_miles == null || ws.remaining_planned_miles == null) return shape;
-    const basis = ws.target_miles_hi != null ? (ws.target_miles + ws.target_miles_hi) / 2 : ws.target_miles;
-    const toGo = basis - ws.actual_miles_so_far;
-    const toGoLabel = toGo <= 0 ? 'target met' : `${toGo.toFixed(1)} mi to go`;
-    return `${toGoLabel} · ${ws.remaining_planned_miles.toFixed(1)} mi scheduled over ${shape}`;
+  // "On track for 50.1 mi · target 50–54": actual so far plus what is still scheduled.
+  function projectionLine(ws) {
+    if (ws.target_miles == null) return '';
+    const projected = ws.actual_miles_so_far + (ws.remaining_planned_miles ?? 0);
+    return `On track for ${projected.toFixed(1)} mi · target ${targetMilesLabel(ws)}`;
+  }
+
+  // "Last week 49.3 of 58–62 · Next week 54"
+  function neighbourWeeksLine(weeks) {
+    const i = (weeks ?? []).findIndex(w => w.is_current);
+    if (i < 0) return '';
+    const parts = [];
+    if (weeks[i - 1]) parts.push(`Last week ${trimMiles(weeks[i - 1].actual_miles)} of ${targetMilesLabel(weeks[i - 1])}`);
+    if (weeks[i + 1]) parts.push(`Next week ${targetMilesLabel(weeks[i + 1])}`);
+    return parts.join(' · ');
   }
 
   // Adherence bands — read straight off theme.css so light/dark both work,
@@ -889,9 +854,42 @@
   // tab is revealed.
   const TAB_CHARTS = { trends: [], plan: [] };
 
-  // Every Trends/Plan-section render function inserts here.
-  function rootEl(tab) {
-    return document.getElementById(`tab-${tab}`) ?? document.getElementById('root');
+  // ECharts is deferred so Today paints without it; every chart render waits on this.
+  const echartsReady = new Promise((resolve, reject) => {
+    const script = document.getElementById('echarts-script');
+    if (window.echarts) resolve();
+    script.addEventListener('load', resolve);
+    script.addEventListener('error', () => reject(new Error('chart library failed to load')));
+  });
+
+  // Each panel of the Trends/Plan tabs owns a slot that shows a skeleton
+  // until its own data arrives, so one slow request delays only its panel.
+  const TAB_SLOTS = {
+    trends: [['easy', 220], ['workouts', 220], ['mileage', 220], ['load', 260], ['fitness', 24]],
+    plan: [['head', 220], ['chart', 260], ['calendar', 320], ['flags', 0], ['versions', 120]],
+  };
+
+  // Every Trends/Plan-section render function inserts here; the first call
+  // replaces the skeleton.
+  function slotEl(id) {
+    const el = document.getElementById(`slot-${id}`);
+    if (el.dataset.pending) { el.innerHTML = ''; delete el.dataset.pending; }
+    return el;
+  }
+
+  function slotHTML([id, height]) {
+    return `<div id="slot-${id}" data-pending="1">${height ? `<div class="skeleton" style="height:${height}px;margin-bottom:1rem"></div>` : ''}</div>`;
+  }
+
+  // Resolves the inputs, renders them into the panel's slot, and turns any
+  // failure into an inline error in that slot alone.
+  function fillPanel(id, inputs, render) {
+    return Promise.all(inputs)
+      .then(vals => { render(...vals); slotEl(id); })
+      .catch(err => {
+        console.error(err);
+        slotEl(id).insertAdjacentHTML('beforeend', `<p class="desc">Couldn't load this section: ${esc(err.message)}</p>`);
+      });
   }
 
   function renderTabs() {
@@ -901,10 +899,11 @@
         <button class="mode-tab" data-tab="trends">Trends</button>
         <button class="mode-tab" data-tab="plan">Plan</button>
       </div>
-      <div id="tab-today" class="tab-panel"></div>
-      <div id="tab-trends" class="tab-panel" hidden></div>
+      <div id="tab-today" class="tab-panel"><div class="skeleton" style="height:240px"></div></div>
+      <div id="tab-trends" class="tab-panel" hidden>${TAB_SLOTS.trends.map(slotHTML).join('')}</div>
       <div id="tab-plan" class="tab-panel" hidden>
         <p class="desc plan-tab-note">Plans are created, amended, and abandoned in chat with <code>miles:miles-plan</code>.</p>
+        ${TAB_SLOTS.plan.map(slotHTML).join('')}
       </div>`);
     document.querySelectorAll('#plan-tabs .mode-tab').forEach(btn => {
       btn.addEventListener('click', () => activatePlanTab(btn.dataset.tab));
@@ -918,16 +917,6 @@
     document.querySelectorAll('.tab-panel').forEach(el => { el.hidden = el.id !== `tab-${key}`; });
     if (TAB_CHARTS[key]) TAB_CHARTS[key].forEach(c => c.resize());
     history.replaceState(null, '', `#${key}`);
-    if (key === 'plan') requestAnimationFrame(scrollToCurrentWeek);
-  }
-
-  // Mobile calendar only: the desktop grid (.cal) leaves .cal-cards hidden,
-  // so offsetParent is null there and the page stays put.
-  function scrollToCurrentWeek() {
-    const week = document.querySelector('.plan-view .mcal-week.current');
-    if (!week || !week.offsetParent) return;
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    week.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
   }
 
   // -----------------------------------------------------------------------
@@ -1011,7 +1000,7 @@
   // -----------------------------------------------------------------------
 
   function renderPlanEmptyCard() {
-    rootEl('plan').insertAdjacentHTML('beforeend', `
+    slotEl('head').insertAdjacentHTML('beforeend', `
       <div class="plan-empty">
         <h2>No training plan yet</h2>
         <p>Once a plan is drafted, this page tracks planned vs actual weekly mileage,
@@ -1342,7 +1331,7 @@
       </div>` : '';
 
     const rows = fitnessRow + buildRow + sessionsRow;
-    rootEl('plan').insertAdjacentHTML('beforeend', `
+    slotEl('head').insertAdjacentHTML('beforeend', `
       <section id="section-readiness">
         <h2>Readiness</h2>
         <p class="desc">Goal vs fitness, this block vs a reference build, and session execution — build numbers are cumulative through the same weeks-out point on both sides${builds ? ' · flip the chips to change the reference' : ''}</p>
@@ -1395,7 +1384,7 @@
   function renderRetrospective(data, retro) {
     const { plan } = data;
     if (!retro) {
-      rootEl('plan').insertAdjacentHTML('beforeend', `
+      slotEl('head').insertAdjacentHTML('beforeend', `
         <div class="stat-strip"><div class="stat">
           <div class="stat-label">Retrospective</div>
           <div class="stat-value">—<span class="stat-sub">loading…</span></div>
@@ -1434,7 +1423,7 @@
         <div class="stat-sub">${goal.predicted_time != null ? `${goal.predicted_time} predicted (${esc(goal.predicted_confidence ?? '')})` : 'no pre-race fitness estimate'}</div>
       </div>` : '';
 
-    rootEl('plan').insertAdjacentHTML('beforeend', `
+    slotEl('head').insertAdjacentHTML('beforeend', `
       <section id="section-retrospective">
         <h2>Race retrospective</h2>
         <p class="desc">${esc(plan.title)} closed out ${shortDate(plan.race_date)}</p>
@@ -1487,7 +1476,7 @@
     const caption = mileageCaption(weeks);
     const flagTypesPresent = hasFlags ? [...new Set(flags.map(f => f.type))] : [];
 
-    rootEl('plan').insertAdjacentHTML('beforeend', `
+    slotEl('chart').insertAdjacentHTML('beforeend', `
       <section id="section-chart">
         <h2>Weekly mileage</h2>
         <p class="desc">Bars are actual synced miles${hasBands ? ', colored by adherence band' : ''} · dashed line is the planned weekly target · current week is still in progress${hasFlags ? ' · shaded span marks a flagged pattern' : ''}</p>
@@ -1675,28 +1664,19 @@
     return `<div class="band-chip" style="background:${BAND_COLOR[band]}" title="${BAND_LABEL[band]}">${band}</div>`;
   }
 
-  function weekRow(week, dayByDate, actualByDate, logByDate, bandByWeek) {
+  function weekRow(week, dayByDate, actualByDate, logByDate) {
     const days = Array.from({ length: 7 }, (_, i) => addDays(week.week_start, i));
-    const rowClass = week.is_current ? 'cal-row current' : 'cal-row';
-    const band = bandByWeek ? bandByWeek.get(week.week_start) : undefined;
-    return `<div class="${rowClass}">
-      <div class="cal-leader">
-        <div>${shortDate(week.week_start)}</div>
-        <div class="tile-sub">${week.phase} · ${week.actual_miles.toFixed(1)} of ${targetMilesLabel(week)} mi</div>
-        ${week.note ? `<div class="cal-week-note" title="${esc(week.note)}">${esc(week.note)}</div>` : ''}
-        ${bandChip(band)}
-      </div>
+    return `<div class="${week.is_current ? 'cal-row current' : 'cal-row'}">
       ${days.map(d => dayCell(d, dayByDate, actualByDate, logByDate)).join('')}
     </div>`;
   }
 
   // -----------------------------------------------------------------------
-  // Mobile calendar — one full-width card per week, below 784px (see the
+  // Mobile calendar — a week's days as full-width rows, below 784px (see the
   // .cal-cards media query). Independently rendered from weekRow/dayCell
   // rather than reusing their grid-cell markup: a day's content reads as a
   // horizontal row here (weekday, then session number + title, then any
-  // synced pill), not a vertically-stacked cell, and the leader column's
-  // 112px width disappears entirely in favor of a card header.
+  // synced pill), not a vertically-stacked cell.
   // -----------------------------------------------------------------------
 
   function weekRangeLabel(weekStart) {
@@ -1736,24 +1716,41 @@
     </div>`;
   }
 
-  function weekCardMobileHTML(week, dayByDate, actualByDate, logByDate, bandByWeek) {
+  function weekCardMobileHTML(week, dayByDate, actualByDate, logByDate) {
     const days = Array.from({ length: 7 }, (_, i) => addDays(week.week_start, i));
-    const band = bandByWeek ? bandByWeek.get(week.week_start) : undefined;
-    const cls = week.is_current ? 'mcal-week current' : 'mcal-week';
-    return `<div class="${cls}">
-      <div class="mcal-week-head">
-        <div class="mcal-week-range">${esc(weekRangeLabel(week.week_start))}</div>
-        <div class="mcal-week-sub">
-          <span>${esc(week.phase)}</span>
-          <span>${week.actual_miles.toFixed(1)} of ${esc(targetMilesLabel(week))} mi</span>
-          ${bandChip(band)}
-        </div>
-        ${week.note ? `<div class="mcal-week-note">${esc(week.note)}</div>` : ''}
-      </div>
+    return `<div class="${week.is_current ? 'mcal-week current' : 'mcal-week'}">
       ${days.map(d => mobileDayRowHTML(d, dayByDate, actualByDate, logByDate)).join('')}
     </div>`;
   }
 
+  // One-line summary of a week: range, phase, miles, long run, workouts, band.
+  // Actuals are shown only for the current and past weeks.
+  function weekSummaryHTML(week, actualByDate, band) {
+    const actual = !week.is_future;
+    const runs = Array.from({ length: 7 }, (_, i) => actualByDate.get(addDays(week.week_start, i)) ?? []).flat();
+    const miles = actual ? `${week.actual_miles.toFixed(1)} of ${targetMilesLabel(week)} mi` : `${targetMilesLabel(week)} mi`;
+    let longRun = '';
+    if (week.target_long_run_miles != null) {
+      const done = Math.max(0, ...runs.map(r => r.distance_mi));
+      longRun = actual ? `Long ${trimMiles(done)} of ${trimMiles(week.target_long_run_miles)}` : `Long ${trimMiles(week.target_long_run_miles)}`;
+    } else if (week.target_long_run_minutes != null) {
+      longRun = `Long ${fmtDuration(week.target_long_run_minutes)}`;
+    }
+    const workouts = actual ? `${week.actual_workouts} of ${week.target_workouts} workouts`
+      : week.target_workouts ? `${week.target_workouts} workout${week.target_workouts === 1 ? '' : 's'}` : '';
+    return `<div class="cwk-head">
+        <span>${esc(weekRangeLabel(week.week_start))}</span>
+        <span class="tile-sub">${esc(week.phase)}</span>
+        ${bandChip(band)}
+        <span class="cwk-chev">&rsaquo;</span>
+      </div>
+      <div class="cwk-line">${[miles, longRun, workouts].filter(Boolean).map(t => `<span>${esc(t)}</span>`).join('')}</div>
+      ${week.note ? `<div class="cwk-note" title="${esc(week.note)}">${esc(week.note)}</div>` : ''}`;
+  }
+
+  // Current week first, then upcoming weeks in order, then past weeks most
+  // recent first under a History divider. One week is expanded at a time by
+  // the nav; tapping a summary toggles its week independently.
   function renderCalendar(data, bandByWeek) {
     const { weeks, days, actual, log } = data;
     if (!weeks.length) return;
@@ -1764,20 +1761,31 @@
     const weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const hasBands = bandByWeek && bandByWeek.size > 0;
 
-    rootEl('plan').insertAdjacentHTML('beforeend', `
+    const weekHTML = w => `<div class="cwk${w.is_current ? ' current' : ''}" data-week="${w.week_start}">
+        <button type="button" class="cwk-sum" aria-expanded="false">${weekSummaryHTML(w, actualByDate, bandByWeek?.get(w.week_start))}</button>
+        <div class="cwk-body" hidden>
+          <div class="cal">
+            <div class="cal-header">${weekdayLabels.map(d => `<div class="cal-hcell">${d}</div>`).join('')}</div>
+            ${weekRow(w, dayByDate, actualByDate, logByDate)}
+          </div>
+          <div class="cal-cards">${weekCardMobileHTML(w, dayByDate, actualByDate, logByDate)}</div>
+        </div>
+      </div>`;
+    const past = weeks.filter(w => !w.is_current && !w.is_future).reverse();
+    const ordered = [...weeks.filter(w => w.is_current), ...weeks.filter(w => w.is_future)];
+
+    const section = slotEl('calendar');
+    section.insertAdjacentHTML('beforeend', `
       <section id="section-calendar">
         <h2>Calendar</h2>
-        <p class="desc">Dashed chip is the planned slot, colored by type · filled pill is the synced run · dot marker is a plan_log note · ▲ marks a trail day · click any day or week for detail${hasBands ? ' · colored chip is the completed week’s adherence band' : ''} · current week highlighted</p>
-        <div class="cal">
-          <div class="cal-header">
-            <div class="cal-hcell"></div>
-            ${weekdayLabels.map(w => `<div class="cal-hcell">${w}</div>`).join('')}
-          </div>
-          ${weeks.map(w => weekRow(w, dayByDate, actualByDate, logByDate, bandByWeek)).join('')}
+        <p class="desc">Dashed chip is the planned slot, colored by type · filled pill is the synced run · dot marker is a plan_log note · ▲ marks a trail day · tap a week to expand it, tap a day for detail${hasBands ? ' · colored chip is the completed week’s adherence band' : ''}</p>
+        <div class="cal-nav">
+          <button type="button" class="filter-btn" data-week-nav="-1">&lsaquo; Prev</button>
+          <button type="button" class="filter-btn" data-week-nav="0">This week</button>
+          <button type="button" class="filter-btn" data-week-nav="1">Next &rsaquo;</button>
         </div>
-        <div class="cal-cards">
-          ${weeks.map(w => weekCardMobileHTML(w, dayByDate, actualByDate, logByDate, bandByWeek)).join('')}
-        </div>
+        ${ordered.map(weekHTML).join('')}
+        ${past.length ? `<div class="cal-divider">History</div>${past.map(weekHTML).join('')}` : ''}
         <div class="cal-legend">
           <span><span class="cal-dot" style="background:var(--muted)"></span>Easy</span>
           <span><span class="cal-dot" style="background:var(--series-8)"></span>Workout</span>
@@ -1788,6 +1796,42 @@
           <span><span class="cal-log-marker" style="position:static;display:inline-block;margin-right:0.3125rem"></span>Log note</span>
         </div>
       </section>`);
+
+    const currentIdx = weeks.findIndex(w => w.is_current);
+    let navIdx = currentIdx >= 0 ? currentIdx : weeks.length - 1;
+    const weekEl = i => section.querySelector(`.cwk[data-week="${weeks[i].week_start}"]`);
+    const setOpen = (el, open) => {
+      el.querySelector('.cwk-sum').setAttribute('aria-expanded', String(open));
+      el.querySelector('.cwk-body').hidden = !open;
+    };
+    const refreshNav = () => {
+      section.querySelector('[data-week-nav="-1"]').disabled = navIdx <= 0;
+      section.querySelector('[data-week-nav="1"]').disabled = navIdx >= weeks.length - 1;
+      section.querySelector('[data-week-nav="0"]').disabled = currentIdx < 0;
+    };
+    const goTo = i => {
+      setOpen(weekEl(navIdx), false);
+      navIdx = i;
+      setOpen(weekEl(i), true);
+      refreshNav();
+      weekEl(i).scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+    };
+    setOpen(weekEl(navIdx), true);
+    refreshNav();
+    section.addEventListener('click', e => {
+      const nav = e.target.closest('[data-week-nav]');
+      if (nav) {
+        const step = Number(nav.dataset.weekNav);
+        goTo(step === 0 ? currentIdx : navIdx + step);
+        return;
+      }
+      const sum = e.target.closest('.cwk-sum');
+      if (!sum) return;
+      const el = sum.closest('.cwk');
+      const open = sum.getAttribute('aria-expanded') !== 'true';
+      setOpen(el, open);
+      if (open) { navIdx = weeks.findIndex(w => w.week_start === el.dataset.week); refreshNav(); }
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -1799,7 +1843,7 @@
   function renderFlags(adherence) {
     if (!adherence || !adherence.flags || !adherence.flags.length) return;
 
-    rootEl('plan').insertAdjacentHTML('beforeend', `
+    slotEl('flags').insertAdjacentHTML('beforeend', `
       <section id="section-flags">
         <h2>Flags</h2>
         <p class="desc">Patterns only — 2+ consecutive completed weeks, never a single day or week</p>
@@ -1826,7 +1870,7 @@
     if (!progression || !progression.weeks.length) return;
     const { weeks, easy, captions } = progression;
 
-    rootEl('trends').insertAdjacentHTML('beforeend', `
+    slotEl('easy').insertAdjacentHTML('beforeend', `
       <section id="section-progression-easy">
         <h2>Easy HR/pace progression</h2>
         <p class="desc">Distance-weighted average over each week's easy runs · gaps are weeks with no easy run synced · hover for average apparent temperature · heat-adjusted corrects each run to cool conditions (temperature + dew point); click the legend to toggle</p>
@@ -1942,7 +1986,7 @@
     // Target bands come from plan versions — the plan-independent
     // /api/progression payload has none, so don't advertise them.
     const hasBands = workouts.some(w => w.pace_lo != null && w.pace_hi != null);
-    rootEl('trends').insertAdjacentHTML('beforeend', `
+    slotEl('workouts').insertAdjacentHTML('beforeend', `
       <section id="section-progression-workouts">
         <h2>Workout pace progression</h2>
         <p class="desc">Each dot is one synced workout's work-lap pace${hasBands ? ' · shaded band is its frozen target range' : ''} · dashed line is monthly 5K-pace fitness context</p>
@@ -2089,9 +2133,8 @@
   const RECENT_MILEAGE_WEEKS = 16;
   const LOAD_WEEKS = 9; // ~2 months
 
-  function renderLoad(loadData, loadError) {
-    if (!loadData && !loadError) return;
-    rootEl('trends').insertAdjacentHTML('beforeend', `
+  function renderLoad(loadData) {
+    slotEl('load').insertAdjacentHTML('beforeend', `
       <section id="section-load">
         <h2>Load</h2>
         <p class="desc">Last 2 months · acute:chronic ratio — 7-day TRIMP load ÷ the 28-day weekly average · shaded: under 0.8 low, 0.8–1.3 optimal, 1.3–1.5 caution, over 1.5 high · population heuristics, not a diagnosis</p>
@@ -2101,7 +2144,6 @@
         <p class="chart-caption" id="load-caption"></p>
       </section>`);
     const caption = document.getElementById('load-caption');
-    if (loadError) { caption.textContent = `Error loading load: ${loadError.message}`; return; }
     if (loadData.note || !loadData.days.length) { caption.textContent = loadData.note ?? ''; return; }
     const { charts, captionText } = renderLoadCharts(
       document.getElementById('chart-acwr'), document.getElementById('chart-monotony'), loadData);
@@ -2114,7 +2156,7 @@
     if (!weeklyHistory || !weeklyHistory.weeks.length) return;
     const weeks = weeklyHistory.weeks.slice(-RECENT_MILEAGE_WEEKS);
 
-    rootEl('trends').insertAdjacentHTML('beforeend', `
+    slotEl('mileage').insertAdjacentHTML('beforeend', `
       <section id="section-recent-mileage">
         <h2>Recent weekly mileage</h2>
         <p class="desc">Last ${weeks.length} weeks of synced running, zero-filled for weeks with no runs</p>
@@ -2172,7 +2214,7 @@
     const checkpoints = (progression && progression.checkpoints || []).filter(c => c.pace_5k != null);
     if (!checkpoints.length) return;
     const latest = checkpoints[checkpoints.length - 1];
-    rootEl('trends').insertAdjacentHTML('beforeend', `
+    slotEl('fitness').insertAdjacentHTML('beforeend', `
       <p class="chart-caption">Current 5K-pace fitness: ${fmt.pace(latest.pace_5k)}/mi as of ${shortDate(`${latest.month}-01`)}
       · <a class="readiness-link" href="/training.html">Fitness chart →</a></p>`);
   }
@@ -2252,7 +2294,7 @@
     const ordered = [...versions].reverse();
     const latest = ordered[0];
     const annot = `<span class="version-annot">v${latest.version_n} · ${esc(latest.author)} · revised ${shortDate(latest.created_at.slice(0, 10))}</span>`;
-    rootEl('plan').insertAdjacentHTML('beforeend', `
+    slotEl('versions').insertAdjacentHTML('beforeend', `
       <section id="section-versions">
         <h2>Version history${annot}</h2>
         <p class="desc">Every revision is a full snapshot · click a version with a note to see which weeks changed</p>
@@ -2464,7 +2506,8 @@
       : `${ws.actual_miles_so_far.toFixed(1)} of ${targetMilesLabel(ws)} mi so far`;
     const progress = !ws ? ''
       : !started ? `<p class="week-shape">Sync hasn't reached this week yet.</p>`
-      : `${meterHTML(ws)}<p class="week-shape">${esc(remainingLine(ws))}</p>`;
+      : `${meterHTML(ws)}${[leftLine(ws), projectionLine(ws), neighbourWeeksLine(data.weeks)]
+          .filter(Boolean).map(t => `<p class="week-shape">${esc(t)}</p>`).join('')}`;
     return `
       <div class="week-card">
         <div class="week-card-head">
@@ -2474,25 +2517,9 @@
         <div class="day-chip-row">${chips}</div>
         ${ws && ws.note ? `<p class="week-note-line" title="${esc(ws.note)}">${esc(ws.note)}</p>` : ''}
         ${progress}
-        ${rampLine(data)}
         <div class="week-divider"></div>
         ${vsLastWeekHTML(data)}
       </div>`;
-  }
-
-  // "22 of 30 → 42 → 48 mi/wk" — last completed week's actual against its
-  // target, then this week's and next week's targets: the ramp, in one line.
-  function rampLine(data) {
-    const weeks = data.weeks ?? [];
-    const i = weeks.findIndex(w => w.is_current);
-    if (i < 0) return '';
-    const steps = [];
-    const prev = weeks[i - 1];
-    if (prev) steps.push(`${trimMiles(prev.actual_miles)} of ${targetMilesLabel(prev)}`);
-    steps.push(targetMilesLabel(weeks[i]));
-    if (weeks[i + 1]) steps.push(targetMilesLabel(weeks[i + 1]));
-    if (steps.length < 2) return '';
-    return `<p class="week-shape"><span class="panel-label">Ramp</span> ${esc(steps.join(' → '))} mi/wk</p>`;
   }
 
   // Expected-by-now marker — a single ratio against a limit (a meter, not a
@@ -2519,30 +2546,43 @@
     if (ws.actual_miles_so_far == null || ws.expected_miles_by_now == null) return '';
     const delta = ws.actual_miles_so_far - ws.expected_miles_by_now;
     const sign = delta >= 0 ? '+' : '';
-    const title = `synced miles vs the plan's scheduled mileage through ${shortDate(ws.week_cutoff_date)} — moving runs between days shifts this until the week closes`;
+    const title = `synced miles vs the plan's scheduled mileage for earlier days, plus today once a run has synced — moving runs between days shifts this until the week closes`;
     return `<div class="week-delta-row"><span class="week-delta" title="${esc(title)}">${sign}${delta.toFixed(1)} mi vs plan</span></div>`;
   }
 
-  // A tiny paired-bar SVG, day by day — lighter than an ECharts instance for
-  // ≤7 data points. Two bars per elapsed day (last week muted, this week
-  // accent), a plain 2-series comparison, not a judgment encoding.
-  function pairedBarSVG(days) {
-    if (!days.length) return '';
-    const barW = 8, gap = 3, groupGap = 7, H = 28;
-    const maxVal = Math.max(0.1, ...days.flatMap(d => [d.miles, d.last_week_miles]));
-    const groupW = barW * 2 + gap;
-    const width = days.length * groupW + (days.length - 1) * groupGap;
-    let x = 0;
-    const bars = days.map(d => {
-      const hThis = (d.miles / maxVal) * H;
-      const hLast = (d.last_week_miles / maxVal) * H;
-      const svg = `
-        <rect x="${x}" y="${(H - hLast).toFixed(1)}" width="${barW}" height="${Math.max(0, hLast).toFixed(1)}" rx="1" fill="var(--muted)" fill-opacity="0.55"><title>${shortDate(d.last_week_date)}: ${d.last_week_miles.toFixed(1)} mi</title></rect>
-        <rect x="${x + barW + gap}" y="${(H - hThis).toFixed(1)}" width="${barW}" height="${Math.max(0, hThis).toFixed(1)}" rx="1" fill="var(--accent)"><title>${shortDate(d.date)}: ${d.miles.toFixed(1)} mi</title></rect>`;
-      x += groupW + groupGap;
-      return svg;
-    }).join('');
-    return `<svg width="${width}" height="${H}" viewBox="0 0 ${width} ${H}">${bars}</svg>`;
+  // Cumulative miles over Mon–Sun as two lines: last week in full (muted),
+  // this week through the cutoff (accent). Dots mark both weeks at the cutoff
+  // day, labelled with their running totals; the lighter-colored one sits
+  // above or below the other so the labels never collide.
+  function cumulativeLinesSVG(vw) {
+    const W = 300, H = 84, x0 = 12, x1 = 288, yTop = 16, yBot = 62;
+    const cutoff = vw.cutoff_offset;
+    const lastPts = [], thisPts = [];
+    let last = 0, cur = 0;
+    vw.days.forEach((d, i) => {
+      last += d.last_week_miles;
+      lastPts.push(last);
+      if (i <= cutoff) { cur += d.miles; thisPts.push(cur); }
+    });
+    const maxVal = Math.max(0.1, ...lastPts, ...thisPts);
+    const X = i => x0 + (i * (x1 - x0)) / 6;
+    const Y = v => yBot - (v / maxVal) * (yBot - yTop);
+    const path = pts => pts.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join('');
+    const thisAt = thisPts[cutoff], lastAt = lastPts[cutoff];
+    const anchor = cutoff >= 5 ? 'end' : 'middle';
+    const label = (v, above, fill) =>
+      `<text x="${X(cutoff).toFixed(1)}" y="${(Y(v) + (above ? -7 : 13)).toFixed(1)}" text-anchor="${anchor}" font-size="11" fill="${fill}">${v.toFixed(1)}</text>`;
+    const weekdays = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((w, i) =>
+      `<text x="${X(i).toFixed(1)}" y="${H - 4}" text-anchor="middle" font-size="10" fill="var(--muted)">${w}</text>`).join('');
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cumulative miles, this week against last week">
+      <line x1="${x0}" x2="${x1}" y1="${yBot}" y2="${yBot}" stroke="var(--gridline)"/>
+      <path d="${path(lastPts)}" fill="none" stroke="var(--muted)" stroke-opacity="0.55" stroke-width="2" stroke-linejoin="round"/>
+      <path d="${path(thisPts)}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round"/>
+      <circle cx="${X(cutoff).toFixed(1)}" cy="${Y(lastAt).toFixed(1)}" r="3" fill="var(--muted)" fill-opacity="0.7"><title>Last week through ${shortDate(vw.days[cutoff].last_week_date)}: ${lastAt.toFixed(1)} mi</title></circle>
+      <circle cx="${X(cutoff).toFixed(1)}" cy="${Y(thisAt).toFixed(1)}" r="4" fill="var(--accent)"><title>This week through ${shortDate(vw.days[cutoff].date)}: ${thisAt.toFixed(1)} mi</title></circle>
+      ${label(thisAt, thisAt >= lastAt, 'var(--accent)')}${label(lastAt, thisAt < lastAt, 'var(--text-secondary)')}
+      ${weekdays}
+    </svg>`;
   }
 
   function vsLastWeekHTML(data) {
@@ -2560,7 +2600,7 @@
         <span class="week-headline">${sign}${vw.delta_miles.toFixed(1)} mi</span>
       </div>
       <div class="vs-row">
-        <div class="paired-bar-wrap">${pairedBarSVG(vw.days)}</div>
+        <div class="vs-chart-wrap">${cumulativeLinesSVG(vw)}</div>
         <div class="chart-legend">
           <span class="legend-swatch"><span class="legend-box" style="background:var(--accent)"></span>This week</span>
           <span class="legend-swatch"><span class="legend-box" style="background:var(--muted);opacity:0.55"></span>Last week</span>
@@ -2605,8 +2645,7 @@
   // A week-at-a-glance day-chip row with no plan targets behind it — just
   // actual miles per day, reusing the .day-chip markup so it reads the same
   // as the active plan's row. This is the dashboard's popover entry point
-  // (each chip carries data-plan-date); pairedBarSVG/vsLastWeekHTML below it
-  // stay exactly as the active Today card uses them, untouched.
+  // (each chip carries data-plan-date).
   function dashboardDayChipsHTML(today) {
     const days = Array.from({ length: 7 }, (_, i) => addDays(today.week_start, i));
     return `<div class="day-chip-row">${days.map(d => {
@@ -2743,25 +2782,47 @@
     document.getElementById('subtitle').textContent = `${plan.title} · ${parts.join(' · ')}`;
   }
 
-  loadPlan().then(data => {
-    // The progression endpoint choice depends on plan status, so it's fired
-    // only once loadPlan() resolves rather than joining the Promise.all below.
-    const status = data ? data.plan.status : null;
-    const progressionPromise = status === 'active' ? loadProgression() : loadProgressionFallback();
-    return Promise.all([
-      Promise.resolve(data),
-      loadVersions().catch(() => []),
-      loadAdherence().catch(() => null),
-      loadRetrospective().catch(() => null),
-      loadReadiness().catch(() => null),
-      loadToday().catch(() => null),
-      loadWeeklyHistory().catch(() => null),
-      progressionPromise.catch(() => null),
-      loadLoad().then(d => ({ data: d, error: null }), err => ({ data: null, error: err })),
-    ]);
-  }).then(([data, versions, adherence, retrospective, readiness, today, weeklyHistory, progression, load]) => {
-    const status = data ? data.plan.status : null;
+  // Today needs only /api/plan and /api/today; everything else is fetched
+  // once Today has painted so it never competes with them.
+  function startSecondaryPanels(planP) {
+    const planOrNull = planP.catch(() => null);
+    const status = planOrNull.then(data => (data ? data.plan.status : null));
+    const get = (promise, fallback) => promise.catch(() => fallback);
+    const adherenceP = loadAdherence();
 
+    const progressionP = status.then(s => (s === 'active' ? loadProgression() : loadProgressionFallback()));
+    fillPanel('easy', [progressionP, echartsReady], renderProgressionEasy);
+    fillPanel('workouts', [progressionP, echartsReady], renderProgressionWorkouts);
+    fillPanel('mileage', [loadWeeklyHistory(), echartsReady], renderRecentMileage);
+    fillPanel('load', [loadLoad(), echartsReady], renderLoad);
+    fillPanel('fitness', [progressionP], renderFitnessStrip);
+
+    const bandsP = get(adherenceP.then(a => new Map((a.weeks ?? []).map(w => [w.week_start, w.band]))), new Map());
+    fillPanel('head', [planP, status.then(s => (s === 'completed' ? loadRetrospective() : s === 'active' ? loadReadiness() : null)), get(adherenceP, null), echartsReady],
+      (data, extra, adherence) => {
+        if (!data) return renderPlanEmptyCard();
+        if (data.plan.status === 'completed') {
+          slotEl('head').insertAdjacentHTML('beforeend', `<div class="retro-marker">Retrospective</div>`);
+          renderRetrospective(data, extra);
+        } else {
+          renderReadiness(data, adherence, extra);
+        }
+      });
+    fillPanel('chart', [planP, bandsP, get(adherenceP, null), echartsReady],
+      (data, bands, adherence) => { if (data) renderChart(data, bands, adherence?.flags ?? []); });
+    fillPanel('calendar', [planP, bandsP], (data, bands) => { if (data) renderCalendar(data, bands); });
+    fillPanel('flags', [adherenceP], renderFlags);
+    fillPanel('versions', [loadVersions()], renderVersions);
+  }
+
+  const planP = loadPlan();
+  const todayP = loadToday().catch(() => null);
+
+  renderTabs();
+  activatePlanTab((location.hash || '#today').replace('#', ''));
+
+  Promise.all([planP, todayP]).then(([data, today]) => {
+    const status = data ? data.plan.status : null;
     // actualByDate merges /api/today's map on top of the plan's own (when
     // one exists) — a completed plan's window rarely still covers "this
     // week", so the dashboard/popover always resolve against fresh data.
@@ -2773,62 +2834,38 @@
       ]),
       logByDate: data ? new Map(Object.entries(data.log ?? {})) : new Map(),
     };
-    const bandByWeek = new Map((adherence?.weeks ?? []).map(w => [w.week_start, w.band]));
 
     renderHeader(data);
-    renderTabs();
-
+    document.getElementById('tab-today').innerHTML = '';
     if (status === 'active' && data.today) {
       renderToday(data);
     } else if (today) {
       renderTodayDashboard(today);
     }
-
-    if (status === 'completed') {
-      rootEl('plan').insertAdjacentHTML('beforeend', `<div class="retro-marker">Retrospective</div>`);
-      renderRetrospective(data, retrospective);
-    } else if (status === 'active') {
-      renderReadiness(data, adherence, readiness);
-    } else {
-      renderPlanEmptyCard();
-    }
-
-    if (data) {
-      renderChart(data, bandByWeek, adherence?.flags ?? []);
-      renderCalendar(data, bandByWeek);
-      renderFlags(adherence);
-      renderVersions(versions);
-    }
-
-    // Trends renders identically regardless of plan state.
-    renderProgressionEasy(progression);
-    renderProgressionWorkouts(progression);
-    renderRecentMileage(weeklyHistory);
-    renderLoad(load.data, load.error);
-    renderFitnessStrip(progression);
-
-    activatePlanTab((location.hash || '#today').replace('#', ''));
-
-    document.getElementById('root').addEventListener('click', e => {
-      // A muted in-page link (e.g. the dashboard's "see the Plan tab")
-      // switches tabs instead of navigating to a real page.
-      const jumpTab = e.target.closest('[data-tab-jump]');
-      if (jumpTab) { e.preventDefault(); activatePlanTab(jumpTab.dataset.tabJump); return; }
-      const el = e.target.closest('[data-plan-date]');
-      if (el) { openDayPopover(el.dataset.planDate); return; }
-      // In-page section anchors (e.g. Readiness's "Workout progression" link)
-      // can point into a different, currently-hidden tab — switch tabs before
-      // scrolling, or the browser's default jump lands on a zero-height panel.
-      const jump = e.target.closest('a[href^="#section-"]');
-      if (jump) {
-        e.preventDefault();
-        const targetId = jump.getAttribute('href').slice(1);
-        activatePlanTab('trends');
-        document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    });
+    startSecondaryPanels(planP);
   }).catch(err => {
     document.getElementById('subtitle').textContent = `Error: ${err.message}`;
+    document.getElementById('tab-today').innerHTML = `<p class="desc">Couldn't load today: ${esc(err.message)}</p>`;
+    startSecondaryPanels(planP);
+  });
+
+  document.getElementById('root').addEventListener('click', e => {
+    // A muted in-page link (e.g. the dashboard's "see the Plan tab")
+    // switches tabs instead of navigating to a real page.
+    const jumpTab = e.target.closest('[data-tab-jump]');
+    if (jumpTab) { e.preventDefault(); activatePlanTab(jumpTab.dataset.tabJump); return; }
+    const el = e.target.closest('[data-plan-date]');
+    if (el) { openDayPopover(el.dataset.planDate); return; }
+    // In-page section anchors (e.g. Readiness's "Workout progression" link)
+    // can point into a different, currently-hidden tab — switch tabs before
+    // scrolling, or the browser's default jump lands on a zero-height panel.
+    const jump = e.target.closest('a[href^="#section-"]');
+    if (jump) {
+      e.preventDefault();
+      const targetId = jump.getAttribute('href').slice(1);
+      activatePlanTab('trends');
+      document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   });
 </script>
 </body>

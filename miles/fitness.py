@@ -281,8 +281,8 @@ def zones_from_predicted(marathon_pace: float, fivek_pace: float) -> dict[str, f
     }
 
 
-# Lap-intensity zone tolerances: relative distance from a zone anchor that still
-# counts as running "at" that effort.
+# Relative distance from a zone anchor that counts as running "at" that effort
+# (plan scoring); intensity_for_pace uses the MP and repetition ones as its ends.
 MP_TOLERANCE = 0.03
 THRESHOLD_TOLERANCE = 0.03
 INTERVAL_TOLERANCE = 0.025
@@ -292,44 +292,22 @@ _ZONE_KEYS = ("marathon", "threshold", "interval", "repetition")  # slow -> fast
 _ZONE_LABEL: dict[str, str] = {
     "marathon": "MP", "threshold": "threshold", "interval": "interval", "repetition": "repetition",
 }
-_ZONE_TOLERANCE: dict[str, float] = {
-    "marathon": MP_TOLERANCE, "threshold": THRESHOLD_TOLERANCE,
-    "interval": INTERVAL_TOLERANCE, "repetition": REPETITION_TOLERANCE,
-}
 
 
-def intensity_for_pace(pace_min_mi: float, zones: dict[str, float | str]) -> str | None:
-    """Nearest zone anchor within tolerance for a lap's pace (decimal min/mi),
-    from a FitnessEstimate's zones dict. Anchors run slow-to-fast: MP, threshold,
-    interval (5K), repetition (mile). Between two anchors with neither in
-    tolerance, returns the slower anchor's name prefixed 'sub-' (e.g.
-    'sub-threshold' between threshold and interval). Slower than MP's tolerance
-    band -> 'aerobic'; faster than repetition's -> 'sprint'. Confidence gating
-    (no label from a low-confidence estimate) is the caller's job, not this
-    function's — it only does the geometric match."""
+def intensity_for_pace(pace_min_mi: float, zones: dict[str, float | str]) -> str:
+    """Zone name for a lap's pace (decimal min/mi), from a FitnessEstimate's
+    zones dict: the nearest of the anchors MP, threshold, interval (5K) and
+    repetition (mile), so labels never skip or reverse as pace changes. Slower
+    than MP's tolerance band -> 'aerobic'; faster than repetition's -> 'sprint'.
+    Confidence gating (no label from a low-confidence estimate) is the caller's
+    job, not this function's."""
     anchors = [(key, float(zones[key])) for key in _ZONE_KEYS]
-
-    nearest_key: str | None = None
-    nearest_rel: float | None = None
-    for key, anchor in anchors:
-        rel = abs(pace_min_mi - anchor) / anchor
-        if nearest_rel is None or rel < nearest_rel:
-            nearest_key, nearest_rel = key, rel
-    assert nearest_key is not None and nearest_rel is not None
-    if nearest_rel <= _ZONE_TOLERANCE[nearest_key]:
-        return _ZONE_LABEL[nearest_key]
-
-    mp_pace = anchors[0][1]
-    repetition_pace = anchors[-1][1]
-    if pace_min_mi > mp_pace * (1 + MP_TOLERANCE):
+    if pace_min_mi > anchors[0][1] * (1 + MP_TOLERANCE):
         return "aerobic"
-    if pace_min_mi < repetition_pace * (1 - REPETITION_TOLERANCE):
+    if pace_min_mi < anchors[-1][1] * (1 - REPETITION_TOLERANCE):
         return "sprint"
-
-    for (slow_key, slow_pace), (_, fast_pace) in zip(anchors, anchors[1:]):
-        if fast_pace <= pace_min_mi <= slow_pace:
-            return f"sub-{_ZONE_LABEL[slow_key]}"
-    return None
+    key, _ = min(anchors, key=lambda a: abs(pace_min_mi - a[1]))
+    return _ZONE_LABEL[key]
 
 
 def estimate_fitness(

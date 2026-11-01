@@ -30,11 +30,8 @@ MODERATE_MAX_PCT_MAX_HR = 88
 _PACE_LABEL_ZONE: dict[str, Zone] = {
     "aerobic": "easy",
     "MP": "moderate",
-    "sub-MP": "moderate",
     "threshold": "hard",
-    "sub-threshold": "hard",
     "interval": "hard",
-    "sub-interval": "hard",
     "repetition": "hard",
     "sprint": "hard",
 }
@@ -187,8 +184,7 @@ def _pace_zone_seconds(conn: sqlite3.Connection, runs: list[RunRow]) -> dict[int
                 continue
             pace = (time_s / 60.0) / (distance_m / MILE_M) / factor
             label = intensity_for_pace(pace, zones)
-            zone = _PACE_LABEL_ZONE.get(label) if label is not None else None
-            zs[zone if zone is not None else "unclassified"] += time_s
+            zs[_PACE_LABEL_ZONE[label]] += time_s
         out[run["activity_id"]] = zs
     return out
 

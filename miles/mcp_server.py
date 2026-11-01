@@ -885,8 +885,8 @@ def get_workout_laps(
     lap_type: warmup | work | recovery | float | cooldown | steady (see get_workout_session).
     Trivial laps (< 200m or < 45s) get lap_type null.
     intensity: what a work/float lap was run at relative to the athlete's estimated
-    fitness at the time — MP | threshold | interval | repetition | aerobic | sprint |
-    sub-<zone>, or null for a non-work lap, a trivial lap, or a month with no reliable
+    fitness at the time — MP | threshold | interval | repetition | aerobic | sprint
+    (the nearest zone's pace), or null for a non-work lap, a trivial lap, or a month with no reliable
     fitness estimate. dominant_intensity is the session-level rollup (the intensity
     holding >=60% of work-lap time); null when mixed or unavailable. Both stand in for
     workout_label on unlabeled sessions — see run_sql for querying by dominant_intensity.
@@ -1175,8 +1175,8 @@ def get_workout_session(activity_id: int) -> str:
     Trivial laps (< 200m or < 45s) are filtered out.
     Each lap: lap_num, lap_type, intensity, distance_miles, duration_s, pace_min_mi, avg_hr, max_hr.
     intensity names what a work/float lap was run at relative to the athlete's estimated
-    fitness at the time — MP | threshold | interval | repetition | aerobic | sprint |
-    sub-<zone>; null for a non-work lap, a trivial lap, or a month with no reliable
+    fitness at the time — MP | threshold | interval | repetition | aerobic | sprint
+    (the nearest zone's pace); null for a non-work lap, a trivial lap, or a month with no reliable
     fitness estimate. dominant_intensity (session level) is the intensity holding >=60%
     of work-lap time, null when mixed or unavailable — it can stand in for workout_label
     on unlabeled sessions.
@@ -2517,7 +2517,7 @@ def run_sql(query: str) -> str:
       lap_type (derived, rebuilt each sync — warmup/work/recovery/float/cooldown/steady;
       NULL for trivial laps under the 200m/45s floor)
       intensity (derived, rebuilt each sync — MP/threshold/interval/repetition/aerobic/
-      sprint/sub-<zone> for work/float laps, judged against the fitness checkpoint for
+      sprint for work/float laps, judged against the fitness checkpoint for
       the month before the activity; NULL for other lap_types, trivial laps, or months
       with no reliable fitness estimate)
 

@@ -37,6 +37,7 @@ from .fitness import (
     intensity_for_pace,
     zones_from_predicted,
 )
+from .heat import activity_heat_factors
 from .inference import apply_inference
 from .plan_adherence import compute_plan_adherence
 from .races import NOMINAL_METERS, classify_race_distance
@@ -45,7 +46,7 @@ _CONFIDENCE_VALUES = get_args(Confidence)
 
 # Bump whenever any classifier or threshold feeding a derived value changes, so
 # ensure_derived() knows stale rows need a full recompute.
-DERIVE_VERSION = "12"
+DERIVE_VERSION = "13"
 
 _FINAL_CHECKPOINTS = "fitness_checkpoints"
 _SEED_CHECKPOINTS = "fitness_checkpoints_seed"
@@ -320,9 +321,9 @@ def _pace_based_race_inference(conn: sqlite3.Connection) -> int:
 
 def _lap_intensity_pass(conn: sqlite3.Connection, *, since: str | None = None) -> dict[str, int]:
     """Tag work/float laps with intensity (MP/threshold/interval/repetition/
-    aerobic/sprint/sub-*) using the zone anchors from the fitness checkpoint of
-    the month *before* each activity's month — never that activity's own month,
-    which could include itself. Skips activities with no earlier checkpoint or a
+    aerobic/sprint) from the heat-adjusted lap pace against the zone anchors of the
+    fitness checkpoint of the month *before* each activity's month, never that
+    activity's own month, which could include itself. Skips activities with no earlier checkpoint or a
     low-confidence one: a wrong label is worse than none. Rolls each session's
     work-lap intensities up into dominant_intensity when one intensity holds
     >= DOMINANT_INTENSITY_MIN_SHARE of work-lap moving time.
@@ -381,14 +382,13 @@ def _lap_intensity_pass(conn: sqlite3.Connection, *, since: str | None = None) -
         if not laps:
             continue
 
+        heat = activity_heat_factors(conn, [activity_id]).get(activity_id, 1.0)
         work_time_by_intensity: dict[str, int] = {}
         total_work_s = 0
         for lap in laps:
-            pace = 26.8224 / float(lap["average_speed_mps"])
+            pace = 26.8224 / (float(lap["average_speed_mps"]) * heat)
             intensity = intensity_for_pace(pace, zones)
             conn.execute("UPDATE laps SET intensity = ? WHERE lap_id = ?", (intensity, int(lap["lap_id"])))
-            if intensity is None:
-                continue
             laps_intensity += 1
             if lap["lap_type"] == "work":
                 t = int(lap["moving_time_s"] or 0)

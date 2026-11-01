@@ -187,8 +187,8 @@ Opens a local web interface at `http://localhost:8000` with six pages:
 The tool descriptions the server publishes are the reference; ask Claude Code what a tool does.
 They cover training analysis (mileage, activities, blocks, periods, consistency), races and
 builds, fitness estimates, intensity distribution and training load (injury-risk ratios), workouts and laps, weather, training plans (draft, commit, adherence),
-`get_recent_history` (the last weeks in full detail fading to one line per period, in one call, with the planned days of this week and next), the athlete's run and week notes
-(`set_run_note`, `get_run_notes`, `list_unnoted_runs`, `set_week_note`, `get_week_notes`; shown read-only on the activity page and, for weeks, in the activities list) and strides or hill sprints found in a run's stream (`detect_run_elements`),
+`get_recent_history` (the last weeks in full detail fading to one line per period, in one call), the athlete's run and week notes
+(`set_run_note`, `get_run_notes`, `list_unnoted_runs`, `set_week_note`, `get_week_notes`) and strides or hill sprints found in a run's stream (`detect_run_elements`),
 stored routes (compare, compose, junctions, proximity), the terrain model, area import, area
 surveys (the stretches worth running around a start, with the athlete's own adjustments and
 exclusions) and route search (routes assembled around chosen sections, with a random walk as

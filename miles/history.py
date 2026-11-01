@@ -9,9 +9,10 @@ from datetime import date, timedelta
 from typing import Any
 
 from . import db, elements, notes
+from .fitness import FT_PER_M
 from .format import fmt_pace, fmt_time
 from .periods import detect_periods, monday_of
-from .plan import current_version_for_week
+from .plan import PlanVersionBundle, PlanWeekRow, current_version_for_week
 from .races import effective_race_activities, run_sport_filter, week_aggs
 
 LINE_WEEKS = 26
@@ -23,7 +24,6 @@ MATCH_LOOKBACK_DAYS = 365
 MATCH_CANDIDATES = 40
 PLAN_NOTE_CHARS = 100
 MAX_LISTED_REPS = 12
-FT_PER_M = 3.28084
 SESSION_TYPES = ("workout", "race")
 STRIDE_TYPES = ("strides", "hill_sprints")
 
@@ -289,18 +289,24 @@ def _strides(noted: object, detected: list[Any]) -> int:
     return sum(e["count"] for e in found if e["type"] in STRIDE_TYPES)
 
 
+def _governing_week(conn: sqlite3.Connection, monday: date) -> tuple[PlanVersionBundle, PlanWeekRow] | None:
+    """The plan version and its week row that governed this Monday, newest plan first."""
+    for plan in conn.execute("SELECT plan_id FROM plans ORDER BY created_at DESC").fetchall():
+        bundle = current_version_for_week(conn, plan["plan_id"], monday)
+        week = next((w for w in bundle["weeks"] if w["week_start"] == monday.isoformat()), None) if bundle else None
+        if bundle and week:
+            return bundle, week
+    return None
+
+
 def _plan_weeks(conn: sqlite3.Connection, mondays: list[date]) -> dict[str, str]:
     """Target-mile band per Monday from whichever plan version governed that week."""
-    plan_ids = [r["plan_id"] for r in conn.execute("SELECT plan_id FROM plans ORDER BY created_at DESC")]
     out: dict[str, str] = {}
     for monday in mondays:
-        for plan_id in plan_ids:
-            bundle = current_version_for_week(conn, plan_id, monday)
-            week = next((w for w in bundle["weeks"] if w["week_start"] == monday.isoformat()), None) if bundle else None
-            if week and week["target_miles"] is not None:
-                lo, hi = week["target_miles"], week["target_miles_hi"]
-                out[monday.isoformat()] = f"{lo:g}-{hi:g}" if hi and hi != lo else f"{lo:g}"
-                break
+        found = _governing_week(conn, monday)
+        if found and found[1]["target_miles"] is not None:
+            lo, hi = found[1]["target_miles"], found[1]["target_miles_hi"]
+            out[monday.isoformat()] = f"{lo:g}-{hi:g}" if hi and hi != lo else f"{lo:g}"
     return out
 
 
@@ -308,22 +314,17 @@ def _plan_days(conn: sqlite3.Connection, this_monday: date) -> list[dict[str, An
     """Planned days of this week and the next, from the version governing each week."""
     out: list[dict[str, Any]] = []
     for monday in (this_monday, this_monday + timedelta(weeks=1)):
+        found = _governing_week(conn, monday)
         week_end = (monday + timedelta(days=6)).isoformat()
-        for plan in conn.execute("SELECT plan_id FROM plans ORDER BY created_at DESC"):
-            bundle = current_version_for_week(conn, plan["plan_id"], monday)
-            if bundle and any(w["week_start"] == monday.isoformat() for w in bundle["weeks"]):
-                out += [
-                    _compact({
-                        "d": d["date"],
-                        "slot": d["slot"],
-                        "title": d["title"],
-                        "mi": d["target_miles"],
-                        "note": (d["note"] or "")[:PLAN_NOTE_CHARS] or None,
-                    })
-                    for d in bundle["days"]
-                    if monday.isoformat() <= d["date"] <= week_end
-                ]
-                break
+        for d in found[0]["days"] if found else []:
+            if monday.isoformat() <= d["date"] <= week_end:
+                out.append(_compact({
+                    "d": d["date"],
+                    "slot": d["slot"],
+                    "title": d["title"],
+                    "mi": d["target_miles"],
+                    "note": (d["note"] or "")[:PLAN_NOTE_CHARS] or None,
+                }))
     return out
 
 

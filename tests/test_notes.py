@@ -1,9 +1,10 @@
 import sqlite3
 
 import pytest
+from fastapi.testclient import TestClient
 from helpers import call_tool, insert_activity
 
-from miles import db, mcp_server
+from miles import api, db, mcp_server
 
 END = "2026-10-18"  # a Sunday; the week of 2026-10-12 is the latest
 
@@ -187,3 +188,13 @@ def test_climbs_are_single_sustained_efforts_and_long_easy_runs_get_splits(seede
     runs = {r["id"]: r for r in _tool("get_recent_history", weeks=1, end_date=END)["weeks"][0]["r"]}
     assert runs[30]["climb"] == {"ft": 459, "pct": 7.0}
     assert "splits" in runs[30] and "splits" not in runs[31]
+
+
+def test_notes_are_served_read_only_to_the_pages(seeded):
+    _tool("set_run_note", activity_id=5, fields={"short": "Easy"})
+    _tool("set_week_note", week_start="2026-10-12", tags=["travel"], note="Away")
+    client = TestClient(api.app)
+    assert client.get("/api/run-note?id=5").json()["short"] == "Easy"
+    assert client.get("/api/run-note?id=4").json() is None
+    (week,) = client.get("/api/week-notes?start_date=2026-10-14&end_date=2026-10-18").json()
+    assert (week["week_start"], week["tags"]) == ("2026-10-12", ["travel"])

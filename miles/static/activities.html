@@ -57,6 +57,10 @@
     .activities-view .act-table tr::before { content: ""; order: 2; flex-basis: 100%; }
     .activities-view .act-table td.act-date, .activities-view .act-table td.act-fig { order: 3; }
     .activities-view .act-table tbody td.dash { display: none; }
+    .activities-view .act-table tr.week-note::before { content: none; }
+    .activities-view .act-table tbody tr.week-note td { flex: 1 1 100%; padding: 0.375rem 0.875rem; background: var(--bg); color: var(--text-secondary); white-space: normal; }
+    .activities-view .act-table .week-note-label { font-weight: 600; color: var(--text); }
+    .activities-view .act-table .week-note-tags { color: var(--muted); }
     .activities-view .act-table .entity-link::after { content: ""; position: absolute; inset: 0; }
     @media (min-width: 640px) {
       .activities-view .act-table { display: table; }
@@ -73,6 +77,7 @@
       }
       .activities-view .act-table tbody td.act-name { overflow: visible; font-size: 0.75rem; font-weight: 400; color: var(--text-secondary); }
       .activities-view .act-table tbody td.r { text-align: right; }
+      .activities-view .act-table tbody tr.week-note td { display: table-cell; padding: 0.375rem 0.75rem; }
       .activities-view .act-table tbody td.dash { display: table-cell; text-align: right; color: var(--baseline); }
       .activities-view .act-table tbody tr:last-child td { border-bottom: none; }
       .activities-view .act-table .entity-link::after { content: none; }
@@ -234,6 +239,7 @@
         <tbody id="body-activities"></tbody>
       </table>
     </div>
+    <p class="activities-empty" id="notes-error" style="display:none"></p>
     <p class="activities-empty" id="no-match" style="display:none">No activities match these filters.</p>
     <div class="load-more-row">
       <button class="load-more-btn" id="load-more">Load more</button>
@@ -313,7 +319,7 @@
   function renderRows(rows) {
     const body = document.getElementById('body-activities');
     body.insertAdjacentHTML('beforeend', rows.map(r => `
-      <tr>
+      <tr data-wk="${weekStart(r.start_date)}">
         <td class="act-date">${esc(r.start_date ? r.start_date.slice(0, 10) : '—')}</td>
         <td class="act-name">${r.is_run
           ? `<a class="entity-link" href="/activity.html?id=${r.id}">${esc(r.name ?? 'Untitled')}</a>`
@@ -325,6 +331,39 @@
         ${td(r.avg_hr != null ? `${r.avg_hr}<span class="act-unit"> bpm</span>` : null, 'r act-fig')}
       </tr>
     `).join(''));
+  }
+
+  function weekStart(startDate) {
+    if (!startDate) return '';
+    const d = new Date(`${startDate.slice(0, 10)}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7);
+    return d.toISOString().slice(0, 10);
+  }
+
+  // Week notes land above the first row of their week, after the rows are
+  // shown; a failed request only reports itself under the table.
+  async function showWeekNotes(rows) {
+    const dates = rows.map(r => r.start_date?.slice(0, 10)).filter(Boolean).sort();
+    if (!dates.length) return;
+    const err = document.getElementById('notes-error');
+    try {
+      const res = await fetch(`/api/week-notes?start_date=${dates[0]}&end_date=${dates[dates.length - 1]}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      for (const n of await res.json()) {
+        const first = document.querySelector(`#body-activities tr[data-wk="${n.week_start}"]`);
+        if (!first || document.querySelector(`#body-activities tr.week-note[data-wk="${n.week_start}"]`)) continue;
+        first.insertAdjacentHTML('beforebegin', `
+          <tr class="week-note" data-wk="${n.week_start}"><td colspan="7">
+            <span class="week-note-label">Week of ${n.week_start}</span>
+            ${n.tags?.length ? `<span class="week-note-tags">· ${esc(n.tags.join(', '))}</span>` : ''}
+            ${n.note ? `— ${esc(n.note)}` : ''}
+          </td></tr>`);
+      }
+      err.style.display = 'none';
+    } catch (e) {
+      err.textContent = `Week notes failed to load: ${e.message}`;
+      err.style.display = '';
+    }
   }
 
   function filterParams() {
@@ -362,6 +401,7 @@
         offset = 0;
       }
       renderRows(page.rows);
+      showWeekNotes(page.rows);
       offset += page.rows.length;
       document.getElementById('no-match').style.display = offset === 0 ? '' : 'none';
       btn.style.display = page.has_more ? '' : 'none';

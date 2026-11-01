@@ -26,6 +26,15 @@
       margin-bottom: 1.25rem;
       max-width: 60ch;
     }
+    .activity-view .note-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 0.875rem; margin-bottom: 1.25rem; max-width: 60ch; font-size: 0.8125rem; }
+    .activity-view .note-panel .note-short { font-weight: 600; color: var(--text); }
+    .activity-view .note-panel p { margin-top: 0.5rem; color: var(--text-secondary); white-space: pre-wrap; }
+    .activity-view .note-panel .note-meta { margin-top: 0.5rem; color: var(--muted); }
+    .activity-view .note-panel .chip { cursor: default; min-height: 0; padding: 0.125rem 0.5rem; font-size: 0.75rem; }
+    .activity-view .note-panel .chip-row { margin: 0.5rem 0 0; }
+    .activity-view .note-panel .badge { background: var(--muted); }
+    .activity-view .note-panel .badge.confirmed { background: var(--good); }
+    .activity-view .note-skeleton { height: 4rem; margin-bottom: 1.25rem; max-width: 60ch; }
     .activity-view .loading, .activity-view .error { font-size: 0.8125rem; color: var(--muted); padding: 1rem 0; }
 
     .activity-view .classify-panel {
@@ -343,6 +352,7 @@
 
     lastDetail = detail;
     renderHeader(detail);
+    loadNote();
 
     try {
       const streamsRes = await fetch(`/api/activity-streams?id=${activityId}`);
@@ -384,6 +394,7 @@
       </div>
       <div class="subtitle">${dateStr ?? ''}</div>
       ${d.description ? `<div class="description">${escapeHtml(d.description)}</div>` : ''}
+      <div id="note-panel"></div>
       <div class="stat-strip">
         ${statTile('Distance', d.distance_mi != null ? `${d.distance_mi.toFixed(2)}` : '—', 'mi')}
         ${statTile('Moving Time', fmt.time(d.moving_time_s) ?? '—')}
@@ -457,7 +468,52 @@
     wireToggles();
     initColumnPicker('table-laps');
     wireClassifyPanel();
+    paintNote();
     if (d.polyline) renderMap(d.polyline);
+  }
+
+  // The note loads on its own: the page never waits on it, and a failure shows
+  // inside its panel only. renderHeader repaints from this state.
+  let noteState = { status: 'loading' };
+
+  async function loadNote() {
+    try {
+      const res = await fetch(`/api/run-note?id=${activityId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      noteState = { status: 'ready', note: await res.json() };
+    } catch (e) {
+      noteState = { status: 'error', message: e.message };
+    }
+    paintNote();
+  }
+
+  function paintNote() {
+    const el = document.getElementById('note-panel');
+    if (!el) return;
+    if (noteState.status === 'loading') { el.innerHTML = '<div class="skeleton note-skeleton"></div>'; return; }
+    if (noteState.status === 'error') { el.innerHTML = `<div class="error">Note failed to load: ${escapeHtml(noteState.message)}</div>`; return; }
+    const n = noteState.note;
+    if (!n) { el.innerHTML = ''; return; }
+    const e = escapeHtml;
+    const meta = [];
+    if (n.kind) meta.push(`Kind: ${e(n.kind)}`);
+    for (const x of n.elements ?? []) {
+      meta.push(`${x.count}× ${e(x.type.replace(/_/g, ' '))}${x.duration_s ? ` (${x.duration_s}s)` : ''}`);
+    }
+    if (n.fueling) {
+      const f = n.fueling;
+      meta.push(['Fuel:', f.carbs_g != null && `${f.carbs_g} g carbs`, f.fluid_ml != null && `${f.fluid_ml} ml fluid`, f.notes && e(f.notes)].filter(Boolean).join(' '));
+    }
+    if (n.plan_delta) meta.push(`Plan: ${e(n.plan_delta.status.replace(/_/g, ' '))}${n.plan_delta.reason ? ` — ${e(n.plan_delta.reason)}` : ''}`);
+    el.innerHTML = `
+      <div class="note-panel">
+        <div><span class="note-short">${e(n.short)}</span>
+          <span class="badge ${n.athlete_confirmed ? 'confirmed' : ''}">${n.athlete_confirmed ? 'CONFIRMED' : 'DRAFT'}</span></div>
+        ${n.long ? `<p>${e(n.long)}</p>` : ''}
+        ${n.feel ? `<p>“${e(n.feel)}”</p>` : ''}
+        ${meta.map(m => `<div class="note-meta">${m}</div>`).join('')}
+        ${n.tags?.length ? `<div class="chip-row">${n.tags.map(t => `<span class="chip">${e(t)}</span>`).join('')}</div>` : ''}
+      </div>`;
   }
 
   const RUN_TYPES = ['easy', 'race', 'long_run', 'workout'];

@@ -76,6 +76,33 @@ def _gap_split(
     return None
 
 
+def _edge_gap_split(speeds: list[float], distances_m: list[float]) -> set[int] | None:
+    """
+    Session-level split (min gap 6%). When the largest gap's slow side is all
+    interior it only separates jog-recovery outliers (a walking-pace rest lap
+    dwarfs every other gap) and leaves warmup/cooldown miles counted as work. So
+    those laps are set aside and the split retried on the rest; a retried split
+    that reaches an edge lap is used when its fast side holds at least a quarter
+    of the remaining distance, otherwise the first split stands.
+    """
+    cand = list(range(len(speeds)))
+    first: set[int] | None = None
+    interior: set[int] = set()
+    for _ in range(len(speeds)):
+        slow = _gap_split(cand, speeds, distances_m, min_gap=0.06)
+        if slow is None:
+            break
+        first = first or slow
+        if cand[0] in slow or cand[-1] in slow:
+            fast_m = sum(distances_m[i] for i in cand if i not in slow)
+            if not interior or fast_m >= 0.25 * sum(distances_m[i] for i in cand):
+                return slow | interior
+            break
+        interior |= slow
+        cand = [i for i in cand if i not in slow]
+    return first
+
+
 def _classify_block(
     speeds: list[float],
     distances_m: list[float],
@@ -89,7 +116,8 @@ def _classify_block(
     sit relative to the fast laps, not by pace — so warmup miles are separated from
     interval recoveries even when their paces overlap.
 
-    1. Split fast/slow at the largest relative speed gap ("steady" if no gap >= 6%).
+    1. Split fast/slow at the largest relative speed gap that reaches an edge lap
+       ("steady" if no gap >= 6%).
     2. The work block spans first to last fast lap; laps before/after are
        warmup/cooldown, slow laps inside are recovery.
     3. A second gap split inside the block separates jog recoveries from reps when
@@ -110,7 +138,7 @@ def _classify_block(
     # Session level uses a lower gap floor: warmup-to-work contrast can be modest
     # (e.g. flux with a brisk warmup), while the 8% inner floor keeps intentional
     # alternation (flux fast/slow halves, ~7% apart) intact as one work block.
-    slow_set = _gap_split(list(range(n)), speeds, distances_m, min_gap=0.06)
+    slow_set = _edge_gap_split(speeds, distances_m)
     if slow_set is None:
         return ["steady"] * n
 

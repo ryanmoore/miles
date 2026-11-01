@@ -56,7 +56,8 @@ def register_notes_tools(mcp: FastMCP) -> None:
         """
         Runs between two dates (YYYY-MM-DD) that still need a note: runs with no
         note, plus workouts, long runs and races whose note has no `long`. Each
-        has basic stats and `detected_elements`: strides or hill sprints found in
+        has basic stats, `desc` (the athlete's own Strava description, cut to
+        300 characters; a good source for `feel`) and `detected_elements`: strides or hill sprints found in
         its stream, as proposals to confirm against the athlete before writing.
         """
         with db.connection(connect_derived) as conn:
@@ -108,17 +109,26 @@ def register_notes_tools(mcp: FastMCP) -> None:
         week of end_date (default today) get full detail (`weeks`): per week
         miles vs the plan's target band (`plan`), week note (`tags`, `wnote`),
         plan adjustments (`adj`), and per run its stats, biggest single climb
-        and descent (`climb`/`descent`: ft at average % grade), the run note
+        and descent (`climb`/`descent`: ft at average % grade; one sustained
+        effort, a flat lead-in or a drop ends it), `desc` (the athlete's Strava
+        description, cut to 300 characters), the run note
         (`note` is the long text when written, else the short; with `feel`,
         `tags`, `el`, `fuel`, `delta`) or stream-detected `el_detected`. A
-        workout has `struct` (its work laps) and `vs`, the latest earlier
-        session of the same kind with pace (s/mi, negative = faster) and HR
-        deltas; a long run has `splits` ("mile: pace hr +ascent/-descent" in
-        ft). Weeks back to 26 are one line each (`earlier_weeks`: miles, long
+        workout has `struct` (its work laps) and `vs`, an earlier session of the
+        same label with pace (s/mi, negative = faster) and HR deltas: the latest
+        with a similar structure (`match: structure`, rep count within 2, rep
+        length within 25%), else the latest of that label in the past year
+        (`match: label`). A tagged long run, or any other run of 10+ miles or
+        90+ minutes, has `splits` ("mile: pace hr +ascent/-descent" in ft).
+        `plan_days` lists the planned days of this week and next. Weeks back to 26 are one line each (`earlier_weeks`: miles, long
         run, sessions, strides count, tags); older history is one line per
-        training period. `last_sync_at` and `days_stale` say how fresh it is.
+        training period. `last_sync_at`, `days_stale` and `last_activity` (date of the newest
+        synced activity) say how fresh it is.
         Detections are proposals, not facts. `struct` comes from the lap
-        classifier and can be wrong; a run note's `long` is where to correct it. Paces are min/mile, temps °F.
+        classifier and can be wrong; a run note's `long` is where to correct it. Paces are min/mile. `temp_f` is the Open-Meteo modelled 2 m air temperature,
+        averaged over the hours the run spans at its start location (a different
+        source or a reading near the start can differ by several degrees);
+        `wind_kph` is Open-Meteo's average 10 m wind over the same hours.
         """
         if weeks < 1:
             raise ValueError("weeks must be at least 1")

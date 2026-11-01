@@ -10,13 +10,18 @@ from typing import Any
 
 from . import db, elements, notes
 from .format import fmt_pace, fmt_time
-from .gpx_parse import segment_climbs
 from .periods import detect_periods, monday_of
 from .plan import current_version_for_week
 from .races import effective_race_activities, run_sport_filter, week_aggs
 
 LINE_WEEKS = 26
 LONG_RUN_MILES = 10.0
+LONG_RUN_MIN = 90
+CLIMB_BASELINE_PCT = 3.0
+CLIMB_MIN_GAIN_M = 30.0
+MATCH_LOOKBACK_DAYS = 365
+MATCH_CANDIDATES = 40
+PLAN_NOTE_CHARS = 100
 MAX_LISTED_REPS = 12
 FT_PER_M = 3.28084
 SESSION_TYPES = ("workout", "race")
@@ -90,8 +95,10 @@ def _similar(a: float, b: float) -> bool:
 
 
 def _previous_session(conn: sqlite3.Connection, run: sqlite3.Row, current: dict[str, Any]) -> dict[str, Any] | None:
-    """The most recent earlier session of the same kind: the same workout label,
-    else the same dominant intensity with a similar rep count and size."""
+    """The most recent earlier session of the same kind (the same workout label,
+    else the same dominant intensity) with a similar structure: rep count within
+    two, rep duration or distance within 25%. A labelled session with no such
+    match in the last year falls back to the latest one with the same label."""
     if run["workout_label"]:
         match, args = "a.workout_label = ?", [run["workout_label"]]
     elif run["dominant_intensity"]:
@@ -99,47 +106,73 @@ def _previous_session(conn: sqlite3.Connection, run: sqlite3.Row, current: dict[
     else:
         return None
     sport_clause, sport_args = run_sport_filter("a")
+    since = (date.fromisoformat(run["date"]) - timedelta(days=MATCH_LOOKBACK_DAYS)).isoformat()
+    label_match: tuple[sqlite3.Row, dict[str, Any]] | None = None
+    found: tuple[sqlite3.Row, dict[str, Any], str] | None = None
     for prior in conn.execute(
         f"""
         SELECT a.activity_id, DATE(a.start_date) AS date FROM activities a
-        WHERE {sport_clause} AND {match} AND a.start_date < ? AND a.activity_id != ?
+        WHERE {sport_clause} AND {match} AND a.start_date < ? AND a.activity_id != ? AND DATE(a.start_date) >= ?
           AND EXISTS (SELECT 1 FROM laps l WHERE l.activity_id = a.activity_id AND l.lap_type = 'work')
-        ORDER BY a.start_date DESC LIMIT 15
+        ORDER BY a.start_date DESC LIMIT ?
         """,
-        [*sport_args, *args, run["start_date"], run["activity_id"]],
+        [*sport_args, *args, run["start_date"], run["activity_id"], since, MATCH_CANDIDATES],
     ).fetchall():
         structure = _structure(conn, prior["activity_id"])
         if structure is None:
             continue
-        if not run["workout_label"] and not (
-            abs(structure["n"] - current["n"]) <= 1
-            and (_similar(structure["rep_s"], current["rep_s"]) or _similar(structure["rep_m"], current["rep_m"]))
+        if abs(structure["n"] - current["n"]) <= 2 and (
+            _similar(structure["rep_s"], current["rep_s"]) or _similar(structure["rep_m"], current["rep_m"])
         ):
-            continue
-        return _compact({
-            "id": prior["activity_id"],
-            "d": prior["date"],
-            "s": structure["text"],
-            "pace_delta_s": round(current["pace_s"] - structure["pace_s"]),
-            "hr_delta": round(current["hr"] - structure["hr"]) if current["hr"] and structure["hr"] else None,
-        })
-    return None
+            found = (prior, structure, "structure")
+            break
+        label_match = label_match or (prior, structure)
+    if found is None and run["workout_label"] and label_match:
+        found = (*label_match, "label")
+    if found is None:
+        return None
+    prior, structure, kind = found
+    return _compact({
+        "id": prior["activity_id"],
+        "d": prior["date"],
+        "s": structure["text"],
+        "match": kind,
+        "pace_delta_s": round(current["pace_s"] - structure["pace_s"]),
+        "hr_delta": round(current["hr"] - structure["hr"]) if current["hr"] and structure["hr"] else None,
+    })
 
 
 # --- stream-derived detail ---------------------------------------------------
 
 
+def _best_leg(rises: list[float]) -> tuple[int, int, float] | None:
+    """The contiguous run of 20 m segments with the most elevation gained above a
+    CLIMB_BASELINE_PCT grade (Kadane over `rises`, metres gained per segment).
+    A flat lead-in or a real drop ends the leg, so a climb is one sustained
+    effort rather than a trough-to-peak span across rolling ground."""
+    baseline = CLIMB_BASELINE_PCT * elements.SEGMENT_M / 100.0
+    best: tuple[int, int, float] | None = None
+    start, score = 0, 0.0
+    for i, rise in enumerate(rises):
+        if score <= 0:
+            start, score = i, 0.0
+        score += rise - baseline
+        if score > 0 and (best is None or score > best[2]):
+            best = (start, i + 1, score)
+    return best
+
+
 def _climb_extremes(segments: list[elements.Segment]) -> dict[str, Any]:
-    dist = [s.dist_m for s in segments] + [segments[-1].dist_m + elements.SEGMENT_M]
-    ele = [0.0]
-    for s in segments:
-        ele.append(ele[-1] + s.grade_pct * elements.SEGMENT_M / 100.0)
     out: dict[str, Any] = {}
-    for kind in ("climb", "descent"):
-        found = [c for c in segment_climbs(dist, ele) if c["kind"] == kind]
-        if found:
-            biggest = max(found, key=lambda c: c["gain_m"])
-            out[kind] = {"ft": round(biggest["gain_m"] * FT_PER_M), "pct": round(abs(biggest["avg_grade"]) * 100, 1)}
+    for kind, sign in (("climb", 1.0), ("descent", -1.0)):
+        rises = [sign * s.grade_pct * elements.SEGMENT_M / 100.0 for s in segments]
+        leg = _best_leg(rises)
+        if leg is None:
+            continue
+        lo, hi, _ = leg
+        gain = sum(rises[lo:hi])
+        if gain >= CLIMB_MIN_GAIN_M:
+            out[kind] = {"ft": round(gain * FT_PER_M), "pct": round(gain / ((hi - lo) * elements.SEGMENT_M) * 100, 1)}
     return out
 
 
@@ -201,7 +234,6 @@ def _run_detail(
     note: dict[str, object] | None,
     segments: list[elements.Segment],
     detected: list[elements.Element],
-    is_long: bool,
 ) -> dict[str, Any]:
     temp_c = run["temp_c"]
     out = {
@@ -214,7 +246,9 @@ def _run_detail(
         "pace": _pace(run["distance_m"], run["moving_time_s"]),
         "hr": round(run["average_heartrate"]) if run["average_heartrate"] else None,
         "temp_f": round(temp_c * 9 / 5 + 32) if temp_c is not None else None,
+        "wind_kph": round(run["wind_kph"]) if run["wind_kph"] is not None else None,
         "vert": round(run["total_elevation_gain_m"] * FT_PER_M) if run["total_elevation_gain_m"] else None,
+        "desc": notes.short_description(run["description"]),
         **(_climb_extremes(segments) if segments else {}),
         **_note_fields(note, run["type"]),
     }
@@ -224,15 +258,19 @@ def _run_detail(
     if structure:
         out["struct"] = structure["text"]
         out["vs"] = _previous_session(conn, run, structure)
-    if is_long:
+    if _is_long(run):
         out["splits"] = _mile_splits(segments) if segments else _lap_splits(conn, run["activity_id"])
     return _compact(out)
 
 
-def _is_long(run: sqlite3.Row, is_longest: bool) -> bool:
-    """A tagged long run, or the week's longest run when it is long enough to be one."""
+def _is_long(run: sqlite3.Row) -> bool:
+    """A tagged long run, or any other non-session run of 10 miles or 90 minutes moving."""
     return run["type"] == "long_run" or (
-        is_longest and run["type"] not in SESSION_TYPES and run["distance_m"] >= LONG_RUN_MILES * elements.M_PER_MILE
+        run["type"] not in SESSION_TYPES
+        and (
+            (run["distance_m"] or 0) >= LONG_RUN_MILES * elements.M_PER_MILE
+            or (run["moving_time_s"] or 0) >= LONG_RUN_MIN * 60
+        )
     )
 
 
@@ -262,6 +300,29 @@ def _plan_weeks(conn: sqlite3.Connection, mondays: list[date]) -> dict[str, str]
             if week and week["target_miles"] is not None:
                 lo, hi = week["target_miles"], week["target_miles_hi"]
                 out[monday.isoformat()] = f"{lo:g}-{hi:g}" if hi and hi != lo else f"{lo:g}"
+                break
+    return out
+
+
+def _plan_days(conn: sqlite3.Connection, this_monday: date) -> list[dict[str, Any]]:
+    """Planned days of this week and the next, from the version governing each week."""
+    out: list[dict[str, Any]] = []
+    for monday in (this_monday, this_monday + timedelta(weeks=1)):
+        week_end = (monday + timedelta(days=6)).isoformat()
+        for plan in conn.execute("SELECT plan_id FROM plans ORDER BY created_at DESC"):
+            bundle = current_version_for_week(conn, plan["plan_id"], monday)
+            if bundle and any(w["week_start"] == monday.isoformat() for w in bundle["weeks"]):
+                out += [
+                    _compact({
+                        "d": d["date"],
+                        "slot": d["slot"],
+                        "title": d["title"],
+                        "mi": d["target_miles"],
+                        "note": (d["note"] or "")[:PLAN_NOTE_CHARS] or None,
+                    })
+                    for d in bundle["days"]
+                    if monday.isoformat() <= d["date"] <= week_end
+                ]
                 break
     return out
 
@@ -307,7 +368,8 @@ def recent_history(conn: sqlite3.Connection, weeks: int, end: date) -> dict[str,
         f"""
         SELECT a.activity_id, a.name, a.start_date, DATE(a.start_date) AS date, {db.effective_run_type_sql('a')} AS type,
                a.workout_label, a.dominant_intensity, a.distance_m, a.moving_time_s, a.average_heartrate,
-               a.total_elevation_gain_m, COALESCE(w.temp_c_avg, w.temp_c_start) AS temp_c
+               a.total_elevation_gain_m, a.description, COALESCE(w.temp_c_avg, w.temp_c_start) AS temp_c,
+               w.wind_kph_avg AS wind_kph
         FROM activities a LEFT JOIN weather w ON w.activity_id = a.activity_id
         WHERE {sport_clause} AND DATE(a.start_date) BETWEEN ? AND ? ORDER BY a.start_date
         """,
@@ -332,8 +394,7 @@ def recent_history(conn: sqlite3.Connection, weeks: int, end: date) -> dict[str,
     for monday in mondays:
         key = monday.isoformat()
         week_runs = by_week.get(key, [])
-        longest = max(week_runs, key=lambda r: r["distance_m"] or 0, default=None)
-        long_runs = [r for r in week_runs if _is_long(r, r is longest)]
+        long_runs = [r for r in week_runs if _is_long(r)]
         week_note = week_notes.get(key, {})
         head = {
             "wk": key,
@@ -350,7 +411,7 @@ def recent_history(conn: sqlite3.Connection, weeks: int, end: date) -> dict[str,
                 "r": [
                     _run_detail(
                         conn, r, run_notes.get(r["activity_id"]), segments.get(r["activity_id"], []),
-                        detected.get(r["activity_id"], []), r in long_runs,
+                        detected.get(r["activity_id"], []),
                     )
                     for r in week_runs
                 ],
@@ -372,6 +433,8 @@ def recent_history(conn: sqlite3.Connection, weeks: int, end: date) -> dict[str,
         "as_of": end.isoformat(),
         "last_sync_at": last_sync,
         "days_stale": db.days_stale(last_sync),
+        "last_activity": conn.execute("SELECT MAX(DATE(start_date)) FROM activities").fetchone()[0],
+        "plan_days": _plan_days(conn, this_monday),
         "weeks": full,
         "earlier_weeks": lines,
         "periods": _period_lines(conn, line_start.isoformat()),

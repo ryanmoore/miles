@@ -17,6 +17,7 @@ ELEMENT_SOURCES = ("laps", "stream", "athlete")
 PLAN_STATUSES = ("as_planned", "modified", "cut_short", "skipped_part")
 FUELING_KEYS = ("carbs_g", "fluid_ml", "notes")
 SHORT_MAX_CHARS = 160
+DESCRIPTION_CHARS = 300
 RUN_NOTE_FIELDS = (
     "short", "long", "kind", "elements", "feel", "tags", "fueling", "plan_delta", "written_by", "athlete_confirmed"
 )
@@ -138,6 +139,12 @@ def _validated(field: str, value: object) -> object:
     return json.dumps(stored)
 
 
+def short_description(text: str | None) -> str | None:
+    """The athlete's own Strava description, whitespace-collapsed and cut to DESCRIPTION_CHARS."""
+    flat = " ".join((text or "").split())
+    return (flat if len(flat) <= DESCRIPTION_CHARS else flat[: DESCRIPTION_CHARS - 1].rstrip() + "…") or None
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -255,7 +262,7 @@ def list_unnoted_runs(conn: sqlite3.Connection, start_date: str, end_date: str) 
     rows = conn.execute(
         f"""
         SELECT a.activity_id, a.name, DATE(a.start_date) AS date, {effective} AS type, a.workout_label,
-               a.distance_m, a.moving_time_s, a.average_heartrate, a.total_elevation_gain_m, n.short
+               a.distance_m, a.moving_time_s, a.average_heartrate, a.total_elevation_gain_m, a.description, n.short
         FROM activities a LEFT JOIN run_notes n ON n.activity_id = a.activity_id
         WHERE {sport_clause} AND DATE(a.start_date) BETWEEN ? AND ?
           AND (n.activity_id IS NULL OR (n.long IS NULL AND {effective} IN ('workout', 'long_run', 'race')))
@@ -270,6 +277,7 @@ def list_unnoted_runs(conn: sqlite3.Connection, start_date: str, end_date: str) 
             "miles": round(r["distance_m"] / elements.M_PER_MILE, 2) if r["distance_m"] else None,
             "avg_hr": round(r["average_heartrate"]) if r["average_heartrate"] else None,
             "vert_ft": round(r["total_elevation_gain_m"] * 3.28084) if r["total_elevation_gain_m"] else None,
+            "desc": short_description(r["description"]),
             "detected_elements": detected.get(r["activity_id"]) or None,
         }
         for r in rows

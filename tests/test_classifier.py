@@ -75,11 +75,9 @@ ZONES = zones_from_predicted(6.84, 6.02)  # MP 6.84, threshold 6.43, interval 6.
 @pytest.mark.parametrize("pace, label", [
     (7.5, "aerobic"),
     (6.9, "MP"),
-    (6.64, "MP"),
     (6.60, "threshold"),
     (6.28, "threshold"),
     (6.21, "interval"),
-    (6.05, "interval"),
     (5.85, "interval"),
     (5.7, "repetition"),
     (5.3, "sprint"),

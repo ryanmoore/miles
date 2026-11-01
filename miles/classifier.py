@@ -78,12 +78,10 @@ def _gap_split(
 
 def _edge_gap_split(speeds: list[float], distances_m: list[float]) -> set[int] | None:
     """
-    Session-level split (min gap 6%). When the largest gap's slow side is all
-    interior it only separates jog-recovery outliers (a walking-pace rest lap
-    dwarfs every other gap) and leaves warmup/cooldown miles counted as work. So
-    those laps are set aside and the split retried on the rest; a retried split
-    that reaches an edge lap is used when its fast side holds at least a quarter
-    of the remaining distance, otherwise the first split stands.
+    Session-level split (min gap 6%). A split whose slow laps are all interior only
+    sets jog-recovery outliers apart, leaving warmup/cooldown counted as work: set
+    those aside and retry. A retried edge split needs a fast side of at least a
+    quarter of the remaining distance; otherwise the first split stands.
     """
     cand = list(range(len(speeds)))
     first: set[int] | None = None

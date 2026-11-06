@@ -27,10 +27,6 @@ Design (see adr/0001-training-plans-as-versioned-ground-truth.md):
     workout_pace_delta_s — grade makes road pace bands meaningless. The
     activity still counts toward the week's mileage and workout-count bands;
     only its pace contribution to a matched workout slot is suppressed.
-  - Strength: actual_strength_days counts distinct dates with a synced
-    STRENGTH_SPORT_TYPES activity that week — displayed alongside
-    target_strength_days, never scored (no band, no flag; gym logging in
-    Strava is too inconsistent to judge silence).
   - Workout pace: synced workout-type activities in the week are matched to
     planned workout slots by count (date order), preferring an exact
     keyword match (classify_workout's label vs the planned slot's title)
@@ -92,10 +88,6 @@ LONG_RUN_ON_RATIO = 0.85
 # actual work-lap pace against it (see workout_pace_delta_s in the docstring above).
 PACE_TOLERANCE = 10.0
 
-# Strength activities counted into actual_strength_days — displayed only,
-# never banded or flagged (see the module docstring).
-STRENGTH_SPORT_TYPES: tuple[str, ...] = ("WeightTraining", "Workout")
-
 
 # --- pure data shapes --------------------------------------------------------
 
@@ -117,7 +109,6 @@ class PlannedWorkoutSlot(TypedDict):
 class WeekActuals(TypedDict):
     actual_miles: float
     actual_workouts: int
-    actual_strength_days: int  # distinct dates with a synced STRENGTH_SPORT_TYPES activity
     long_run_miles: float | None  # longest single run that week (any run_type), None if no runs
     long_run_minutes: float | None  # longest single run's moving time that week, None if no runs
     workout_paces: list[WorkoutPace]
@@ -145,7 +136,6 @@ class _WeekCalc(ScoredWeek):
     version_n_used: int
     actual_miles: float
     actual_workouts: int
-    actual_strength_days: int
     target_workouts: int
     target_miles: float | None
 
@@ -338,11 +328,11 @@ def score_week(
 _SMALL_NUMS = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine"}
 
 
-def _spell(n: int) -> str:
+def spell(n: int) -> str:
     return _SMALL_NUMS.get(n, str(n))
 
 
-def _flag_runs(flagged: list[bool]) -> list[tuple[int, int]]:
+def flag_runs(flagged: list[bool]) -> list[tuple[int, int]]:
     """Maximal runs of consecutive True values with length >= 2, as (start, end)
     inclusive indices. Single True values in isolation never qualify."""
     runs: list[tuple[int, int]] = []
@@ -364,7 +354,7 @@ def _mileage_flag(kind: str, run: list[_WeekCalc]) -> FlagEntry:
     n = len(run)
     pcts = [f"{round(r['mileage_ratio'] * 100)}%" for r in run if r["mileage_ratio"] is not None]
     direction = "under" if kind == "mileage_off_low" else "over"
-    message = f"weekly mileage ran {', '.join(pcts)} of target ({direction}) across the last {_spell(n)} weeks"
+    message = f"weekly mileage ran {', '.join(pcts)} of target ({direction}) across the last {spell(n)} weeks"
     return {"type": kind, "weeks": n, "since": run[0]["week_start"], "message": message}
 
 
@@ -373,16 +363,16 @@ def _workout_flag(run: list[_WeekCalc]) -> FlagEntry:
     pairs = {(r["actual_workouts"], r["target_workouts"]) for r in run}
     if len(pairs) == 1:
         actual, target = next(iter(pairs))
-        message = f"workouts {actual} of {target} in each of the last {_spell(n)} weeks"
+        message = f"workouts {actual} of {target} in each of the last {spell(n)} weeks"
     else:
         parts = ", ".join(f"{r['actual_workouts']} of {r['target_workouts']}" for r in run)
-        message = f"workout counts of {parts} over the last {_spell(n)} weeks"
+        message = f"workout counts of {parts} over the last {spell(n)} weeks"
     return {"type": "workout_count_short", "weeks": n, "since": run[0]["week_start"], "message": message}
 
 
 def _long_run_flag(run: list[_WeekCalc]) -> FlagEntry:
     n = len(run)
-    message = f"long run under {round(LONG_RUN_ON_RATIO * 100)}% of target in each of the last {_spell(n)} weeks"
+    message = f"long run under {round(LONG_RUN_ON_RATIO * 100)}% of target in each of the last {spell(n)} weeks"
     return {"type": "long_run_missed", "weeks": n, "since": run[0]["week_start"], "message": message}
 
 
@@ -396,22 +386,22 @@ def _build_flags(rows: list[_WeekCalc]) -> dict[str, list[FlagEntry]]:
     off_high = [r["mileage_band"] == "off" and r["mileage_off_direction"] == "high" for r in rows]
     workout_short = [r["workout_band"] != "on" for r in rows]
 
-    for start, end in _flag_runs(off_low):
+    for start, end in flag_runs(off_low):
         flags_by_week.setdefault(rows[end]["week_start"], []).append(
             _mileage_flag("mileage_off_low", rows[start : end + 1])
         )
-    for start, end in _flag_runs(off_high):
+    for start, end in flag_runs(off_high):
         flags_by_week.setdefault(rows[end]["week_start"], []).append(
             _mileage_flag("mileage_off_high", rows[start : end + 1])
         )
-    for start, end in _flag_runs(workout_short):
+    for start, end in flag_runs(workout_short):
         flags_by_week.setdefault(rows[end]["week_start"], []).append(_workout_flag(rows[start : end + 1]))
 
     # Long run pattern is judged only over weeks that had a target at all —
     # weeks with none neither extend nor break a streak, they're simply absent.
     applicable = [r for r in rows if r["long_run_done"] is not None]
     missed = [not r["long_run_done"] for r in applicable]
-    for start, end in _flag_runs(missed):
+    for start, end in flag_runs(missed):
         flags_by_week.setdefault(applicable[end]["week_start"], []).append(
             _long_run_flag(applicable[start : end + 1])
         )
@@ -420,11 +410,6 @@ def _build_flags(rows: list[_WeekCalc]) -> dict[str, list[FlagEntry]]:
 
 
 # --- conn-taking orchestrator --------------------------------------------------
-
-def _strength_type_clause() -> tuple[str, list[str]]:
-    ph = ",".join("?" * len(STRENGTH_SPORT_TYPES))
-    return f"sport_type IN ({ph})", list(STRENGTH_SPORT_TYPES)
-
 
 def _work_lap_pace(conn: sqlite3.Connection, activity_id: int) -> tuple[float, float] | None:
     """(pace_min_per_mile, distance_mi) distance-weighted over an activity's
@@ -480,21 +465,9 @@ def _gather_actuals(conn: sqlite3.Connection, week_start: date, week_end: date) 
                 "distance_mi": wl[1] if wl is not None else 0.0,
             })
 
-    tc_s, tp_s = _strength_type_clause()
-    strength_row = conn.execute(
-        f"""
-        SELECT COUNT(DISTINCT DATE(start_date)) AS n
-        FROM activities
-        WHERE {tc_s} AND DATE(start_date) >= ? AND DATE(start_date) <= ?
-        """,
-        tp_s + [week_start.isoformat(), week_end.isoformat()],
-    ).fetchone()
-    actual_strength_days = int(strength_row["n"] or 0) if strength_row is not None else 0
-
     return {
         "actual_miles": round(actual_miles, 2),
         "actual_workouts": actual_workouts,
-        "actual_strength_days": actual_strength_days,
         "long_run_miles": long_run_miles,
         "long_run_minutes": long_run_minutes,
         "workout_paces": workout_paces,
@@ -525,7 +498,7 @@ def _target_plans(conn: sqlite3.Connection) -> list[tuple[int, str]]:
     return [(p["plan_id"], p["last_week"]) for p in plans if p["last_week"] is not None]
 
 
-def _sync_cutoff(conn: sqlite3.Connection) -> date:
+def sync_cutoff(conn: sqlite3.Connection) -> date:
     """The first week-Sunday NOT eligible for scoring: meta.last_sync_at's
     DATE, or today when no sync has ever stamped it (pre-v2 DBs) — see the
     unsynced-week guard in the module docstring. A week whose Sunday is
@@ -537,12 +510,12 @@ def _sync_cutoff(conn: sqlite3.Connection) -> date:
 def compute_plan_adherence(conn: sqlite3.Connection) -> list[PlanAdherenceRow]:
     """Full recompute across every plan worth scoring (see _target_plans):
     every week fully covered by the sync (week's Sunday before the sync
-    cutoff — see _sync_cutoff) scored against each week's contemporaneous
+    cutoff — see sync_cutoff) scored against each week's contemporaneous
     version. Returns [] when there are no active or completed plans at all —
     the expected case for a fresh DB, and the only condition derive.py's
     _plan_adherence_pass relies on to no-op cleanly. Never raises on a
     plan-less DB."""
-    cutoff = _sync_cutoff(conn)
+    cutoff = sync_cutoff(conn)
     out: list[PlanAdherenceRow] = []
     for plan_id, last_week in _target_plans(conn):
         out.extend(_compute_for_plan(conn, plan_id, last_week, cutoff))
@@ -598,7 +571,6 @@ def _compute_for_plan(
             "version_n_used": governing["version"]["version_n"],
             "actual_miles": actuals["actual_miles"],
             "actual_workouts": actuals["actual_workouts"],
-            "actual_strength_days": actuals["actual_strength_days"],
             "target_workouts": week_row["target_workouts"],
             "target_miles": week_row["target_miles"],
         })
@@ -615,7 +587,6 @@ def _compute_for_plan(
             "version_n_used": r["version_n_used"],
             "actual_miles": r["actual_miles"],
             "actual_workouts": r["actual_workouts"],
-            "actual_strength_days": r["actual_strength_days"],
             "long_run_done": None if r["long_run_done"] is None else int(r["long_run_done"]),
             "mileage_ratio": r["mileage_ratio"],
             "workout_pace_delta_s": r["workout_pace_delta_s"],

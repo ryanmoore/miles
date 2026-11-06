@@ -4,8 +4,8 @@ whose laps don't show them. Detections are proposals: nothing here writes notes.
 import sqlite3
 import statistics
 from collections import defaultdict
-from collections.abc import Callable, Sequence
-from typing import NamedTuple
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, NamedTuple
 from typing_extensions import TypedDict
 
 import numpy as np
@@ -165,3 +165,16 @@ def detect_for_activities(conn: sqlite3.Connection, activity_ids: Sequence[int])
     expected = terrain.default_model().expected_speed_mps
     segments, spans = load_segments(conn, activity_ids), work_lap_spans(conn, activity_ids)
     return {a: detect_elements(segs, expected, spans.get(a, ())) for a, segs in segments.items()}
+
+
+def unlisted(noted: object, detected: Sequence[Element]) -> list[Element]:
+    """Detections of types the run's note (its `elements` value, if any) doesn't
+    list. A type the note lists is the athlete's word, whatever its count:
+    `count: 0` rejects a false detection."""
+    listed = {e["type"] for e in noted} if isinstance(noted, list) else set()
+    return [d for d in detected if d["type"] not in listed]
+
+
+def merged(noted: object, detected: Sequence[Element]) -> list[Mapping[str, Any]]:
+    """A run's elements: the note's entries plus the detections it doesn't list."""
+    return [*(noted if isinstance(noted, list) else ()), *unlisted(noted, detected)]

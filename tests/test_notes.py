@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import call_tool, insert_activity
+from helpers import call_tool, insert_activity, insert_terrain_segments
 
 from miles import api, db, mcp_server
 
@@ -11,21 +11,6 @@ END = "2026-10-18"  # a Sunday; the week of 2026-10-12 is the latest
 
 def _tool(name: str, **args):
     return call_tool(mcp_server.mcp, name, args)
-
-
-def _segments(conn: sqlite3.Connection, activity_id: int, start_date: str, parts: list[tuple[int, float, float]]) -> None:
-    """Stored 20 m terrain segments from (count, speed m/s, grade %) parts."""
-    rows, idx = [], 0
-    for count, speed, grade in parts:
-        for _ in range(count):
-            rows.append((activity_id, idx, 20.0 * idx, round(grade * 10), round(speed * 100), 140 + idx // 100))
-            idx += 1
-    conn.execute("INSERT INTO terrain_segment_dates (activity_id, start_date, segment_count) VALUES (?, ?, ?)", [activity_id, start_date, idx])
-    conn.executemany(
-        "INSERT INTO terrain_segments (activity_id, idx, dist_m, grade_dpct, speed_cms, heartrate, is_walking, ele_source) "
-        "VALUES (?, ?, ?, ?, ?, ?, 0, 1)",
-        rows,
-    )
 
 
 def _laps(conn: sqlite3.Connection, activity_id: int, reps: int, rep_speed: float) -> None:
@@ -54,8 +39,8 @@ def seeded() -> None:
         insert_activity(conn, 20 + i, start_date=f"2026-01-{day}T08:00:00", distance_m=8000.0)
     _laps(conn, 1, 5, 4.0)
     _laps(conn, 2, 5, 4.1)
-    _segments(conn, 3, "2026-10-11", [(450, 3.0, 5.0), (450, 3.2, -5.0)])
-    _segments(conn, 4, "2026-10-15", [(250, 3.2, 0.0)] + [p for _ in range(5) for p in ((6, 5.8, 0.0), (24, 3.2, 0.0))] + [(20, 3.2, 0.0)])
+    insert_terrain_segments(conn, 3, "2026-10-11", [(450, 3.0, 5.0), (450, 3.2, -5.0)])
+    insert_terrain_segments(conn, 4, "2026-10-15", [(250, 3.2, 0.0)] + [p for _ in range(5) for p in ((6, 5.8, 0.0), (24, 3.2, 0.0))] + [(20, 3.2, 0.0)])
     conn.execute(
         "INSERT INTO plans (plan_id, title, created_at) VALUES (1, 'P', '2026-09-01')"
     )
@@ -179,8 +164,8 @@ def test_climbs_are_single_sustained_efforts_and_long_easy_runs_get_splits(seede
     insert_activity(conn, 30, start_date="2026-10-17T08:00:00", name="Long easy", distance_m=12000.0, moving_time_s=7300)
     insert_activity(conn, 31, start_date="2026-10-17T18:00:00", name="Short easy", distance_m=12000.0, moving_time_s=4000)
     flat_then_two_climbs = [(300, 3.0, 1.0), (100, 3.0, 7.0), (100, 3.0, -6.0), (60, 3.0, 7.0)]
-    _segments(conn, 30, "2026-10-17", flat_then_two_climbs)
-    _segments(conn, 31, "2026-10-17", flat_then_two_climbs)
+    insert_terrain_segments(conn, 30, "2026-10-17", flat_then_two_climbs)
+    insert_terrain_segments(conn, 31, "2026-10-17", flat_then_two_climbs)
     conn.commit()
     conn.close()
     runs = {r["id"]: r for r in _tool("get_recent_history", weeks=1, end_date=END)["weeks"][0]["r"]}

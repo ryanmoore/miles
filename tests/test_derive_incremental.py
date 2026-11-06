@@ -79,7 +79,7 @@ def _snapshot(conn: sqlite3.Connection) -> tuple[object, ...]:
         "SELECT lap_id, lap_type, intensity FROM laps ORDER BY lap_id",
         "SELECT month, confidence, source_tier, pace_5k, pace_10k, pace_half, pace_marathon "
         "FROM fitness_checkpoints ORDER BY month",
-        "SELECT plan_id, week_start, version_n_used, actual_miles, actual_workouts, actual_strength_days, "
+        "SELECT plan_id, week_start, version_n_used, actual_miles, actual_workouts, "
         "long_run_done, mileage_ratio, workout_pace_delta_s, band, flags_json FROM plan_adherence ORDER BY plan_id, week_start",
     ]
     return tuple(tuple(tuple(r) for r in conn.execute(q).fetchall()) for q in queries)

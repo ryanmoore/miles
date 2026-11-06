@@ -252,8 +252,9 @@ def _run_detail(
         **(_climb_extremes(segments) if segments else {}),
         **_note_fields(note, run["type"]),
     }
-    if not (note and note.get("elements") is not None):
-        out["el_detected"] = [{k: v for k, v in e.items() if k != "source"} for e in detected] or None
+    out["el_detected"] = [
+        {k: v for k, v in e.items() if k != "source"} for e in elements.unlisted((note or {}).get("elements"), detected)
+    ] or None
     structure = _structure(conn, run["activity_id"]) if run["type"] in SESSION_TYPES else None
     if structure:
         out["struct"] = structure["text"]
@@ -283,10 +284,9 @@ def _session_line(conn: sqlite3.Connection, run: sqlite3.Row, note: dict[str, ob
     return f"{run['type']} {run['distance_m'] / elements.M_PER_MILE:.1f}mi @ {_pace(run['distance_m'], run['moving_time_s'])}"
 
 
-def _strides(noted: object, detected: list[Any]) -> int:
-    """Stride and hill-sprint count from the run's note when it lists elements, else from detections."""
-    found = noted if isinstance(noted, list) else detected
-    return sum(e["count"] for e in found if e["type"] in STRIDE_TYPES)
+def _strides(noted: object, detected: list[elements.Element]) -> int:
+    """Stride and hill-sprint count: the note's entries, plus detections of types it doesn't list."""
+    return sum(e["count"] for e in elements.merged(noted, detected) if e["type"] in STRIDE_TYPES)
 
 
 def _governing_week(conn: sqlite3.Connection, monday: date) -> tuple[PlanVersionBundle, PlanWeekRow] | None:
@@ -381,7 +381,7 @@ def recent_history(conn: sqlite3.Connection, weeks: int, end: date) -> dict[str,
     week_notes = {n["week_start"]: n for n in notes.get_week_notes(conn, first.isoformat(), end.isoformat())}
     in_window = {r["activity_id"] for r in runs if r["date"] >= window_start.isoformat()}
     segments = elements.load_segments(conn, [i for i in ids if i in in_window]) if in_window else {}
-    detected = elements.detect_for_activities(conn, [i for i in ids if "elements" not in run_notes.get(i, {})])
+    detected = elements.detect_for_activities(conn, ids)
 
     by_week: dict[str, list[sqlite3.Row]] = defaultdict(list)
     for r in runs:

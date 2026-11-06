@@ -74,6 +74,7 @@ _SCHEMA_HASHES = {
     7: "239c51462c312234af1a0eac93e415c3f5a73cdfefd5168082b3312f9ab25a96",
     8: "a3b37b8498aa8655f0beab0aae5b1fdada6175eaa74f355af865ce200d0f3e15",
     9: "a58ef658c4241bb2a4b1f3821076b41933b76a9c501807ba3134639b792716b3",
+    10: "52def532fe3a366d76c3670eef9e225ec6a22c6c254b2ce04f1bc645ba49f1ee",
 }
 
 
@@ -191,6 +192,40 @@ def test_a_version_3_database_gains_the_section_and_edge_columns_and_keeps_its_r
     section = old.execute("SELECT level, group_id FROM net_sections WHERE section_id = 7").fetchone()
     assert (section["level"], section["group_id"]) == ("group", None)
     assert old.execute("SELECT level FROM net_section_judgments WHERE judgment_id = 5").fetchone()["level"] == "group"
+
+
+def test_a_version_9_database_folds_strength_day_targets_into_goals(conn: sqlite3.Connection, tmp_path: Path):
+    old = _release_database(tmp_path / "v9.db")
+    db.init_db(old)
+    old.execute("DROP TABLE plan_goals")
+    old.execute("ALTER TABLE plan_weeks ADD COLUMN target_strength_days INTEGER")
+    old.execute("ALTER TABLE plan_adherence ADD COLUMN actual_strength_days INTEGER")
+    old.execute("INSERT INTO plans (plan_id, title, created_at) VALUES (1, 'P', '2026-01-01')")
+    for version_id in (1, 2, 3):
+        old.execute(
+            "INSERT INTO plan_versions (version_id, plan_id, version_n, created_at, committed_at, author) "
+            "VALUES (?, 1, ?, '2026-01-02', '2026-01-02', 'agent')", [version_id, version_id],
+        )
+    for version_id, week_start, strength in (
+        (1, "2026-01-05", 2), (1, "2026-01-12", 2), (1, "2026-01-19", 1), (1, "2026-01-26", None),
+        (2, "2026-01-05", None), (3, "2026-01-05", 0),
+    ):
+        old.execute(
+            "INSERT INTO plan_weeks (version_id, week_start, target_workouts, phase, target_strength_days) "
+            "VALUES (?, ?, 1, 'base', ?)", [version_id, week_start, strength],
+        )
+    old.execute("PRAGMA user_version = 9")
+    old.commit()
+
+    db.init_db(old)
+
+    assert _layout(old) == _layout(conn)
+    goals = {r["version_id"]: r for r in old.execute("SELECT * FROM plan_goals")}
+    assert set(goals) == {1, 3}  # version 2 never set a strength target
+    assert (goals[1]["type"], goals[1]["horizon"], goals[1]["flag"], goals[1]["target"]) == ("activity_days", "weekly", 0, 2)
+    assert json.loads(goals[1]["params"]) == {"sport_types": ["WeightTraining", "Workout"]}
+    assert json.loads(goals[1]["overrides"]) == {"2026-01-19": 1, "2026-01-26": 0}
+    assert (goals[3]["target"], json.loads(goals[3]["overrides"])) == (0, {})
 
 
 class _RacingConnection:

@@ -109,8 +109,8 @@ def _elements(value: object) -> list[dict[str, Any]]:
         if extra:
             raise NoteError(f"elements: unknown keys {sorted(extra)}")
         count = e.get("count")
-        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
-            raise NoteError("elements: count must be a positive integer")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise NoteError("elements: count must be a non-negative integer (0 rejects a detection)")
         duration = e.get("duration_s")
         if duration is not None and (not isinstance(duration, (int, float)) or duration <= 0):
             raise NoteError("elements: duration_s must be a positive number")

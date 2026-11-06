@@ -14,6 +14,7 @@ from .weather import ATTRIBUTION as WEATHER_ATTRIBUTION
 from .builds import Build, detect_builds
 from .derive import connect_derived as _conn, derive_all
 from .build_stats import run_type_stats, window_total_miles
+from . import goals as goals_service
 from .errors import describe_error, reporting
 from .fitness import WINDOW_DAYS, estimate_fitness
 from .format import fmt_pace, fmt_time
@@ -1823,6 +1824,7 @@ def _draft_state(conn: sqlite3.Connection, plan_id: int) -> dict[str, object]:
         "version": bundle["version"],
         "weeks": bundle["weeks"],
         "days": [_day_with_target(d) for d in bundle["days"]],
+        "goals": bundle["goals"],
         "gaps": bundle["gaps"],
         "week_mileage": week_mileage,
         "warnings": warnings,
@@ -1878,9 +1880,9 @@ def start_revision_draft(plan_id: int | None = None) -> str:
     """
     Starts a revision draft for a committed plan (default: the current plan;
     pass plan_id to revise a past or next one, e.g. to add a post-race week):
-    copies its latest committed version's race and weeks/days verbatim into a
+    copies its latest committed version's race, weeks/days and goals verbatim into a
     new draft version, which the athlete then edits incrementally via
-    set_draft_weeks/set_draft_days/set_draft_race — only what actually
+    set_draft_weeks/set_draft_days/set_draft_race/set_draft_goals — only what actually
     changes needs a call; everything else is already there from the copy.
     Rejects if the plan already has a draft in progress (one draft per plan —
     commit or discard it first).
@@ -1913,7 +1915,7 @@ def get_draft(plan_id: int | None = None) -> str:
     """
     Current state of an in-progress draft (started via start_plan_draft or
     start_revision_draft; plan_id picks one when several are open, as with
-    candidate plans): its race and weeks/days as authored so far — zone-
+    candidate plans): its race, goals (see set_draft_goals) and weeks/days as authored so far — zone-
     anchored day targets stay unresolved until commit_plan freezes them —
     plus:
 
@@ -1998,7 +2000,7 @@ def set_draft_weeks(weeks: list[WeekInput], plan_id: int | None = None) -> str:
       target_workouts, phase (base|sharpen|peak|taper|race),
       target_miles_hi? (range upper bound; both-NULL-equivalent — omit
       target_miles_hi for a point week), target_long_run_miles?,
-      target_long_run_minutes?, target_strength_days?, note?}.
+      target_long_run_minutes?, note?}.
 
     Finishes by re-running the incremental derive pass so plan_adherence reflects
     the edit immediately (see derive_all) — matters most for a revision that
@@ -2072,6 +2074,57 @@ def set_draft_days(days: list[DayInput], plan_id: int | None = None) -> str:
         result = _draft_state(conn, plan_id)
         result["written"] = {"days": [[d["date"], d.get("seq", 1)] for d in days]}
         return json.dumps(_fmt_paces(result))
+    except Exception as e:
+        return json.dumps({"error": describe_error(e, None)})
+
+
+@mcp.tool()
+def set_draft_goals(goals: list[dict[str, object]], plan_id: int | None = None) -> str:
+    """
+    Replaces the in-progress draft's goal list. Goals state a cycle's emphasis as
+    data: usually 1-3, each with a `why`, chosen with the athlete (propose, then
+    set on their yes). A revision starts with the prior version's goals, so send
+    the full list you want, changed or not. A week is judged by the goals of the
+    version that governed it; cycle goals by the latest committed version.
+    Comparison is always >=.
+
+    Each goal: {key (short label, unique), why (one line of reasoning, required),
+      horizon, type, params, target, ...}. `horizon`:
+      weekly: `target` is the per-week floor; optional `overrides`
+        {Monday: target} for weeks that differ (0 in race week); `flag: true`
+        raises a pattern flag after 2+ consecutive scored weeks under target.
+      cycle: rolls the weekly value up over the whole cycle, or from_week /
+        to_week (Mondays; e.g. to exclude the taper). `aggregate`:
+        weeks_at_least (needs `threshold`; met when the weeks with value >=
+        threshold number at least `target`: "8 weeks over 60") or average
+        (met when the mean weekly value >= `target`: "average 55 a week").
+    `type` and `params` (what the weekly value is):
+      weekly_miles {}: run miles in the week.
+      element_sessions {types: [strides|hill_sprints|reps|progression|
+        descent_practice]}: runs with any of those elements (from the run note,
+        else stream detection; see set_run_note).
+      tagged_runs {tag}: runs whose run note carries the tag. This covers anything
+        you record: when you write run notes, tag the same thing the same way
+        every time so the goal can count it.
+      run_kind {kinds: [...]}: runs whose note `kind` is one of those.
+      activity_days {sport_types: [...]}: distinct days with a non-run activity
+        of those Strava sport types (strength: ["WeightTraining", "Workout"]).
+    Weeks the sync has not fully covered have no value (absent, not zero).
+
+    Returns the full draft state (see get_draft, which includes `goals`), or
+    {"error": "..."} naming the goal and field.
+    """
+    conn = _conn()
+    try:
+        resolved = _resolve_draft(conn, plan_id)
+        if isinstance(resolved, dict):
+            return json.dumps(resolved)
+        plan_id, version_id = resolved
+        try:
+            goals_service.set_draft_goals(conn, version_id, goals)
+        except PlanValidationError as e:
+            return json.dumps({"error": str(e)})
+        return json.dumps(_fmt_paces(_draft_state(conn, plan_id)))
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
@@ -2230,6 +2283,7 @@ def commit_plan(note: str, plan_id: int | None = None) -> str:
             "week_count": len(bundle["weeks"]),
             "weeks": bundle["weeks"],
             "days": [_day_with_target(d) for d in bundle["days"]],
+            "goals": bundle["goals"],
             "week_mileage": compute_week_mileage(bundle["weeks"], bundle["days"]),
             "warnings": _sanity_warnings(conn, bundle["weeks"], date.today()),
             "past_weeks_preserved": past_weeks_preserved,
@@ -2284,7 +2338,7 @@ def get_training_plan(version_n: int | None = None, compare_to: int | None = Non
     next Monday).
 
     compare_to: optional version_n to diff against the returned version —
-    added/removed/changed weeks and days and any race change, via
+    added/removed/changed weeks, days and goals and any race change, via
     plan.diff_versions (computed on the fly, never stored). Surfaced as
     result["diff"] when given.
 
@@ -2366,6 +2420,7 @@ def get_training_plan(version_n: int | None = None, compare_to: int | None = Non
             "version": bundle["version"],
             "weeks": bundle["weeks"],
             "days": [_day_with_target(d) for d in bundle["days"]],
+            "goals": bundle["goals"],
             "versions": [
                 {
                     "version_n": int(r["version_n"]), "created_at": r["created_at"],
@@ -2482,8 +2537,7 @@ def get_plan_adherence(plan_id: int | None = None) -> str:
     bound for a range week, so 1.0 means "inside the band"; null when the
     week's mileage was deliberately left unspecified — those weeks are judged
     on workout count alone), actual_miles, actual_workouts,
-    actual_strength_days (counted from synced strength activities; context
-    only — it never moves a band or raises a flag), long_run_done
+    long_run_done
     (true/false/null — null means that week had no long-run target, not that
     it was missed; a minutes-based long-run target counts the same as a
     miles-based one), workout_pace_delta_s (seconds/mile outside the frozen
@@ -2522,7 +2576,7 @@ def get_plan_adherence(plan_id: int | None = None) -> str:
 
         rows = conn.execute("""
             SELECT week_start, version_n_used, actual_miles, actual_workouts,
-                   actual_strength_days, long_run_done, mileage_ratio,
+                   long_run_done, mileage_ratio,
                    workout_pace_delta_s, band, flags_json
             FROM plan_adherence WHERE plan_id = ? ORDER BY week_start
         """, [p["plan_id"]]).fetchall()
@@ -2535,7 +2589,6 @@ def get_plan_adherence(plan_id: int | None = None) -> str:
                 "version_n_used": r["version_n_used"],
                 "actual_miles": r["actual_miles"],
                 "actual_workouts": r["actual_workouts"],
-                "actual_strength_days": r["actual_strength_days"],
                 "long_run_done": bool(r["long_run_done"]) if r["long_run_done"] is not None else None,
                 "mileage_ratio": r["mileage_ratio"],
                 "workout_pace_delta_s": r["workout_pace_delta_s"],
@@ -2552,6 +2605,31 @@ def get_plan_adherence(plan_id: int | None = None) -> str:
             "headline": f"{on_or_close} of {len(rows)} weeks on plan",
         }
         return json.dumps(_fmt_paces(result))
+    except Exception as e:
+        return json.dumps({"error": describe_error(e, None)})
+
+
+@mcp.tool()
+def get_plan_goals(plan_id: int | None = None) -> str:
+    """
+    The plan's goals (plan_id, default the current plan; see set_draft_goals for
+    what they are) with progress. Read this when describing how a cycle is
+    going. Each goal has its key, why, type, params and target, plus:
+      weekly goals: `weeks`, one entry per plan week with target, value and met
+        (value null: not yet scored), and `flags` (a pattern of 2+ consecutive
+        scored weeks under target, only when the goal is flagged and the
+        pattern is still running). Relay a flag as a pattern, not a verdict.
+      cycle goals: `progress` {so_far (the count of qualifying weeks, or the
+        mean), scored, left (weeks of the span not yet scored), met, reachable
+        (weeks_at_least: whether the target can still be met)}.
+    Returns {"goals": []} for a plan with none, {"error": "no plan"} with no plan.
+    """
+    conn = _conn()
+    try:
+        p = _plan_or_default(conn, plan_id)
+        if p is None:
+            return json.dumps({"error": "no plan"})
+        return json.dumps(goals_service.plan_goal_results(conn, p["plan_id"]))
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
@@ -2632,11 +2710,11 @@ def run_sql(query: str) -> str:
 
     Plan tables — athlete-authored ground truth, like activities: NOT derived,
     exempt from derive_all rebuilds. Write access is via start_plan_draft /
-    start_revision_draft / set_draft_race / set_draft_weeks / set_draft_days / delete_draft_weeks
+    start_revision_draft / set_draft_race / set_draft_weeks / set_draft_days / set_draft_goals / delete_draft_weeks
     / delete_draft_days / commit_plan / discard_draft / log_plan_adjustment /
     abandon_plan (see those tools); read access to the current plan is better
     served by get_training_plan (committed versions) / get_draft (the mutable
-    draft), but all six tables are queryable here for ad-hoc questions and
+    draft), but all seven tables are queryable here for ad-hoc questions and
     history.
 
     Table: plans
@@ -2662,9 +2740,14 @@ def run_sql(query: str) -> str:
       unspecified, scored on workouts only), target_miles_hi (range upper
       bound, nullable), target_workouts, target_long_run_miles (nullable),
       target_long_run_minutes (nullable — duration long-run target alongside
-      or instead of mileage), target_strength_days (nullable — counted per
-      week, never banded or flagged), phase (base|sharpen|peak|taper|race),
+      or instead of mileage), phase (base|sharpen|peak|taper|race),
       note (week-level athlete-facing guidance, e.g. phase context)
+
+    Table: plan_goals  (PK: version_id, key; one row per goal of a version —
+      see set_draft_goals) key, horizon (weekly|cycle), type, params (JSON),
+      target, why, overrides (JSON {Monday: target}), flag (0/1), aggregate
+      (cycle: weeks_at_least|average), threshold, from_week, to_week. Prefer
+      get_plan_goals: it computes the weekly values and progress.
 
     Table: plan_days  (PK: version_id, date, seq; seq 1 normally, 2+ = doubles)
       version_id, date, seq, slot (easy|workout|long|rest|race|strength), title,

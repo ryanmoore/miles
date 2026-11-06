@@ -173,6 +173,21 @@ def insert_activity(conn: sqlite3.Connection, activity_id: int, *, start_date: s
     conn.commit()
 
 
+def insert_terrain_segments(conn: sqlite3.Connection, activity_id: int, start_date: str, parts: list[tuple[int, float, float]]) -> None:
+    """Stored 20 m terrain segments from (count, speed m/s, grade %) parts."""
+    rows, idx = [], 0
+    for count, speed, grade in parts:
+        for _ in range(count):
+            rows.append((activity_id, idx, 20.0 * idx, round(grade * 10), round(speed * 100), 140 + idx // 100))
+            idx += 1
+    conn.execute("INSERT INTO terrain_segment_dates (activity_id, start_date, segment_count) VALUES (?, ?, ?)", [activity_id, start_date, idx])
+    conn.executemany(
+        "INSERT INTO terrain_segments (activity_id, idx, dist_m, grade_dpct, speed_cms, heartrate, is_walking, ele_source) "
+        "VALUES (?, ?, ?, ?, ?, ?, 0, 1)",
+        rows,
+    )
+
+
 METERS_PER_DEG_LAT = 111194.9
 ORIGIN_LAT, ORIGIN_LNG = 40.0, -105.0
 

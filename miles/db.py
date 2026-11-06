@@ -1,10 +1,13 @@
+import json
 import logging
 import os
 import sqlite3
+from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Any
 from typing_extensions import NotRequired, TypedDict
 
 from .weather import WeatherRow
@@ -108,9 +111,27 @@ class PlanWeekRow(TypedDict):
     target_workouts: int
     target_long_run_miles: float | None
     target_long_run_minutes: float | None
-    target_strength_days: int | None
     phase: str
     note: str | None
+
+
+class PlanGoalRow(TypedDict):
+    """One emphasis of a plan version (see goals.py). `target` is a weekly goal's
+    per-week floor or a cycle goal's count/average floor; `overrides` replace a
+    weekly goal's target for named Mondays. Cycle goals carry `aggregate`
+    (weeks_at_least needs `threshold`) and an optional week span."""
+    key: str
+    horizon: str
+    type: str
+    params: dict[str, Any]
+    target: float
+    why: str
+    overrides: dict[str, float]
+    flag: bool
+    aggregate: str | None
+    threshold: float | None
+    from_week: str | None
+    to_week: str | None
 
 
 class PlanDayRow(TypedDict):
@@ -143,7 +164,6 @@ class PlanAdherenceRow(TypedDict):
     version_n_used: int | None
     actual_miles: float | None
     actual_workouts: int | None
-    actual_strength_days: int | None  # displayed only — never bands or flags (gym logging is too inconsistent to judge silence)
     long_run_done: int | None
     mileage_ratio: float | None
     workout_pace_delta_s: float | None
@@ -231,7 +251,7 @@ def connection(opener: Callable[[], sqlite3.Connection] | None = None) -> Iterat
         conn.close()
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def add_missing_columns(conn: sqlite3.Connection, table: str, *columns: str) -> bool:
@@ -442,14 +462,13 @@ def init_db(conn: sqlite3.Connection) -> None:
             target_workouts          INTEGER NOT NULL,
             target_long_run_miles    REAL,
             target_long_run_minutes  REAL,
-            target_strength_days     INTEGER,
             phase                    TEXT NOT NULL,
             note                     TEXT,
             PRIMARY KEY (version_id, week_start)
         )
     """)
     # Migration: pre-v2 DBs have target_miles NOT NULL and lack the new range/
-    # duration/strength columns. SQLite can't relax a NOT NULL constraint or
+    # duration columns. SQLite can't relax a NOT NULL constraint or
     # reorder columns via ALTER, so rebuild the table (create-new/copy/rename)
     # — guarded by checking target_miles's notnull flag, so this only runs
     # once per DB (a freshly created table above is already nullable and
@@ -466,7 +485,6 @@ def init_db(conn: sqlite3.Connection) -> None:
                 target_workouts          INTEGER NOT NULL,
                 target_long_run_miles    REAL,
                 target_long_run_minutes  REAL,
-                target_strength_days     INTEGER,
                 phase                    TEXT NOT NULL,
                 note                     TEXT,
                 PRIMARY KEY (version_id, week_start)
@@ -483,6 +501,27 @@ def init_db(conn: sqlite3.Connection) -> None:
         """)
         conn.execute("DROP TABLE plan_weeks")
         conn.execute("ALTER TABLE plan_weeks_v2 RENAME TO plan_weeks")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS plan_goals (
+            version_id  INTEGER NOT NULL REFERENCES plan_versions(version_id) ON DELETE CASCADE,
+            key         TEXT NOT NULL,
+            horizon     TEXT NOT NULL,
+            type        TEXT NOT NULL,
+            params      TEXT NOT NULL,
+            target      REAL NOT NULL,
+            why         TEXT NOT NULL,
+            overrides   TEXT NOT NULL,
+            flag        INTEGER NOT NULL,
+            aggregate   TEXT,
+            threshold   REAL,
+            from_week   TEXT,
+            to_week     TEXT,
+            PRIMARY KEY (version_id, key)
+        )
+    """)
+    if "target_strength_days" in {c["name"] for c in conn.execute("PRAGMA table_info(plan_weeks)")}:
+        _fold_strength_days_into_goals(conn)
+        conn.execute("ALTER TABLE plan_weeks DROP COLUMN target_strength_days")
     # seq exists so doubles are representable at the schema level (2+ = doubles);
     # v1 planners will rarely emit one.
     conn.execute("""
@@ -522,7 +561,6 @@ def init_db(conn: sqlite3.Connection) -> None:
             version_n_used       INTEGER,
             actual_miles         REAL,
             actual_workouts      INTEGER,
-            actual_strength_days INTEGER,
             long_run_done        INTEGER,
             mileage_ratio        REAL,
             workout_pace_delta_s REAL,
@@ -531,7 +569,8 @@ def init_db(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (plan_id, week_start)
         )
     """)
-    add_missing_columns(conn, "plan_adherence", "actual_strength_days INTEGER")
+    if "actual_strength_days" in {c["name"] for c in conn.execute("PRAGMA table_info(plan_adherence)")}:
+        conn.execute("ALTER TABLE plan_adherence DROP COLUMN actual_strength_days")
 
     # Uploaded GPX bytes are ground truth (like activities' raw_json) --
     # everything else about a route is rebuildable from this blob. See
@@ -702,6 +741,32 @@ def init_db(conn: sqlite3.Connection) -> None:
 
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
+
+
+def _fold_strength_days_into_goals(conn: sqlite3.Connection) -> None:
+    """Upgrade for databases that kept a weekly strength-days target on
+    plan_weeks: every version that set one gets an unflagged weekly
+    `activity_days` goal over the strength sport types, targeting the most
+    common value, with overrides for the weeks that differ (an unset week
+    counts as 0)."""
+    weeks: dict[int, dict[str, int]] = {}
+    for r in conn.execute(
+        "SELECT version_id, week_start, COALESCE(target_strength_days, 0) AS n FROM plan_weeks "
+        "WHERE version_id IN (SELECT version_id FROM plan_weeks WHERE target_strength_days IS NOT NULL) "
+        "ORDER BY version_id, week_start"
+    ):
+        weeks.setdefault(r["version_id"], {})[r["week_start"]] = r["n"]
+    for version_id, by_week in weeks.items():
+        target = Counter(by_week.values()).most_common(1)[0][0]
+        conn.execute(
+            "INSERT INTO plan_goals (version_id, key, horizon, type, params, target, why, overrides, flag) "
+            "VALUES (?, 'strength', 'weekly', 'activity_days', ?, ?, ?, ?, 0)",
+            [
+                version_id, json.dumps({"sport_types": ["WeightTraining", "Workout"]}), target,
+                "Strength days per week, carried over from the plan's per-week strength target.",
+                json.dumps({w: n for w, n in by_week.items() if n != target}),
+            ],
+        )
 
 
 def _settle_routes_deleted_before_tombstones(conn: sqlite3.Connection) -> None:

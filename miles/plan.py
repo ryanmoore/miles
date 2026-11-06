@@ -21,7 +21,7 @@ from typing import Literal, NotRequired, cast
 
 from typing_extensions import TypedDict
 
-from .db import PlanDayRow, PlanRow, PlanVersionRow, PlanWeekRow, effective_run_type_sql
+from .db import PlanDayRow, PlanGoalRow, PlanRow, PlanVersionRow, PlanWeekRow, effective_run_type_sql
 from .fitness import (
     INTERVAL_TOLERANCE,
     MP_TOLERANCE,
@@ -103,9 +103,8 @@ class WeekInput(TypedDict):
     """upsert_draft_weeks input for one plan_weeks row.
     target_miles is the range floor (point week = lo only, no hi); omitting
     both target_miles and target_miles_hi is a deliberately unspecified week,
-    scored on workout count alone. target_miles_hi/target_long_run_minutes/
-    target_strength_days are optional range/duration/strength targets
-    alongside the mileage ones."""
+    scored on workout count alone. target_miles_hi/target_long_run_minutes
+    are optional range/duration targets alongside the mileage ones."""
     week_start: str
     target_workouts: int
     phase: str
@@ -113,7 +112,6 @@ class WeekInput(TypedDict):
     target_miles_hi: NotRequired[float | None]
     target_long_run_miles: NotRequired[float | None]
     target_long_run_minutes: NotRequired[float | None]
-    target_strength_days: NotRequired[int | None]
     note: NotRequired[str | None]
 
 
@@ -134,10 +132,11 @@ class DayInput(TypedDict):
 
 
 class PlanVersionBundle(TypedDict):
-    """A full version snapshot: the version row plus every week/day row."""
+    """A full version snapshot: the version row plus every week/day/goal row."""
     version: PlanVersionRow
     weeks: list[PlanWeekRow]
     days: list[PlanDayRow]
+    goals: list[PlanGoalRow]
 
 
 class DraftBundle(TypedDict):
@@ -149,6 +148,7 @@ class DraftBundle(TypedDict):
     version: PlanVersionRow
     weeks: list[PlanWeekRow]
     days: list[PlanDayRow]
+    goals: list[PlanGoalRow]
     gaps: list[str]
 
 
@@ -177,12 +177,18 @@ class DayDiff(TypedDict):
     changed_fields: list[str]  # populated only when change == "changed"
 
 
+class GoalDiff(TypedDict):
+    key: str
+    change: Literal["added", "removed", "changed"]
+
+
 class VersionDiff(TypedDict):
     version_a: int
     version_b: int
     changed_race: dict[str, tuple[object, object]]  # race field -> (value in a, value in b)
     changed_weeks: list[WeekDiff]
     changed_days: list[DayDiff]
+    changed_goals: list[GoalDiff]
 
 
 class RaceMatch(TypedDict):
@@ -240,9 +246,6 @@ def _week_row(row: sqlite3.Row) -> PlanWeekRow:
         "target_long_run_minutes": (
             float(row["target_long_run_minutes"]) if row["target_long_run_minutes"] is not None else None
         ),
-        "target_strength_days": (
-            int(row["target_strength_days"]) if row["target_strength_days"] is not None else None
-        ),
         "phase": row["phase"],
         "note": row["note"],
     }
@@ -261,6 +264,31 @@ def _day_row(row: sqlite3.Row) -> PlanDayRow:
         "note": row["note"],
         "target_minutes": float(row["target_minutes"]) if row["target_minutes"] is not None else None,
     }
+
+
+GOAL_COLS = "key, horizon, type, params, target, why, overrides, flag, aggregate, threshold, from_week, to_week"
+
+
+def _goal_row(row: sqlite3.Row) -> PlanGoalRow:
+    return {
+        "key": row["key"],
+        "horizon": row["horizon"],
+        "type": row["type"],
+        "params": json.loads(row["params"]),
+        "target": float(row["target"]),
+        "why": row["why"],
+        "overrides": json.loads(row["overrides"]),
+        "flag": bool(row["flag"]),
+        "aggregate": row["aggregate"],
+        "threshold": float(row["threshold"]) if row["threshold"] is not None else None,
+        "from_week": row["from_week"],
+        "to_week": row["to_week"],
+    }
+
+
+def _version_goals(conn: sqlite3.Connection, version_id: int) -> list[PlanGoalRow]:
+    rows = conn.execute(f"SELECT {GOAL_COLS} FROM plan_goals WHERE version_id = ? ORDER BY rowid", [version_id])
+    return [_goal_row(r) for r in rows]
 
 
 _VERSION_COLS = "version_id, plan_id, version_n, created_at, committed_at, note, author, " + ", ".join(_RACE_FIELDS)
@@ -351,7 +379,7 @@ def get_version(conn: sqlite3.Connection, version_id: int) -> PlanVersionBundle 
     weeks = [
         _week_row(r) for r in conn.execute(
             "SELECT version_id, week_start, target_miles, target_miles_hi, target_workouts, "
-            "target_long_run_miles, target_long_run_minutes, target_strength_days, phase, note "
+            "target_long_run_miles, target_long_run_minutes, phase, note "
             "FROM plan_weeks WHERE version_id = ? ORDER BY week_start",
             [version_id],
         ).fetchall()
@@ -364,7 +392,7 @@ def get_version(conn: sqlite3.Connection, version_id: int) -> PlanVersionBundle 
             [version_id],
         ).fetchall()
     ]
-    return {"version": _version_row(vrow), "weeks": weeks, "days": days}
+    return {"version": _version_row(vrow), "weeks": weeks, "days": days, "goals": _version_goals(conn, version_id)}
 
 
 def current_version_for_week(
@@ -601,9 +629,6 @@ def _validate_week_fields(w: WeekInput) -> None:
         raise PlanValidationError(
             f"week {w['week_start']}: target_long_run_minutes must be non-negative"
         )
-    strength_days = w.get("target_strength_days")
-    if strength_days is not None and strength_days < 0:
-        raise PlanValidationError(f"week {w['week_start']}: target_strength_days must be non-negative")
     if w["phase"] not in PHASES:
         raise PlanValidationError(f"week {w['week_start']}: phase {w['phase']!r} must be one of {PHASES}")
 
@@ -669,7 +694,7 @@ def add_log_entry(
 # (start_plan_draft / start_revision_draft).
 
 
-def _require_draft_version(conn: sqlite3.Connection, version_id: int) -> int:
+def require_draft_version(conn: sqlite3.Connection, version_id: int) -> int:
     """Returns the version's plan_id if it exists and is still a draft
     (committed_at IS NULL); raises otherwise. Every draft-mutating function
     checks this first — a committed version is never writable."""
@@ -722,7 +747,7 @@ def set_draft_race(
     goal_time_s: int | None = None,
 ) -> None:
     """Sets the draft's race, or clears it when race_date is None."""
-    _require_draft_version(conn, version_id)
+    require_draft_version(conn, version_id)
     _validate_race(race_date, distance_bucket, goal_time_s)
     conn.execute(
         "UPDATE plan_versions SET race_date = ?, distance_bucket = ?, goal_time_s = ? WHERE version_id = ?",
@@ -809,11 +834,11 @@ def start_revision_draft(conn: sqlite3.Connection, plan_id: int) -> int:
 
     conn.executemany(
         "INSERT INTO plan_weeks (version_id, week_start, target_miles, target_miles_hi, "
-        "target_workouts, target_long_run_miles, target_long_run_minutes, target_strength_days, "
-        "phase, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "target_workouts, target_long_run_miles, target_long_run_minutes, "
+        "phase, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (version_id, w["week_start"], w["target_miles"], w["target_miles_hi"], w["target_workouts"],
-             w["target_long_run_miles"], w["target_long_run_minutes"], w["target_strength_days"],
+             w["target_long_run_miles"], w["target_long_run_minutes"],
              w["phase"], w["note"])
             for w in source["weeks"]
         ],
@@ -827,6 +852,11 @@ def start_revision_draft(conn: sqlite3.Connection, plan_id: int) -> int:
             for d in source["days"]
         ],
     )
+    conn.execute(
+        f"INSERT INTO plan_goals (version_id, {GOAL_COLS}) "
+        f"SELECT ?, {GOAL_COLS} FROM plan_goals WHERE version_id = ?",
+        [version_id, source["version"]["version_id"]],
+    )
     conn.commit()
     return version_id
 
@@ -837,7 +867,7 @@ def upsert_draft_weeks(conn: sqlite3.Connection, version_id: int, weeks: list[We
     only (Monday-aligned, non-negative, known phase, hi >= lo); contiguity and
     reaching the race week are commit_plan's job, not this one's, since a
     partial batch is expected to have gaps mid-authoring."""
-    _require_draft_version(conn, version_id)
+    require_draft_version(conn, version_id)
     if not weeks:
         return
 
@@ -854,18 +884,17 @@ def upsert_draft_weeks(conn: sqlite3.Connection, version_id: int, weeks: list[We
 
     conn.executemany(
         "INSERT INTO plan_weeks (version_id, week_start, target_miles, target_miles_hi, "
-        "target_workouts, target_long_run_miles, target_long_run_minutes, target_strength_days, "
-        "phase, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "target_workouts, target_long_run_miles, target_long_run_minutes, "
+        "phase, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(version_id, week_start) DO UPDATE SET "
         "target_miles = excluded.target_miles, target_miles_hi = excluded.target_miles_hi, "
         "target_workouts = excluded.target_workouts, "
         "target_long_run_miles = excluded.target_long_run_miles, "
         "target_long_run_minutes = excluded.target_long_run_minutes, "
-        "target_strength_days = excluded.target_strength_days, "
         "phase = excluded.phase, note = excluded.note",
         [
             (version_id, wd.isoformat(), w.get("target_miles"), w.get("target_miles_hi"), w["target_workouts"],
-             w.get("target_long_run_miles"), w.get("target_long_run_minutes"), w.get("target_strength_days"),
+             w.get("target_long_run_miles"), w.get("target_long_run_minutes"),
              w["phase"], w.get("note"))
             for wd, w in parsed
         ],
@@ -879,7 +908,7 @@ def upsert_draft_days(conn: sqlite3.Connection, version_id: int, days: list[DayI
     is accepted with zone_name set and no pace_lo/pace_hi — it stays
     unresolved until commit_plan freezes it. Day-to-week membership is not
     checked here (a day may be authored before its week row exists)."""
-    _require_draft_version(conn, version_id)
+    require_draft_version(conn, version_id)
     if not days:
         return
 
@@ -914,7 +943,7 @@ def delete_draft_weeks(conn: sqlite3.Connection, version_id: int, week_starts: l
     """Deletes the given week_starts from a draft (and any days that fall in
     them, so a deleted week doesn't leave orphan day rows). Returns the
     number of week rows deleted. No-ops on week_starts not present."""
-    _require_draft_version(conn, version_id)
+    require_draft_version(conn, version_id)
     deleted = 0
     for ws in week_starts:
         wd = date.fromisoformat(ws)
@@ -937,7 +966,7 @@ def delete_draft_days(
     """Deletes days from a draft. A plain date string deletes every seq for
     that date; a (date, seq) tuple deletes just that one. Returns the number
     of day rows deleted."""
-    _require_draft_version(conn, version_id)
+    require_draft_version(conn, version_id)
     deleted = 0
     for key in dates_or_keys:
         if isinstance(key, tuple):
@@ -1110,7 +1139,10 @@ def get_draft(conn: sqlite3.Connection, plan_id: int) -> DraftBundle:
     bundle = get_version(conn, int(draft["version_id"]))
     assert bundle is not None
     gaps = _draft_gap_report(bundle["version"], bundle["weeks"], bundle["days"])
-    return {"plan": plan, "version": bundle["version"], "weeks": bundle["weeks"], "days": bundle["days"], "gaps": gaps}
+    return {
+        "plan": plan, "version": bundle["version"], "weeks": bundle["weeks"], "days": bundle["days"],
+        "goals": bundle["goals"], "gaps": gaps,
+    }
 
 
 def _snapshot_past_weeks(conn: sqlite3.Connection, plan_id: int, version_id: int) -> list[str]:
@@ -1142,17 +1174,16 @@ def _snapshot_past_weeks(conn: sqlite3.Connection, plan_id: int, version_id: int
             conn.execute(
                 "INSERT INTO plan_weeks (version_id, week_start, target_miles, target_miles_hi, "
                 "target_workouts, target_long_run_miles, target_long_run_minutes, "
-                "target_strength_days, phase, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "phase, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(version_id, week_start) DO UPDATE SET "
                 "target_miles = excluded.target_miles, target_miles_hi = excluded.target_miles_hi, "
                 "target_workouts = excluded.target_workouts, "
                 "target_long_run_miles = excluded.target_long_run_miles, "
                 "target_long_run_minutes = excluded.target_long_run_minutes, "
-                "target_strength_days = excluded.target_strength_days, "
                 "phase = excluded.phase, note = excluded.note",
                 (version_id, iso, week_row["target_miles"], week_row["target_miles_hi"],
                  week_row["target_workouts"], week_row["target_long_run_miles"],
-                 week_row["target_long_run_minutes"], week_row["target_strength_days"],
+                 week_row["target_long_run_minutes"],
                  week_row["phase"], week_row["note"]),
             )
             preserved.append(iso)
@@ -1206,7 +1237,7 @@ def commit_plan(conn: sqlite3.Connection, plan_id: int, *, note: str) -> int:
 
     weeks = [_week_row(r) for r in conn.execute(
         "SELECT version_id, week_start, target_miles, target_miles_hi, target_workouts, "
-        "target_long_run_miles, target_long_run_minutes, target_strength_days, phase, note "
+        "target_long_run_miles, target_long_run_minutes, phase, note "
         "FROM plan_weeks WHERE version_id = ? ORDER BY week_start",
         [version_id],
     ).fetchall()]
@@ -1252,6 +1283,10 @@ def commit_plan(conn: sqlite3.Connection, plan_id: int, *, note: str) -> int:
             raise PlanValidationError(
                 f"day {d['date']} falls in week {wk}, which is not among the committed weeks"
             )
+
+    # goals imports this module.
+    from .goals import validate_goals
+    validate_goals(_version_goals(conn, version_id), week_starts)
 
     mileage_checks = compute_week_mileage(weeks, days)
     inconsistent = [c for c in mileage_checks if not c["consistent"]]
@@ -1299,6 +1334,7 @@ def discard_draft(conn: sqlite3.Connection, plan_id: int) -> None:
     version_id = int(draft["version_id"])
 
     conn.execute("DELETE FROM plan_days WHERE version_id = ?", [version_id])
+    conn.execute("DELETE FROM plan_goals WHERE version_id = ?", [version_id])
     conn.execute("DELETE FROM plan_weeks WHERE version_id = ?", [version_id])
     conn.execute("DELETE FROM plan_versions WHERE version_id = ?", [version_id])
     if plan["status"] == "draft":
@@ -1309,7 +1345,7 @@ def discard_draft(conn: sqlite3.Connection, plan_id: int) -> None:
 
 def diff_versions(conn: sqlite3.Connection, version_a: int, version_b: int) -> VersionDiff:
     """Computed, never stored: changed weeks (which target fields changed) and
-    added/removed/changed days between two versions of the same plan."""
+    added/removed/changed days and goals between two versions of the same plan."""
     a = get_version(conn, version_a)
     b = get_version(conn, version_b)
     if a is None:
@@ -1355,10 +1391,19 @@ def diff_versions(conn: sqlite3.Connection, version_a: int, version_b: int) -> V
             if fields:
                 changed_days.append({"date": day_date, "seq": seq, "change": "changed", "changed_fields": fields})
 
+    goals_a = {g["key"]: g for g in a["goals"]}
+    goals_b = {g["key"]: g for g in b["goals"]}
+    changed_goals: list[GoalDiff] = [
+        {"key": key, "change": "added" if key not in goals_a else "removed" if key not in goals_b else "changed"}
+        for key in sorted(set(goals_a) | set(goals_b))
+        if goals_a.get(key) != goals_b.get(key)
+    ]
+
     return {
         "version_a": version_a,
         "version_b": version_b,
         "changed_race": changed_race,
         "changed_weeks": changed_weeks,
         "changed_days": changed_days,
+        "changed_goals": changed_goals,
     }

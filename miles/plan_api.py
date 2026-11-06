@@ -19,7 +19,7 @@ from typing_extensions import TypedDict
 
 from fastapi import APIRouter, HTTPException
 
-from . import db, heat, notes, plan, plan_adherence
+from . import db, goals, heat, notes, plan, plan_adherence
 from .builds import Build
 from .classifier import classify_workout
 from .derive import CHECKPOINT_PACE_COL, connect_derived as _conn, predicted_pace_for_race
@@ -57,12 +57,10 @@ class PlanWeekOut(TypedDict):
     target_workouts: int
     target_long_run_miles: float | None
     target_long_run_minutes: float | None
-    target_strength_days: int | None
     phase: str
     note: str | None
     actual_miles: float
     actual_workouts: int
-    actual_strength_days: int  # displayed only — plan_adherence never bands/flags it
     is_current: bool
     is_future: bool
 
@@ -90,8 +88,6 @@ class ThisWeekStat(TypedDict):
     actual_miles: float
     target_workouts: int
     actual_workouts: int
-    target_strength_days: int | None
-    actual_strength_days: int
 
 
 class GoalStat(TypedDict):
@@ -227,23 +223,6 @@ def _daily_miles(conn: sqlite3.Connection, start: str, end: str) -> dict[str, fl
     return {r["date"]: (r["miles"] or 0.0) for r in rows}
 
 
-def _strength_days_by_week(conn: sqlite3.Connection, start: str, end: str) -> dict[str, int]:
-    """Monday-aligned count of distinct dates with a synced
-    plan_adherence.STRENGTH_SPORT_TYPES activity — same shape/convention as
-    _actual_by_week, kept separate since strength activities fall outside
-    run_sport_filter's run-only sport types."""
-    ph = ",".join("?" * len(plan_adherence.STRENGTH_SPORT_TYPES))
-    rows = conn.execute(f"""
-        SELECT
-            {db.monday_sql("start_date")} AS monday,
-            COUNT(DISTINCT DATE(start_date)) AS strength_days
-        FROM activities
-        WHERE sport_type IN ({ph}) AND DATE(start_date) >= ? AND DATE(start_date) <= ?
-        GROUP BY monday
-    """, list(plan_adherence.STRENGTH_SPORT_TYPES) + [start, end]).fetchall()
-    return {r["monday"]: int(r["strength_days"] or 0) for r in rows}
-
-
 def _activities_by_date(conn: sqlite3.Connection, start: str, end: str) -> dict[str, list[PlanActivity]]:
     """Every synced run in [start, end] (inclusive), keyed by calendar date."""
     effective = db.effective_run_type_sql()
@@ -307,7 +286,6 @@ class ActualWeekTotals(TypedDict):
     actual_miles: float
     actual_run_count: int
     actual_workout_count: int
-    actual_strength_days: int
 
 
 def _actual_week_totals(conn: sqlite3.Connection, monday: date, cutoff_date: date) -> ActualWeekTotals:
@@ -316,9 +294,8 @@ def _actual_week_totals(conn: sqlite3.Connection, monday: date, cutoff_date: dat
     week_cutoff_date = (monday + timedelta(days=elapsed)) if elapsed is not None else monday - timedelta(days=1)
     if week_started:
         miles, workouts, runs = _actual_totals(conn, monday.isoformat(), week_cutoff_date.isoformat())
-        strength = _strength_days_by_week(conn, monday.isoformat(), week_cutoff_date.isoformat()).get(monday.isoformat(), 0)
     else:
-        miles, workouts, runs, strength = 0.0, 0, 0, 0
+        miles, workouts, runs = 0.0, 0, 0
     return ActualWeekTotals(
         week_start=monday.isoformat(),
         week_cutoff_date=week_cutoff_date.isoformat(),
@@ -326,7 +303,6 @@ def _actual_week_totals(conn: sqlite3.Connection, monday: date, cutoff_date: dat
         actual_miles=miles,
         actual_run_count=runs,
         actual_workout_count=workouts,
-        actual_strength_days=strength,
     )
 
 
@@ -519,10 +495,8 @@ def get_plan(plan_id: int | None = None) -> PlanResponse | None:
     this_week: ThisWeekStat | None = None
     if weeks_in:
         actual_weeks = _actual_by_week(conn, weeks_in[0]["week_start"], weeks_in[-1]["week_start"])
-        strength_weeks = _strength_days_by_week(conn, weeks_in[0]["week_start"], weeks_in[-1]["week_start"])
         for w in weeks_in:
             actual_miles, actual_workouts = actual_weeks.get(w["week_start"], (0.0, 0))
-            actual_strength_days = strength_weeks.get(w["week_start"], 0)
             weeks_out.append(PlanWeekOut(
                 week_start=w["week_start"],
                 target_miles=w["target_miles"],
@@ -530,12 +504,10 @@ def get_plan(plan_id: int | None = None) -> PlanResponse | None:
                 target_workouts=w["target_workouts"],
                 target_long_run_miles=w["target_long_run_miles"],
                 target_long_run_minutes=w["target_long_run_minutes"],
-                target_strength_days=w["target_strength_days"],
                 phase=w["phase"],
                 note=w["note"],
                 actual_miles=actual_miles,
                 actual_workouts=actual_workouts,
-                actual_strength_days=actual_strength_days,
                 is_current=w["week_start"] == current_monday,
                 is_future=w["week_start"] > current_monday,
             ))
@@ -547,8 +519,6 @@ def get_plan(plan_id: int | None = None) -> PlanResponse | None:
                     actual_miles=actual_miles,
                     target_workouts=w["target_workouts"],
                     actual_workouts=actual_workouts,
-                    target_strength_days=w["target_strength_days"],
-                    actual_strength_days=actual_strength_days,
                 )
 
     days_out: list[PlanDayOut] = [_day_out(d) for d in days_in]
@@ -684,8 +654,6 @@ class WeekAdherenceOut(TypedDict):
     target_long_run_miles: float | None
     target_long_run_minutes: float | None
     long_run_done: bool | None
-    target_strength_days: int | None
-    actual_strength_days: int | None
     workout_pace_delta_s: float | None
     band: str | None
 
@@ -707,15 +675,14 @@ class PlanAdherenceResponse(TypedDict):
 
 def _adherence_rows(conn: sqlite3.Connection, plan_id: int) -> list[sqlite3.Row]:
     """Every plan_adherence row for one plan, joined to that week's
-    contemporaneous targets (mileage range, long-run miles/minutes, strength
-    days)."""
+    contemporaneous targets (mileage range, long-run miles/minutes)."""
     return conn.execute("""
         SELECT
             pa.week_start, pa.version_n_used, pa.actual_miles, pa.actual_workouts,
-            pa.actual_strength_days, pa.long_run_done, pa.mileage_ratio,
+            pa.long_run_done, pa.mileage_ratio,
             pa.workout_pace_delta_s, pa.band, pa.flags_json,
             pw.target_miles, pw.target_miles_hi, pw.target_workouts,
-            pw.target_long_run_miles, pw.target_long_run_minutes, pw.target_strength_days
+            pw.target_long_run_miles, pw.target_long_run_minutes
         FROM plan_adherence pa
         JOIN plan_versions pv ON pv.plan_id = pa.plan_id AND pv.version_n = pa.version_n_used
         JOIN plan_weeks pw ON pw.version_id = pv.version_id AND pw.week_start = pa.week_start
@@ -769,8 +736,6 @@ def get_plan_adherence(plan_id: int | None = None) -> PlanAdherenceResponse | No
             target_long_run_miles=r["target_long_run_miles"],
             target_long_run_minutes=r["target_long_run_minutes"],
             long_run_done=bool(r["long_run_done"]) if r["long_run_done"] is not None else None,
-            target_strength_days=r["target_strength_days"],
-            actual_strength_days=r["actual_strength_days"],
             workout_pace_delta_s=r["workout_pace_delta_s"],
             band=r["band"],
         )
@@ -788,6 +753,15 @@ def get_plan_adherence(plan_id: int | None = None) -> PlanAdherenceResponse | No
         on_or_close=on_or_close,
         headline=f"{on_or_close} of {completed} weeks on plan",
     )
+
+
+@router.get("/api/plan-goals")
+def get_plan_goals(plan_id: int | None = None) -> goals.GoalResults | None:
+    """The plan's goals with weekly values and cycle progress (see goals.plan_goal_results);
+    null when there is no plan, an empty list when it has no goals."""
+    conn = _conn()
+    active = _selected_plan(conn, plan_id)
+    return goals.plan_goal_results(conn, active["plan_id"]) if active is not None else None
 
 
 # --- progression stats -------------------------------------------------------

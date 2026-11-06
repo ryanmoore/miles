@@ -28,10 +28,16 @@ def register_notes_tools(mcp: FastMCP) -> None:
           kind: what the run actually was (easy, long, threshold, mp, vo2, race,
             hike...), which may differ from the Strava tag
           elements: [{type: strides|hill_sprints|reps|progression|descent_practice,
-            count, duration_s, source: laps|stream|athlete}]
+            count, duration_s, source: laps|stream|athlete}]. Per type, an entry
+            here overrides the stream detection for that type, and `count: 0`
+            rejects a false one; a type with no entry keeps its detection. So
+            list strides or hill sprints done after a workout as their own
+            entries, never folded into the reps.
           feel: the athlete's own words, quoted (their run description counts)
           tags: open list, normalized to lowercase snake_case (heat, altitude,
-            poor_sleep, sick, travel, new_shoes...)
+            poor_sleep, sick, travel, new_shoes...). Plan goals of type
+            `tagged_runs` count runs by tag, so tag the same thing the same way
+            every time (check the plan's goals with get_plan_goals).
           fueling: {carbs_g, fluid_ml, notes}
           plan_delta: {status: as_planned|modified|cut_short|skipped_part, reason}
           written_by: who wrote it; athlete_confirmed: true once the athlete agreed

@@ -423,12 +423,11 @@ def _plan_adherence_pass(conn: sqlite3.Connection) -> dict[str, int]:
     if rows:
         conn.executemany("""
             INSERT INTO plan_adherence (
-                plan_id, week_start, version_n_used, actual_miles, actual_workouts,
-                actual_strength_days, long_run_done, mileage_ratio, workout_pace_delta_s,
-                band, flags_json
+                plan_id, week_start, version_n_used, actual_miles, actual_workouts, long_run_done,
+                mileage_ratio, workout_pace_delta_s, band, flags_json
             ) VALUES (
                 :plan_id, :week_start, :version_n_used, :actual_miles, :actual_workouts,
-                :actual_strength_days, :long_run_done, :mileage_ratio, :workout_pace_delta_s,
+                :long_run_done, :mileage_ratio, :workout_pace_delta_s,
                 :band, :flags_json
             )
         """, rows)

@@ -70,8 +70,7 @@ from . import db
 from .classifier import classify_workout
 from .db import PlanAdherenceRow
 from .fitness import MILE_M
-from .periods import monday_of
-from .plan import PlanDayRow, PlanWeekRow, current_version_for_week
+from .plan import PlanDayRow, PlanWeekRow, current_version_for_week, list_plans
 from .races import run_sport_filter
 
 # --- tunable constants (see adr/0001-training-plans-as-versioned-ground-truth.md)
@@ -517,17 +516,13 @@ def _planned_workout_slots(day_rows: list[PlanDayRow]) -> list[PlannedWorkoutSlo
 
 
 def _target_plans(conn: sqlite3.Connection) -> list[tuple[int, str]]:
-    """(plan_id, race_date) for every plan worth keeping adherence rows for:
-    the one active plan (if any) plus every completed plan — so a
-    plan's final adherence numbers (the retrospective's "14/16 weeks, 91% of
-    planned miles") survive the athlete starting their next training cycle,
-    not just the DELETE-then-rebuild of whichever plan happens to be active
-    right now. Abandoned plans are excluded — there's no scoring intent for
-    them."""
-    rows = conn.execute(
-        "SELECT plan_id, race_date FROM plans WHERE status IN ('active', 'completed')"
-    ).fetchall()
-    return [(int(r["plan_id"]), r["race_date"]) for r in rows]
+    """(plan_id, last week's Monday) for every plan worth keeping adherence
+    rows for: every active and completed plan — so a plan's final adherence
+    numbers (the retrospective's "14/16 weeks, 91% of planned miles") survive
+    the athlete starting their next training cycle. Abandoned plans and
+    drafts are excluded — there's no scoring intent for them."""
+    plans = list_plans(conn, "p.status IN ('active', 'completed')")
+    return [(p["plan_id"], p["last_week"]) for p in plans if p["last_week"] is not None]
 
 
 def _sync_cutoff(conn: sqlite3.Connection) -> date:
@@ -549,13 +544,13 @@ def compute_plan_adherence(conn: sqlite3.Connection) -> list[PlanAdherenceRow]:
     plan-less DB."""
     cutoff = _sync_cutoff(conn)
     out: list[PlanAdherenceRow] = []
-    for plan_id, race_date_str in _target_plans(conn):
-        out.extend(_compute_for_plan(conn, plan_id, race_date_str, cutoff))
+    for plan_id, last_week in _target_plans(conn):
+        out.extend(_compute_for_plan(conn, plan_id, last_week, cutoff))
     return out
 
 
 def _compute_for_plan(
-    conn: sqlite3.Connection, plan_id: int, race_date_str: str, cutoff: date
+    conn: sqlite3.Connection, plan_id: int, last_week: str, cutoff: date
 ) -> list[PlanAdherenceRow]:
     """Per-plan recompute — the body compute_plan_adherence runs once for
     each plan_id it targets."""
@@ -570,12 +565,11 @@ def _compute_for_plan(
         return []  # a targeted plan with no version-1 weeks yet — shouldn't happen, but never raise
 
     plan_start = date.fromisoformat(plan_start_str)
-    race_dt = date.fromisoformat(race_date_str)
-    race_monday = monday_of(race_dt)
+    plan_end = date.fromisoformat(last_week)
 
     calc_rows: list[_WeekCalc] = []
     week_start = plan_start
-    while week_start <= race_monday:
+    while week_start <= plan_end:
         week_end = week_start + timedelta(days=6)
         if week_end >= cutoff:
             break  # this and all later weeks aren't sync-covered yet; weeks are ascending

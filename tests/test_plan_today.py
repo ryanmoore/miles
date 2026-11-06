@@ -18,7 +18,7 @@ def _blocks(conn):
     week = {"week_start": "2026-10-26", "target_miles": 20.0, "target_miles_hi": 20.0,
             "target_workouts": 1, "phase": "build", "note": None}
     days = [_day("2026-10-26", 4), _day("2026-10-27", 4), _day("2026-11-01", 12, "long_run")]
-    plan = {"status": "active", "race_date": "2027-03-01"}
+    plan = {"race_date": "2027-03-01"}
     cutoff = _sync_cutoff_date(conn, TODAY)
     _, week_so_far, vs_last_week = _today_blocks(conn, plan, [week], days, TODAY, cutoff)
     return week_so_far, vs_last_week

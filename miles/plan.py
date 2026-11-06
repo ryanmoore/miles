@@ -4,8 +4,9 @@ plan_days/plan_log tables (miles/db.py). Plans are athlete-authored ground
 truth, like activities — not derived, exempt from derive_all.
 
 Validation lives here, never in callers: week_starts must be Mondays,
-contiguous, ending at the race week; targets non-negative; one active plan;
-versions are immutable append-only snapshots (there is no UPDATE path).
+contiguous, covering the race week when a race is set; targets non-negative;
+committed plans never share a week; versions are immutable append-only
+snapshots (there is no UPDATE path).
 Zone-anchored day targets freeze to concrete pace ranges at authoring time via
 a live estimate_fitness — see _freeze_day_target.
 
@@ -55,6 +56,7 @@ _ZONE_TOLERANCE: dict[str, float] = {
     "repetition": REPETITION_TOLERANCE,
 }
 
+_RACE_FIELDS: tuple[str, ...] = ("race_date", "distance_bucket", "goal_time_s")
 _WEEK_DIFF_FIELDS: tuple[str, ...] = (
     "target_miles", "target_workouts", "target_long_run_miles", "phase", "note",
 )
@@ -178,6 +180,7 @@ class DayDiff(TypedDict):
 class VersionDiff(TypedDict):
     version_a: int
     version_b: int
+    changed_race: dict[str, tuple[object, object]]  # race field -> (value in a, value in b)
     changed_weeks: list[WeekDiff]
     changed_days: list[DayDiff]
 
@@ -204,6 +207,8 @@ def _plan_row(row: sqlite3.Row) -> PlanRow:
         "goal_time_s": int(row["goal_time_s"]) if row["goal_time_s"] is not None else None,
         "status": row["status"],
         "created_at": row["created_at"],
+        "first_week": row["first_week"],
+        "last_week": row["last_week"],
     }
 
 
@@ -216,6 +221,9 @@ def _version_row(row: sqlite3.Row) -> PlanVersionRow:
         "committed_at": row["committed_at"],
         "note": row["note"],
         "author": row["author"],
+        "race_date": row["race_date"],
+        "distance_bucket": row["distance_bucket"],
+        "goal_time_s": int(row["goal_time_s"]) if row["goal_time_s"] is not None else None,
     }
 
 
@@ -255,32 +263,90 @@ def _day_row(row: sqlite3.Row) -> PlanDayRow:
     }
 
 
-def _get_plan(conn: sqlite3.Connection, plan_id: int) -> PlanRow | None:
+_VERSION_COLS = "version_id, plan_id, version_n, created_at, committed_at, note, author, " + ", ".join(_RACE_FIELDS)
+
+# A plan's race and week span come from its latest committed version, or its
+# draft when it has never been committed.
+_PLAN_SELECT = f"""
+    SELECT p.plan_id, p.title, p.status, p.created_at,
+           v.race_date, v.distance_bucket, v.goal_time_s,
+           (SELECT MIN(week_start) FROM plan_weeks WHERE version_id = v.version_id) AS first_week,
+           (SELECT MAX(week_start) FROM plan_weeks WHERE version_id = v.version_id) AS last_week
+    FROM plans p LEFT JOIN plan_versions v ON v.version_id = (
+        SELECT version_id FROM plan_versions WHERE plan_id = p.plan_id
+        ORDER BY committed_at IS NULL, version_n DESC LIMIT 1)
+"""
+
+
+def view_bundle(conn: sqlite3.Connection, plan_id: int) -> PlanVersionBundle | None:
+    """The version a plan is shown as: its latest committed version, or its
+    draft when it was never committed."""
     row = conn.execute(
-        "SELECT plan_id, title, race_date, distance_bucket, goal_time_s, status, created_at "
-        "FROM plans WHERE plan_id = ?",
+        "SELECT version_id FROM plan_versions WHERE plan_id = ? ORDER BY committed_at IS NULL, version_n DESC LIMIT 1",
         [plan_id],
     ).fetchone()
+    return get_version(conn, int(row["version_id"])) if row is not None else None
+
+
+def list_versions(conn: sqlite3.Connection, plan_id: int) -> list[PlanVersionRow]:
+    """Every version of a plan, draft included, oldest first."""
+    rows = conn.execute(f"SELECT {_VERSION_COLS} FROM plan_versions WHERE plan_id = ? ORDER BY version_n", [plan_id])
+    return [_version_row(r) for r in rows]
+
+
+def get_plan(conn: sqlite3.Connection, plan_id: int) -> PlanRow | None:
+    row = conn.execute(_PLAN_SELECT + " WHERE p.plan_id = ?", [plan_id]).fetchone()
     return _plan_row(row) if row is not None else None
+
+
+def list_plans(conn: sqlite3.Connection, where: str = "1") -> list[PlanRow]:
+    """Plans matching a SQL condition on p (status), earliest weeks first;
+    never-authored drafts last."""
+    rows = [_plan_row(r) for r in conn.execute(_PLAN_SELECT + f" WHERE {where}")]
+    return sorted(rows, key=lambda p: (p["first_week"] is None, p["first_week"] or "", p["plan_id"]))
+
+
+# --- roles (derived from dates, never stored) --------------------------------
+
+def plan_role(p: PlanRow, today: date) -> str:
+    """current | next | past | candidate | abandoned. A committed plan is
+    current while its weeks contain this week's Monday, next when they start
+    later, past once they have ended; a never-committed draft is a candidate."""
+    if p["status"] == "draft":
+        return "candidate"
+    if p["status"] == "abandoned":
+        return "abandoned"
+    monday = monday_of(today).isoformat()
+    first, last = p["first_week"], p["last_week"]
+    if first is None or last is None or last < monday:
+        return "past"
+    return "next" if first > monday else "current"
+
+
+def current_plan(conn: sqlite3.Connection, today: date) -> PlanRow | None:
+    """The committed, non-abandoned plan whose weeks contain this week."""
+    return next((p for p in list_plans(conn) if plan_role(p, today) == "current"), None)
+
+
+def default_plan(conn: sqlite3.Connection, today: date) -> PlanRow | None:
+    """The plan a page opens on: the current one; in a gap between cycles the
+    most recent past plan, else the earliest next one."""
+    current = current_plan(conn, today)
+    if current is not None:
+        return current
+    by_role: dict[str, list[PlanRow]] = {"past": [], "next": []}
+    for p in list_plans(conn):
+        by_role.get(plan_role(p, today), []).append(p)
+    return by_role["past"][-1] if by_role["past"] else by_role["next"][0] if by_role["next"] else None
 
 
 # --- accessors ---------------------------------------------------------------
-
-def get_active_plan(conn: sqlite3.Connection) -> PlanRow | None:
-    """The one active plan, or None. (One active plan at a time is enforced by
-    commit_plan, so at most one row can ever have status='active'.)"""
-    row = conn.execute(
-        "SELECT plan_id, title, race_date, distance_bucket, goal_time_s, status, created_at "
-        "FROM plans WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
-    ).fetchone()
-    return _plan_row(row) if row is not None else None
 
 
 def get_version(conn: sqlite3.Connection, version_id: int) -> PlanVersionBundle | None:
     """A full version snapshot (version row + its weeks + its days), or None."""
     vrow = conn.execute(
-        "SELECT version_id, plan_id, version_n, created_at, committed_at, note, author "
-        "FROM plan_versions WHERE version_id = ?",
+        f"SELECT {_VERSION_COLS} FROM plan_versions WHERE version_id = ?",
         [version_id],
     ).fetchone()
     if vrow is None:
@@ -318,8 +384,8 @@ def current_version_for_week(
 
     versions = [
         _version_row(r) for r in conn.execute(
-            "SELECT version_id, plan_id, version_n, created_at, committed_at, note, author "
-            "FROM plan_versions WHERE plan_id = ? AND committed_at IS NOT NULL ORDER BY version_n",
+            f"SELECT {_VERSION_COLS} FROM plan_versions "
+            "WHERE plan_id = ? AND committed_at IS NOT NULL ORDER BY version_n",
             [plan_id],
         ).fetchall()
     ]
@@ -347,27 +413,6 @@ def current_version_for_week(
 
 # --- completion (auto-complete + retrospective support) ---------------------
 
-def get_most_recent_completed_plan(conn: sqlite3.Connection) -> PlanRow | None:
-    """The most recently raced completed plan (by race_date), or None."""
-    row = conn.execute(
-        "SELECT plan_id, title, race_date, distance_bucket, goal_time_s, status, created_at "
-        "FROM plans WHERE status = 'completed' ORDER BY race_date DESC LIMIT 1"
-    ).fetchone()
-    return _plan_row(row) if row is not None else None
-
-
-def get_current_or_recent_plan(conn: sqlite3.Connection) -> PlanRow | None:
-    """The active plan, or — when there is none — the most recently raced
-    completed plan. Lets a consumer that only cares about "the one plan the
-    athlete is looking at right now" (plan.html, via plan_api.py) keep
-    serving a plan's retrospective the moment it auto-completes (see
-    auto_complete_plan below), without a gap where it goes invisible.
-    Abandoned plans never surface here; once more than one completed plan
-    exists, a plans index page is the answer, not this fallback."""
-    active = get_active_plan(conn)
-    return active if active is not None else get_most_recent_completed_plan(conn)
-
-
 def find_completing_race(conn: sqlite3.Connection, plan_row: PlanRow) -> RaceMatch | None:
     """The synced effective-race activity that would complete plan_row (or
     already did): date within RACE_MATCH_WINDOW_DAYS of race_date, and
@@ -378,6 +423,8 @@ def find_completing_race(conn: sqlite3.Connection, plan_row: PlanRow) -> RaceMat
     (more than one qualifying race in the window) prefer the one closest to
     race_date. Used by auto_complete_plan, the retrospective API, and
     completed_plans_by_race_date."""
+    if plan_row["race_date"] is None or plan_row["distance_bucket"] is None:
+        return None
     race_dt = date.fromisoformat(plan_row["race_date"])
     window_start = (race_dt - timedelta(days=RACE_MATCH_WINDOW_DAYS)).isoformat()
     window_end = (race_dt + timedelta(days=RACE_MATCH_WINDOW_DAYS)).isoformat()
@@ -406,25 +453,21 @@ def find_completing_race(conn: sqlite3.Connection, plan_row: PlanRow) -> RaceMat
     )
 
 
-def auto_complete_plan(conn: sqlite3.Connection) -> int | None:
-    """Flips the active plan's status to 'completed' when a synced
-    effective-race activity now matches its race_date/distance_bucket (see
-    find_completing_race) — called from sync.py after each sync's upserts.
-    No-ops cleanly and returns None: no active plan, or no matching race yet
-    (this also covers "already completed", implicitly — only status='active'
-    plans are ever considered, so a completed plan is simply invisible to the
-    next call). The status flip is the only mutation — plans/plan_versions/
-    plan_weeks/plan_days are untouched and stay append-only. Returns the
-    completed plan_id, or None when nothing changed."""
-    active = get_active_plan(conn)
-    if active is None:
-        return None
-    match = find_completing_race(conn, active)
-    if match is None:
-        return None
-    conn.execute("UPDATE plans SET status = 'completed' WHERE plan_id = ?", [active["plan_id"]])
+def auto_complete_plan(conn: sqlite3.Connection) -> list[int]:
+    """Flips every active plan to 'completed' whose own race now has a
+    matching synced effective-race activity (see find_completing_race) —
+    called from sync.py after each sync's upserts. Plans without a race, and
+    plans already completed, are never considered. The status flip is the
+    only mutation — plans/plan_versions/plan_weeks/plan_days are untouched
+    and stay append-only. Returns the completed plan_ids."""
+    done = [
+        p["plan_id"] for p in list_plans(conn, "p.status = 'active'")
+        if find_completing_race(conn, p) is not None
+    ]
+    for plan_id in done:
+        conn.execute("UPDATE plans SET status = 'completed' WHERE plan_id = ?", [plan_id])
     conn.commit()
-    return active["plan_id"]
+    return done
 
 
 def completed_plans_by_race_date(conn: sqlite3.Connection) -> dict[str, PlanRow]:
@@ -433,13 +476,8 @@ def completed_plans_by_race_date(conn: sqlite3.Connection) -> dict[str, PlanRow]
     to cross-link a race/build row to its plan's retrospective (both already
     key their own rows by that same activity date). A completed plan whose
     race was never synced, or no longer matches, is simply absent."""
-    rows = conn.execute(
-        "SELECT plan_id, title, race_date, distance_bucket, goal_time_s, status, created_at "
-        "FROM plans WHERE status = 'completed'"
-    ).fetchall()
     out: dict[str, PlanRow] = {}
-    for row in rows:
-        plan_row = _plan_row(row)
+    for plan_row in list_plans(conn, "p.status = 'completed'"):
         match = find_completing_race(conn, plan_row)
         if match is not None:
             out[match["date"]] = plan_row
@@ -602,7 +640,7 @@ def add_log_entry(
 ) -> int:
     """Records day-level reality ("skipped Tue, slept badly") without touching
     the plan or bumping a version."""
-    if _get_plan(conn, plan_id) is None:
+    if get_plan(conn, plan_id) is None:
         raise PlanValidationError(f"plan {plan_id} does not exist")
     try:
         date.fromisoformat(log_date)
@@ -626,7 +664,8 @@ def add_log_entry(
 # Exactly one mutable thing: a plan_versions row with committed_at IS NULL.
 # Its weeks/days may be inserted, updated, and deleted freely, in any order,
 # with gaps (upsert_draft_weeks/upsert_draft_days/delete_draft_*). commit_plan
-# runs the global validation (Mondays, contiguous, ending at the race week),
+# runs the global validation (Mondays, contiguous, covering the race week, no
+# overlap with another committed plan),
 # re-freezes zone-anchored day targets as of the commit date, stamps
 # committed_at on the SAME version_id, and the version becomes immutable — no
 # new version_id is allocated at commit, only at draft creation
@@ -661,41 +700,67 @@ def plan_start_monday(conn: sqlite3.Connection, plan_id: int) -> date | None:
     return date.fromisoformat(row["d"]) if row is not None and row["d"] is not None else None
 
 
-def start_plan_draft(
-    conn: sqlite3.Connection,
-    *,
-    title: str,
-    race_date: str,
-    distance_bucket: str,
-    goal_time_s: int | None = None,
-) -> tuple[int, int]:
-    """Creates a new plan, status='draft', plus its empty first (draft)
-    version. A draft plan may coexist with an active one; commit_plan is where
-    that conflict is rejected. Returns (plan_id, version_id)."""
-    if not title.strip():
-        raise PlanValidationError("plan title must not be empty")
+def _validate_race(race_date: str | None, distance_bucket: str | None, goal_time_s: int | None) -> None:
+    """A race is optional, but its date and distance come together and a goal
+    time needs a race."""
+    if race_date is None:
+        if distance_bucket is not None or goal_time_s is not None:
+            raise PlanValidationError("distance_bucket and goal_time_s need a race_date")
+        return
     try:
         date.fromisoformat(race_date)
     except ValueError as e:
         raise PlanValidationError(f"race_date {race_date!r} is not a valid ISO date") from e
-    if not distance_bucket.strip():
-        raise PlanValidationError("distance_bucket must not be empty")
+    if distance_bucket is None or not distance_bucket.strip():
+        raise PlanValidationError("distance_bucket must not be empty when race_date is set")
     if goal_time_s is not None and goal_time_s < 0:
         raise PlanValidationError(f"goal_time_s must be non-negative, got {goal_time_s}")
 
+
+def set_draft_race(
+    conn: sqlite3.Connection,
+    version_id: int,
+    race_date: str | None,
+    distance_bucket: str | None = None,
+    goal_time_s: int | None = None,
+) -> None:
+    """Sets the draft's race, or clears it when race_date is None."""
+    _require_draft_version(conn, version_id)
+    _validate_race(race_date, distance_bucket, goal_time_s)
+    conn.execute(
+        "UPDATE plan_versions SET race_date = ?, distance_bucket = ?, goal_time_s = ? WHERE version_id = ?",
+        (race_date, distance_bucket, goal_time_s, version_id),
+    )
+    conn.commit()
+
+
+def start_plan_draft(
+    conn: sqlite3.Connection,
+    *,
+    title: str,
+    race_date: str | None = None,
+    distance_bucket: str | None = None,
+    goal_time_s: int | None = None,
+) -> tuple[int, int]:
+    """Creates a new plan, status='draft', plus its empty first (draft)
+    version. Any number of draft plans may coexist with each other and with
+    committed ones; commit_plan is where overlap is rejected. Returns
+    (plan_id, version_id)."""
+    if not title.strip():
+        raise PlanValidationError("plan title must not be empty")
+    _validate_race(race_date, distance_bucket, goal_time_s)
+
     created_at = datetime.now(timezone.utc).isoformat()
     cur = conn.execute(
-        "INSERT INTO plans (title, race_date, distance_bucket, goal_time_s, status, created_at) "
-        "VALUES (?, ?, ?, ?, 'draft', ?)",
-        (title, race_date, distance_bucket, goal_time_s, created_at),
+        "INSERT INTO plans (title, status, created_at) VALUES (?, 'draft', ?)", (title, created_at)
     )
     assert cur.lastrowid is not None
     plan_id = int(cur.lastrowid)
 
     vcur = conn.execute(
-        "INSERT INTO plan_versions (plan_id, version_n, created_at, committed_at, note, author) "
-        "VALUES (?, 1, ?, NULL, NULL, 'agent')",
-        (plan_id, created_at),
+        "INSERT INTO plan_versions (plan_id, version_n, created_at, committed_at, note, author, "
+        "race_date, distance_bucket, goal_time_s) VALUES (?, 1, ?, NULL, NULL, 'agent', ?, ?, ?)",
+        (plan_id, created_at, race_date, distance_bucket, goal_time_s),
     )
     assert vcur.lastrowid is not None
     conn.commit()
@@ -704,12 +769,12 @@ def start_plan_draft(
 
 def start_revision_draft(conn: sqlite3.Connection, plan_id: int) -> int:
     """Seeds a new draft version for plan_id by copying the current (latest
-    committed) version's weeks/days verbatim — the athlete then edits
+    committed) version's race and weeks/days verbatim — the athlete then edits
     incrementally via upsert_draft_weeks/upsert_draft_days. Rejects a plan
     with no committed version yet (nothing to revise — use start_plan_draft)
     or one that already has a draft in progress (one draft per plan).
     Returns the new draft's version_id."""
-    if _get_plan(conn, plan_id) is None:
+    if get_plan(conn, plan_id) is None:
         raise PlanValidationError(f"plan {plan_id} does not exist")
 
     existing_draft = conn.execute(
@@ -730,6 +795,7 @@ def start_revision_draft(conn: sqlite3.Connection, plan_id: int) -> int:
         raise PlanValidationError(f"plan {plan_id} has no committed version yet to revise")
     source = get_version(conn, int(latest["version_id"]))
     assert source is not None
+    race = source["version"]
 
     version_n_row = conn.execute(
         "SELECT COALESCE(MAX(version_n), 0) AS n FROM plan_versions WHERE plan_id = ?", [plan_id]
@@ -737,9 +803,9 @@ def start_revision_draft(conn: sqlite3.Connection, plan_id: int) -> int:
     version_n = int(version_n_row["n"]) + 1
     created_at = datetime.now(timezone.utc).isoformat()
     vcur = conn.execute(
-        "INSERT INTO plan_versions (plan_id, version_n, created_at, committed_at, note, author) "
-        "VALUES (?, ?, ?, NULL, NULL, 'agent')",
-        (plan_id, version_n, created_at),
+        "INSERT INTO plan_versions (plan_id, version_n, created_at, committed_at, note, author, "
+        "race_date, distance_bucket, goal_time_s) VALUES (?, ?, ?, NULL, NULL, 'agent', ?, ?, ?)",
+        (plan_id, version_n, created_at, race["race_date"], race["distance_bucket"], race["goal_time_s"]),
     )
     assert vcur.lastrowid is not None
     version_id = int(vcur.lastrowid)
@@ -986,26 +1052,24 @@ def compute_week_mileage(weeks: list[PlanWeekRow], days: list[PlanDayRow]) -> li
     return out
 
 
-def _draft_gap_report(plan: PlanRow, weeks: list[PlanWeekRow], days: list[PlanDayRow]) -> list[str]:
+def _draft_gap_report(version: PlanVersionRow, weeks: list[PlanWeekRow], days: list[PlanDayRow]) -> list[str]:
     """Plain-English messages naming what commit_plan's global validation
     would reject right now: unauthored weeks (by ordinal week number from the
-    earliest authored week), days whose week has no week row, and not yet
-    reaching the race week. Never raises — this is a report, not a gate."""
+    earliest authored week), days whose week has no week row, and weeks that
+    miss the draft's race week. Never raises — this is a report, not a gate."""
     if not weeks:
         return ["no weeks authored yet"]
 
     week_starts = sorted(w["week_start"] for w in weeks)
     plan_start = date.fromisoformat(week_starts[0])
-    race_dt = date.fromisoformat(plan["race_date"])
-    race_monday = monday_of(race_dt)
+    race_monday = monday_of(date.fromisoformat(version["race_date"])) if version["race_date"] else None
     last_authored = date.fromisoformat(week_starts[-1])
 
     have = {date.fromisoformat(w) for w in week_starts}
-    scan_end = max(last_authored, race_monday)
     missing_idx: list[int] = []
     idx = 0
     cursor = plan_start
-    while cursor <= scan_end:
+    while cursor <= last_authored:
         idx += 1
         if cursor not in have:
             missing_idx.append(idx)
@@ -1015,10 +1079,10 @@ def _draft_gap_report(plan: PlanRow, weeks: list[PlanWeekRow], days: list[PlanDa
     for start_i, end_i in _compress_ranges(missing_idx):
         gaps.append(f"week {start_i} unauthored" if start_i == end_i else f"weeks {start_i}-{end_i} unauthored")
 
-    if last_authored < race_monday:
+    if race_monday is not None and not plan_start <= race_monday <= last_authored:
         gaps.append(
-            f"weeks don't reach race week ({race_monday.isoformat()}); "
-            f"last authored week is {week_starts[-1]}"
+            f"weeks don't include race week ({race_monday.isoformat()}); "
+            f"authored weeks run {week_starts[0]} to {week_starts[-1]}"
         )
 
     week_start_set = set(week_starts)
@@ -1037,7 +1101,7 @@ def get_draft(conn: sqlite3.Connection, plan_id: int) -> DraftBundle:
     """Current state of plan_id's one draft (weeks/days as authored so far,
     zone-anchored day targets still unresolved) plus a gap report — see
     _draft_gap_report. Raises if the plan doesn't exist or has no draft."""
-    plan = _get_plan(conn, plan_id)
+    plan = get_plan(conn, plan_id)
     if plan is None:
         raise PlanValidationError(f"plan {plan_id} does not exist")
     draft = conn.execute(
@@ -1048,7 +1112,7 @@ def get_draft(conn: sqlite3.Connection, plan_id: int) -> DraftBundle:
 
     bundle = get_version(conn, int(draft["version_id"]))
     assert bundle is not None
-    gaps = _draft_gap_report(plan, bundle["weeks"], bundle["days"])
+    gaps = _draft_gap_report(bundle["version"], bundle["weeks"], bundle["days"])
     return {"plan": plan, "version": bundle["version"], "weeks": bundle["weeks"], "days": bundle["days"], "gaps": gaps}
 
 
@@ -1111,7 +1175,9 @@ def _snapshot_past_weeks(conn: sqlite3.Connection, plan_id: int, version_id: int
 
 def commit_plan(conn: sqlite3.Connection, plan_id: int, *, note: str) -> int:
     """Runs full global validation on plan_id's draft (Mondays already
-    guaranteed by upsert; contiguous, ends at the race week, every day falls
+    guaranteed by upsert; contiguous, includes the race week when the draft
+    has a race (it may extend past it), shares no week with another
+    committed, non-abandoned plan, every day falls
     in a committed week; every week's authored mileage band agrees with the
     program-computed sum of its mileage-slot days — see compute_week_mileage
     — within WEEK_MILEAGE_TOLERANCE_MI, the hard block this function adds),
@@ -1122,34 +1188,19 @@ def commit_plan(conn: sqlite3.Connection, plan_id: int, *, note: str) -> int:
     "authoring" for that rule), stamps committed_at on the draft's own
     version_id (no new version_id is allocated), and flips the plan to
     status='active'.
-
-    Rejects committing a brand-new plan (status='draft') while a different
-    plan is already active — a draft plan may coexist with one, but only one
-    can hold the active slot. Revising the currently-active plan itself is
-    always allowed.
     """
     if not note or not note.strip():
         raise PlanValidationError("commit_plan requires a non-empty note")
-    plan = _get_plan(conn, plan_id)
+    plan = get_plan(conn, plan_id)
     if plan is None:
         raise PlanValidationError(f"plan {plan_id} does not exist")
 
     draft = conn.execute(
-        "SELECT version_id FROM plan_versions WHERE plan_id = ? AND committed_at IS NULL", [plan_id]
+        "SELECT version_id, race_date FROM plan_versions WHERE plan_id = ? AND committed_at IS NULL", [plan_id]
     ).fetchone()
     if draft is None:
         raise PlanValidationError(f"plan {plan_id} has no draft in progress")
     version_id = int(draft["version_id"])
-
-    if plan["status"] == "draft":
-        other_active = conn.execute(
-            "SELECT plan_id, title FROM plans WHERE status = 'active' AND plan_id != ?", [plan_id]
-        ).fetchone()
-        if other_active is not None:
-            raise PlanValidationError(
-                f"an active plan already exists (plan_id={int(other_active['plan_id'])}, "
-                f"title={other_active['title']!r}); abandon or complete it before committing a new plan"
-            )
 
     has_prior_committed = conn.execute(
         "SELECT 1 FROM plan_versions WHERE plan_id = ? AND committed_at IS NOT NULL LIMIT 1", [plan_id]
@@ -1174,14 +1225,23 @@ def commit_plan(conn: sqlite3.Connection, plan_id: int, *, note: str) -> int:
                 f"is {gap} days apart, expected 7"
             )
 
-    race_dt = date.fromisoformat(plan["race_date"])
-    race_monday = monday_of(race_dt)
-    last_week = date.fromisoformat(weeks[-1]["week_start"])
-    if last_week != race_monday:
-        raise PlanValidationError(
-            f"plan must end at the race week ({race_monday.isoformat()}); "
-            f"last week given is {last_week.isoformat()}"
-        )
+    first_week, last_week = weeks[0]["week_start"], weeks[-1]["week_start"]
+    if draft["race_date"] is not None:
+        race_monday = monday_of(date.fromisoformat(draft["race_date"])).isoformat()
+        if not first_week <= race_monday <= last_week:
+            raise PlanValidationError(
+                f"plan weeks must include the race week ({race_monday}); weeks given run {first_week} to {last_week}"
+            )
+
+    for other in list_plans(conn, "p.status IN ('active', 'completed')"):
+        if other["plan_id"] == plan_id or other["first_week"] is None or other["last_week"] is None:
+            continue
+        overlap_start, overlap_end = max(first_week, other["first_week"]), min(last_week, other["last_week"])
+        if overlap_start <= overlap_end:
+            raise PlanValidationError(
+                f"weeks {overlap_start} to {overlap_end} are already covered by plan {other['plan_id']} "
+                f"({other['title']!r}); a committed plan cannot share weeks with another"
+            )
 
     week_starts = {w["week_start"] for w in weeks}
     days = [_day_row(r) for r in conn.execute(
@@ -1232,7 +1292,7 @@ def discard_draft(conn: sqlite3.Connection, plan_id: int) -> None:
     """Deletes plan_id's draft version and its weeks/days. If the plan itself
     was never committed (status still 'draft'), the plan row is deleted too —
     a never-committed plan simply disappears."""
-    plan = _get_plan(conn, plan_id)
+    plan = get_plan(conn, plan_id)
     if plan is None:
         raise PlanValidationError(f"plan {plan_id} does not exist")
     draft = conn.execute(
@@ -1259,6 +1319,9 @@ def diff_versions(conn: sqlite3.Connection, version_a: int, version_b: int) -> V
         raise PlanValidationError(f"version {version_a} does not exist")
     if b is None:
         raise PlanValidationError(f"version {version_b} does not exist")
+
+    race_a, race_b = cast(dict[str, object], a["version"]), cast(dict[str, object], b["version"])
+    changed_race = {f: (race_a[f], race_b[f]) for f in _RACE_FIELDS if race_a[f] != race_b[f]}
 
     weeks_a = {w["week_start"]: w for w in a["weeks"]}
     weeks_b = {w["week_start"]: w for w in b["weeks"]}
@@ -1298,6 +1361,7 @@ def diff_versions(conn: sqlite3.Connection, version_a: int, version_b: int) -> V
     return {
         "version_a": version_a,
         "version_b": version_b,
+        "changed_race": changed_race,
         "changed_weeks": changed_weeks,
         "changed_days": changed_days,
     }

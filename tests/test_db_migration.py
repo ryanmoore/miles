@@ -72,6 +72,7 @@ _SCHEMA_HASHES = {
     5: "eced04bc3140de98412c8305f094cd28947afd1eb49c85b278c08b5cf1b8269d",
     6: "6c2443c41b2c620905daaaca78298770f2776ec2dcb110db19e0a9d83a929d19",
     7: "239c51462c312234af1a0eac93e415c3f5a73cdfefd5168082b3312f9ab25a96",
+    8: "a3b37b8498aa8655f0beab0aae5b1fdada6175eaa74f355af865ce200d0f3e15",
 }
 
 
@@ -124,7 +125,7 @@ def _release_database(path: Path) -> sqlite3.Connection:
 def test_a_database_from_the_first_release_upgrades_to_the_schema_a_fresh_one_gets(conn: sqlite3.Connection, tmp_path: Path):
     old = _release_database(tmp_path / "release.db")
     assert "elevation_source" not in {r["name"] for r in old.execute("PRAGMA table_info(routes)")}
-    old.execute("INSERT INTO plans (plan_id, title, race_date, distance_bucket, created_at) VALUES (1, 'P', '2026-05-30', '10K', '2026-01-01')")
+    old.execute("INSERT INTO plans (plan_id, title, created_at) VALUES (1, 'P', '2026-01-01')")
     old.execute("INSERT INTO plan_versions (version_id, plan_id, version_n, created_at, committed_at, author) VALUES (1, 1, 1, '2026-01-02', NULL, 'agent')")
     old.execute("INSERT INTO meta (key, value) VALUES ('start_date_local_migrated', '1')")
     _insert_dirty_row(old)
@@ -323,3 +324,23 @@ def test_a_version_2_database_gains_the_section_tables_and_keeps_its_graphs(conn
     assert _layout(old) == _layout(conn)
     assert old.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     assert old.execute("SELECT derive_version FROM net_graphs").fetchone()[0] == 8  # rebuilt later by the version gate
+
+
+def test_a_version_7_database_moves_each_plans_race_onto_its_versions(conn: sqlite3.Connection, tmp_path: Path):
+    old = _release_database(tmp_path / "v7.db")
+    old.execute("ALTER TABLE plans ADD COLUMN race_date TEXT NOT NULL DEFAULT ''")
+    old.execute("ALTER TABLE plans ADD COLUMN distance_bucket TEXT NOT NULL DEFAULT ''")
+    old.execute("ALTER TABLE plans ADD COLUMN goal_time_s INTEGER")
+    for column in ("race_date", "distance_bucket", "goal_time_s"):
+        old.execute(f"ALTER TABLE plan_versions DROP COLUMN {column}")
+    old.execute("INSERT INTO plans (plan_id, title, race_date, distance_bucket, goal_time_s, created_at) VALUES (1, 'P', '2030-05-30', '10K', 2400, '2030-01-01')")
+    old.execute("INSERT INTO plan_versions (version_id, plan_id, version_n, created_at, committed_at, author) VALUES (1, 1, 1, '2030-01-02', '2030-01-02', 'agent'), (2, 1, 2, '2030-02-02', NULL, 'agent')")
+    old.execute("PRAGMA user_version = 7")
+    old.commit()
+
+    db.init_db(old)
+
+    assert _layout(old) == _layout(conn)
+    assert "race_date" not in {r["name"] for r in old.execute("PRAGMA table_info(plans)")}
+    versions = old.execute("SELECT race_date, distance_bucket, goal_time_s FROM plan_versions ORDER BY version_n").fetchall()
+    assert [tuple(v) for v in versions] == [("2030-05-30", "10K", 2400)] * 2

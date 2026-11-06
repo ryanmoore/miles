@@ -71,13 +71,17 @@ class AthleteRow(TypedDict):
 
 
 class PlanRow(TypedDict):
+    """A plan with the race and week span of its latest committed version (its
+    draft when it was never committed); the race is optional."""
     plan_id: int
     title: str
-    race_date: str
-    distance_bucket: str
+    race_date: str | None
+    distance_bucket: str | None
     goal_time_s: int | None
     status: str
     created_at: str
+    first_week: str | None
+    last_week: str | None
 
 
 class PlanVersionRow(TypedDict):
@@ -87,6 +91,9 @@ class PlanVersionRow(TypedDict):
     created_at: str
     note: str | None
     author: str
+    race_date: str | None
+    distance_bucket: str | None
+    goal_time_s: int | None
     # NULL = this is the mutable draft; a real timestamp = committed and
     # immutable. NotRequired so existing call sites that pre-date this column
     # (e.g. plan_api.py's hand-built rows) still type-check without it.
@@ -224,7 +231,7 @@ def connection(opener: Callable[[], sqlite3.Connection] | None = None) -> Iterat
         conn.close()
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def add_missing_columns(conn: sqlite3.Connection, table: str, *columns: str) -> bool:
@@ -382,9 +389,6 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS plans (
             plan_id         INTEGER PRIMARY KEY,
             title           TEXT NOT NULL,
-            race_date       TEXT NOT NULL,
-            distance_bucket TEXT NOT NULL,
-            goal_time_s     INTEGER,
             status          TEXT NOT NULL DEFAULT 'active',
             created_at      TEXT NOT NULL
         )
@@ -404,6 +408,9 @@ def init_db(conn: sqlite3.Connection) -> None:
             committed_at TEXT,
             note         TEXT,
             author       TEXT NOT NULL,
+            race_date       TEXT,
+            distance_bucket TEXT,
+            goal_time_s     INTEGER,
             UNIQUE(plan_id, version_n)
         )
     """)
@@ -414,6 +421,18 @@ def init_db(conn: sqlite3.Connection) -> None:
     # NULL until commit_plan stamps it.
     if add_missing_columns(conn, "plan_versions", "committed_at TEXT"):
         conn.execute("UPDATE plan_versions SET committed_at = created_at WHERE committed_at IS NULL")
+    # The race moved from the plan onto each version (it can change in a
+    # revision and may be unset). Copy it into every existing version first.
+    if "race_date" in {r[1] for r in conn.execute("PRAGMA table_info(plans)")}:
+        add_missing_columns(conn, "plan_versions", "race_date TEXT", "distance_bucket TEXT", "goal_time_s INTEGER")
+        conn.execute("""
+            UPDATE plan_versions SET
+                race_date = (SELECT race_date FROM plans WHERE plans.plan_id = plan_versions.plan_id),
+                distance_bucket = (SELECT distance_bucket FROM plans WHERE plans.plan_id = plan_versions.plan_id),
+                goal_time_s = (SELECT goal_time_s FROM plans WHERE plans.plan_id = plan_versions.plan_id)
+        """)
+        for column in ("race_date", "distance_bucket", "goal_time_s"):
+            conn.execute(f"ALTER TABLE plans DROP COLUMN {column}")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS plan_weeks (
             version_id              INTEGER NOT NULL REFERENCES plan_versions(version_id) ON DELETE CASCADE,

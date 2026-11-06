@@ -57,7 +57,7 @@ def seeded() -> None:
     _segments(conn, 3, "2026-10-11", [(450, 3.0, 5.0), (450, 3.2, -5.0)])
     _segments(conn, 4, "2026-10-15", [(250, 3.2, 0.0)] + [p for _ in range(5) for p in ((6, 5.8, 0.0), (24, 3.2, 0.0))] + [(20, 3.2, 0.0)])
     conn.execute(
-        "INSERT INTO plans (plan_id, title, race_date, distance_bucket, created_at) VALUES (1, 'P', '2026-12-06', 'marathon', '2026-09-01')"
+        "INSERT INTO plans (plan_id, title, created_at) VALUES (1, 'P', '2026-09-01')"
     )
     conn.execute("INSERT INTO plan_versions (version_id, plan_id, version_n, created_at, committed_at, author) VALUES (1, 1, 1, '2026-09-01', '2026-09-01', 'a')")
     conn.execute(

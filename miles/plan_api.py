@@ -165,18 +165,19 @@ class VsLastWeekOut(TypedDict):
 
 class PlanResponse(TypedDict):
     plan: PlanRow
+    role: str  # plan.plan_role: current | next | past | candidate | abandoned
     version: PlanVersionRow | None
     weeks: list[PlanWeekOut]
     days: list[PlanDayOut]
     actual: dict[str, list[PlanActivity]]  # keyed by date, every synced run in the plan window
     log: dict[str, list[PlanLogEntry]]  # keyed by date, every plan_log entry in the plan window
-    weeks_to_race: int
+    weeks_to_race: int | None  # None for a plan with no race
     this_week: ThisWeekStat | None
     goal: GoalStat | None
     last_sync_at: str | None
     synced_through: str | None  # last_sync_at's date, only when it predates today (the freshness label trigger)
-    today: TodayOut | None  # None unless the plan is active
-    week_so_far: WeekSoFarOut | None  # None unless active and current week is in the plan's week list
+    today: TodayOut | None  # None unless the plan is current
+    week_so_far: WeekSoFarOut | None  # None unless current and this week is in the plan's week list
     vs_last_week: VsLastWeekOut | None  # None unless week_so_far applies and week_started
 
 
@@ -384,21 +385,18 @@ def _today_blocks(
     today: date,
     cutoff_date: date,
 ) -> tuple[TodayOut | None, WeekSoFarOut | None, VsLastWeekOut | None]:
-    """Today/week_so_far/vs_last_week, computed only for an active plan.
+    """Today/week_so_far/vs_last_week for the current plan.
     cutoff_date is the sync cutoff from _sync_cutoff_date."""
-    if active["status"] != "active":
-        return None, None, None
-
     monday = monday_of(today)
     monday_iso = monday.isoformat()
     week = next((w for w in weeks_in if w["week_start"] == monday_iso), None)
 
-    race_dt = date.fromisoformat(active["race_date"])
+    race_dt = date.fromisoformat(active["race_date"]) if active["race_date"] else None
     today_out = TodayOut(
         date=today.isoformat(),
         sessions=[_day_out(d) for d in days_in if d["date"] == today.isoformat()],
         is_race_day=race_dt == today,
-        is_race_week=monday <= race_dt <= monday + timedelta(days=6),
+        is_race_week=race_dt is not None and monday <= race_dt <= monday + timedelta(days=6),
         week_start=monday_iso if week is not None else None,
     )
     if week is None:
@@ -478,27 +476,37 @@ def _day_out(d: PlanDayRow) -> PlanDayOut:
     )
 
 
-@router.get("/api/plan")
-def get_plan() -> PlanResponse | None:
-    """
-    The active plan's latest version (highest version_n) — weeks and days —
-    with actual weekly miles/workout counts and per-day synced runs and
-    plan_log annotations joined in. This is the plan as it reads now, not the
-    per-week contemporaneous version the adherence scoring uses.
+def _selected_plan(conn: sqlite3.Connection, plan_id: int | None) -> PlanRow | None:
+    """The plan a read endpoint serves: plan_id when given (404 if unknown),
+    else plan.default_plan — the current plan, falling back to the most
+    recent past one."""
+    if plan_id is None:
+        return plan.default_plan(conn, date.today())
+    row = plan.get_plan(conn, plan_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"plan {plan_id} does not exist")
+    return row
 
-    With no active plan, falls back to the most recently raced completed plan
-    (plan.get_current_or_recent_plan). Returns null only when there is neither.
+
+@router.get("/api/plan")
+def get_plan(plan_id: int | None = None) -> PlanResponse | None:
+    """
+    A plan's latest committed version (its draft when never committed) —
+    weeks and days — with actual weekly miles/workout counts and per-day
+    synced runs and plan_log annotations joined in. This is the plan as it
+    reads now, not the per-week contemporaneous version the adherence scoring
+    uses.
+
+    plan_id defaults to the current plan (plan.default_plan). Returns null
+    only when there are no plans. `today`/`week_so_far`/`vs_last_week` are
+    filled only when the plan is current.
     """
     conn = _conn()
-    active = plan.get_current_or_recent_plan(conn)
+    active = _selected_plan(conn, plan_id)
     if active is None:
         return None
 
-    latest = conn.execute(
-        "SELECT version_id FROM plan_versions WHERE plan_id = ? ORDER BY version_n DESC LIMIT 1",
-        [active["plan_id"]],
-    ).fetchone()
-    bundle = plan.get_version(conn, int(latest["version_id"])) if latest is not None else None
+    bundle = plan.view_bundle(conn, active["plan_id"])
 
     weeks_in = bundle["weeks"] if bundle is not None else []
     days_in = bundle["days"] if bundle is not None else []
@@ -551,13 +559,13 @@ def get_plan() -> PlanResponse | None:
         activities = _activities_by_date(conn, window_start, window_end)
         logs = _log_by_date(conn, active["plan_id"], window_start, window_end)
 
-    race_dt = date.fromisoformat(active["race_date"])
-    race_monday = monday_of(race_dt)
-    current_monday_dt = date.fromisoformat(current_monday)
-    weeks_to_race = max(0, (race_monday - current_monday_dt).days // 7)
+    weeks_to_race = (
+        max(0, (monday_of(date.fromisoformat(active["race_date"])) - monday_of(today)).days // 7)
+        if active["race_date"] else None
+    )
 
     goal: GoalStat | None = None
-    if active["goal_time_s"] is not None:
+    if active["goal_time_s"] is not None and active["distance_bucket"] is not None:
         equivalent_time_s: float | None = None
         confidence: str | None = None
         est = estimate_fitness(conn, today)
@@ -572,10 +580,14 @@ def get_plan() -> PlanResponse | None:
     last_sync_at = db.get_last_sync_at(conn)
     cutoff_date = _sync_cutoff_date(conn, today)
     synced_through = cutoff_date.isoformat() if cutoff_date < today else None
-    today_out, week_so_far, vs_last_week = _today_blocks(conn, active, weeks_in, days_in, today, cutoff_date)
+    role = plan.plan_role(active, today)
+    today_out, week_so_far, vs_last_week = (
+        _today_blocks(conn, active, weeks_in, days_in, today, cutoff_date) if role == "current" else (None, None, None)
+    )
 
     return PlanResponse(
         plan=active,
+        role=role,
         version=bundle["version"] if bundle is not None else None,
         weeks=weeks_out,
         days=days_out,
@@ -637,33 +649,20 @@ def get_today() -> TodayResponse:
 
 
 @router.get("/api/plan-versions")
-def get_plan_versions() -> list[PlanVersionRow]:
-    """Every version of the active plan (or the most recently completed one,
-    see plan.get_current_or_recent_plan), oldest first. Empty list when
-    there's neither."""
+def get_plan_versions(plan_id: int | None = None) -> list[PlanVersionRow]:
+    """Every version of a plan (default: see /api/plan), oldest first, each
+    with its race; a draft has committed_at null. Empty list when there are
+    no plans."""
     conn = _conn()
-    active = plan.get_current_or_recent_plan(conn)
-    if active is None:
-        return []
-    rows = conn.execute(
-        "SELECT version_id, plan_id, version_n, created_at, note, author "
-        "FROM plan_versions WHERE plan_id = ? ORDER BY version_n",
-        [active["plan_id"]],
-    ).fetchall()
-    return [
-        PlanVersionRow(
-            version_id=int(r["version_id"]), plan_id=int(r["plan_id"]), version_n=int(r["version_n"]),
-            created_at=r["created_at"], note=r["note"], author=r["author"],
-        )
-        for r in rows
-    ]
+    selected = _selected_plan(conn, plan_id)
+    return plan.list_versions(conn, selected["plan_id"]) if selected is not None else []
 
 
 @router.get("/api/plan-diff")
 def get_plan_diff(a: int, b: int) -> VersionDiff:
     """Thin wrapper over plan.py's diff_versions: changed weeks (which target
-    fields changed) and added/removed/changed days between version ids a and
-    b. 404s when either version id doesn't exist."""
+    fields changed), race changes, and added/removed/changed days between
+    version ids a and b. 404s when either version id doesn't exist."""
     conn = _conn()
     try:
         return plan.diff_versions(conn, a, b)
@@ -724,7 +723,7 @@ def _adherence_rows(conn: sqlite3.Connection, plan_id: int) -> list[sqlite3.Row]
 
 
 @router.get("/api/plan-adherence")
-def get_plan_adherence() -> PlanAdherenceResponse | None:
+def get_plan_adherence(plan_id: int | None = None) -> PlanAdherenceResponse | None:
     """
     The judgment layer over plan_adherence (derived, rebuilt by derive_all —
     see miles/plan_adherence.py): one row per completed week of the active
@@ -743,12 +742,11 @@ def get_plan_adherence() -> PlanAdherenceResponse | None:
     `on_or_close` counts weeks banded "on" or "close" — a close-mileage week
     that hit its workouts is a normal week of marathon training, not a miss.
 
-    Returns null when there's neither an active nor a completed plan (see
-    plan.get_current_or_recent_plan), or the plan hasn't reached its first
-    completed week yet.
+    Returns null when there is no plan (plan_id defaults as in /api/plan), or
+    the plan has no scored weeks yet (a candidate never has any).
     """
     conn = _conn()
-    active = plan.get_current_or_recent_plan(conn)
+    active = _selected_plan(conn, plan_id)
     if active is None:
         return None
 
@@ -996,7 +994,7 @@ def _workout_caption(points: Sequence[WorkoutPoint]) -> str:
 
 
 @router.get("/api/plan-progression")
-def get_plan_progression() -> PlanProgressionResponse | None:
+def get_plan_progression(plan_id: int | None = None) -> PlanProgressionResponse | None:
     """
     Easy-run and workout-pace progression scoped to the plan window.
 
@@ -1011,19 +1009,14 @@ def get_plan_progression() -> PlanProgressionResponse | None:
     `checkpoints`: monthly 5K-pace fitness_checkpoints rows inside the plan
     window.
 
-    Returns null when there's neither an active nor a completed plan (see
-    plan.get_current_or_recent_plan).
+    Returns null when there is no plan (plan_id defaults as in /api/plan).
     """
     conn = _conn()
-    active = plan.get_current_or_recent_plan(conn)
+    active = _selected_plan(conn, plan_id)
     if active is None:
         return None
 
-    latest = conn.execute(
-        "SELECT version_id FROM plan_versions WHERE plan_id = ? ORDER BY version_n DESC LIMIT 1",
-        [active["plan_id"]],
-    ).fetchone()
-    bundle = plan.get_version(conn, int(latest["version_id"])) if latest is not None else None
+    bundle = plan.view_bundle(conn, active["plan_id"])
     weeks_in = bundle["weeks"] if bundle is not None else []
     week_starts = [w["week_start"] for w in weeks_in]
 
@@ -1138,15 +1131,14 @@ def get_progression(weeks: int = _PROGRESSION_DEFAULT_WEEKS) -> ProgressionRespo
 # --- race retrospective ---------------------------------------------------
 #
 # Data for a plan whose goal race has been run (see plan.auto_complete_plan).
-# Reads the plan from plan.get_current_or_recent_plan and returns null unless
-# its status is 'completed'.
+# Returns null unless the selected plan's status is 'completed'.
 
 
-def _match_name(bucket: str, names: Iterable[str]) -> str | None:
+def _match_name(bucket: str | None, names: Iterable[str]) -> str | None:
     """The entry of `names` equal to a plan's distance_bucket ignoring case:
     the codebase spells buckets both as races.py's categories ('marathon',
     'half', '5K') and distance_builds.py's Bucket ('Marathon', 'Half')."""
-    target = bucket.strip().casefold()
+    target = (bucket or "").strip().casefold()
     return next((name for name in names if name.casefold() == target), None)
 
 
@@ -1236,6 +1228,61 @@ def _final_adherence_rollup(conn: sqlite3.Connection, plan_id: int) -> FinalAdhe
     )
 
 
+class PlanRaceOut(TypedDict):
+    date: str
+    distance_bucket: str | None
+    goal_time_s: int | None
+
+
+class PlanSummary(TypedDict):
+    plan_id: int
+    title: str
+    role: str  # plan.plan_role: current | next | past | candidate | abandoned
+    status: str
+    first_week: str | None
+    last_week: str | None
+    race: PlanRaceOut | None
+    versions: int  # every version, a draft included
+    adherence: FinalAdherence | None  # None until a week has been scored
+    peak_target_miles: float | None
+    peak_actual_miles: float | None  # peak synced week inside the plan's weeks
+    result_time_s: int | None  # the matched race's moving time, once completed
+
+
+def plan_summaries(conn: sqlite3.Connection, today: date) -> list[PlanSummary]:
+    """One row per plan, earliest weeks first — the plan list and the
+    cross-plan comparison."""
+    version_counts = {r["plan_id"]: r["n"] for r in conn.execute("SELECT plan_id, COUNT(*) AS n FROM plan_versions GROUP BY plan_id")}
+    out: list[PlanSummary] = []
+    for p in plan.list_plans(conn):
+        bundle = plan.view_bundle(conn, p["plan_id"])
+        targets = [w["target_miles"] for w in bundle["weeks"] if w["target_miles"] is not None] if bundle else []
+        actual = (
+            _actual_by_week(conn, p["first_week"], (date.fromisoformat(p["last_week"]) + timedelta(days=6)).isoformat())
+            if p["first_week"] and p["last_week"] else {}
+        )
+        match = plan.find_completing_race(conn, p) if p["status"] == "completed" else None
+        out.append(PlanSummary(
+            plan_id=p["plan_id"], title=p["title"], role=plan.plan_role(p, today), status=p["status"],
+            first_week=p["first_week"], last_week=p["last_week"],
+            race=PlanRaceOut(date=p["race_date"], distance_bucket=p["distance_bucket"], goal_time_s=p["goal_time_s"])
+            if p["race_date"] else None,
+            versions=version_counts.get(p["plan_id"], 0),
+            adherence=_final_adherence_rollup(conn, p["plan_id"]),
+            peak_target_miles=max(targets) if targets else None,
+            peak_actual_miles=max((m for m, _ in actual.values()), default=None),
+            result_time_s=match["moving_time_s"] if match else None,
+        ))
+    return out
+
+
+@router.get("/api/plans")
+def get_plans() -> list[PlanSummary]:
+    """Every plan with its derived role, race, version count, adherence
+    rollup, peak target and actual week, and race result time."""
+    return plan_summaries(_conn(), date.today())
+
+
 def _detected_build_for_race(conn: sqlite3.Connection, race_date: str) -> Build | None:
     """The detect_builds() build anchored to race_date, if any. Short races
     below BUILD_ANCHOR_MIN_M never anchor one; the caller reports
@@ -1245,18 +1292,18 @@ def _detected_build_for_race(conn: sqlite3.Connection, race_date: str) -> Build 
 
 
 @router.get("/api/plan-retrospective")
-def get_plan_retrospective() -> PlanRetrospectiveResponse | None:
+def get_plan_retrospective(plan_id: int | None = None) -> PlanRetrospectiveResponse | None:
     """
     Retrospective for a completed plan: the final adherence rollup, the
     matching race result, the goal vs a fitness prediction as of the day
     before the race (derive.predicted_pace_for_race), and the plan's target
     ramp vs the build detect_builds() found for the same race.
 
-    Returns null unless the current-or-recent plan's status is 'completed'.
+    Returns null unless the plan (default: see /api/plan) is 'completed'.
     """
     conn = _conn()
-    current = plan.get_current_or_recent_plan(conn)
-    if current is None or current["status"] != "completed":
+    current = _selected_plan(conn, plan_id)
+    if current is None or current["status"] != "completed" or current["race_date"] is None or current["distance_bucket"] is None:
         return None
 
     match = plan.find_completing_race(conn, current)
@@ -1293,11 +1340,7 @@ def get_plan_retrospective() -> PlanRetrospectiveResponse | None:
 
     final_adherence = _final_adherence_rollup(conn, current["plan_id"])
 
-    latest = conn.execute(
-        "SELECT version_id FROM plan_versions WHERE plan_id = ? ORDER BY version_n DESC LIMIT 1",
-        [current["plan_id"]],
-    ).fetchone()
-    bundle = plan.get_version(conn, int(latest["version_id"])) if latest is not None else None
+    bundle = plan.view_bundle(conn, current["plan_id"])
     weeks_in = bundle["weeks"] if bundle is not None else []
     plan_ramp: PlanRampSummary | None = None
     if weeks_in:
@@ -1687,10 +1730,10 @@ def _readiness_sessions(
 
 
 @router.get("/api/plan-readiness")
-def get_plan_readiness() -> PlanReadinessResponse | None:
+def get_plan_readiness(plan_id: int | None = None) -> PlanReadinessResponse | None:
     """
-    Readiness evidence for the ACTIVE plan; null for a completed plan or when
-    no plan exists.
+    Readiness evidence for an ACTIVE plan with a race (default plan: see
+    /api/plan); null otherwise.
 
     Alignment is by weeks-out, not calendar date: with k = weeks to race and
     W = min(plan length, the bucket's build-window length), the current block
@@ -1702,15 +1745,11 @@ def get_plan_readiness() -> PlanReadinessResponse | None:
     Every candidate's aligned stats are in builds.by_date.
     """
     conn = _conn()
-    active = plan.get_current_or_recent_plan(conn)
-    if active is None or active["status"] != "active":
+    active = _selected_plan(conn, plan_id)
+    if active is None or active["status"] != "active" or active["race_date"] is None:
         return None
 
-    latest = conn.execute(
-        "SELECT version_id FROM plan_versions WHERE plan_id = ? ORDER BY version_n DESC LIMIT 1",
-        [active["plan_id"]],
-    ).fetchone()
-    bundle = plan.get_version(conn, int(latest["version_id"])) if latest is not None else None
+    bundle = plan.view_bundle(conn, active["plan_id"])
     weeks_in = bundle["weeks"] if bundle is not None else []
     if not weeks_in:
         return None

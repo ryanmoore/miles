@@ -447,16 +447,12 @@ def _run(
     # sync cycle.
     _derive(conn, progress)
 
-    # Auto-complete the active plan when a synced effective-race activity
-    # now matches its race_date (+/-1 day) and distance_bucket (case-
-    # insensitive) — placed after the derive above so a race that was only
-    # just inferred (run_type_inferred) this same sync cycle is already
-    # visible to the match, not just on the next sync. The only mutation is
-    # the status flip; plans/plan_versions/plan_weeks/plan_days stay
-    # untouched and append-only. No-ops cleanly with no active plan or no
-    # matching race (see plan.auto_complete_plan).
-    completed_plan_id = plan.auto_complete_plan(conn)
-    if completed_plan_id is not None:
+    # Auto-complete each active plan whose own race (date +/-1 day, distance
+    # bucket) now matches a synced effective-race activity — placed after the
+    # derive above so a race that was only just inferred (run_type_inferred)
+    # this same sync cycle is already visible to the match. The only mutation
+    # is the status flip (see plan.auto_complete_plan).
+    for completed_plan_id in plan.auto_complete_plan(conn):
         _logger.info("Plan %s auto-completed (matching race synced).", completed_plan_id)
 
     _pass_details(conn, new_run_ids, gate, progress)

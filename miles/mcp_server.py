@@ -19,6 +19,7 @@ from .fitness import WINDOW_DAYS, estimate_fitness
 from .format import fmt_pace, fmt_time
 from .offload import threaded
 from .periods import GAP_WEEKS_TO_SPLIT, Period, WeekAgg, is_active, monday_of, sunday_of, detect_periods
+from .plan_api import plan_summaries
 from .plan import (
     DayInput,
     PlanValidationError,
@@ -31,10 +32,13 @@ from .plan import (
     delete_draft_weeks as _plan_delete_draft_weeks,
     diff_versions,
     discard_draft as _plan_discard_draft,
-    get_active_plan,
+    current_plan,
+    default_plan,
     get_draft as _plan_get_draft,
+    get_plan,
     get_version,
     plan_start_monday,
+    set_draft_race as _plan_set_draft_race,
     start_plan_draft as _plan_start_plan_draft,
     start_revision_draft as _plan_start_revision_draft,
     upsert_draft_days,
@@ -1753,25 +1757,50 @@ def _day_with_target(d: db.PlanDayRow) -> dict[str, object]:
     return out
 
 
-def _resolve_draft(conn: sqlite3.Connection) -> tuple[int, int] | dict[str, str]:
-    """Locates the one in-progress draft (a plan_versions row with
-    committed_at IS NULL) and returns (plan_id, version_id). Every
-    draft-editing tool takes no plan_id — normal usage has at most one draft
-    open at a time — so this returns a named {"error": ...} dict instead of
-    raising when there is none, or (a multi-plan-drafting edge case: a new
-    plan drafted while a revision draft is also open on another plan) more
-    than one, since neither tool has any way to disambiguate."""
+def _resolve_draft(conn: sqlite3.Connection, plan_id: int | None) -> tuple[int, int] | dict[str, str]:
+    """Locates an in-progress draft (a plan_versions row with committed_at
+    IS NULL) and returns (plan_id, version_id): plan_id's draft when given,
+    else the only draft open. Returns a named {"error": ...} dict instead of
+    raising when there is none, or several and no plan_id to choose."""
     rows = conn.execute(
         "SELECT pv.plan_id AS plan_id, pv.version_id AS version_id, p.title AS title "
         "FROM plan_versions pv JOIN plans p ON p.plan_id = pv.plan_id "
-        "WHERE pv.committed_at IS NULL"
+        "WHERE pv.committed_at IS NULL AND (? IS NULL OR pv.plan_id = ?)",
+        [plan_id, plan_id],
     ).fetchall()
     if not rows:
         return {"error": "no draft in progress; call start_plan_draft or start_revision_draft first"}
     if len(rows) > 1:
         plans = ", ".join(f"plan_id={int(r['plan_id'])} ({r['title']!r})" for r in rows)
-        return {"error": f"multiple drafts in progress ({plans}); specify by discarding or committing one first"}
+        return {"error": f"multiple drafts in progress ({plans}); pass plan_id"}
     return int(rows[0]["plan_id"]), int(rows[0]["version_id"])
+
+
+def _plan_or_default(conn: sqlite3.Connection, plan_id: int | None) -> db.PlanRow | None:
+    """plan_id's plan, or the current one (else the most recent past plan)."""
+    return get_plan(conn, plan_id) if plan_id is not None else default_plan(conn, date.today())
+
+
+@mcp.tool()
+def list_plans() -> str:
+    """
+    Every plan, earliest weeks first: plan_id, title, role, status,
+    first_week/last_week, race (date, distance_bucket, goal_time_s; null when
+    no race is set), versions, adherence (weeks on-or-close of weeks scored,
+    share of planned miles), peak_target_miles, peak_actual_miles, and
+    result_time_s once the race is run. Doubles as the cross-plan comparison.
+
+    role is derived from dates, never stored: current (committed, its weeks
+    contain this week), next (committed, starts later), past (its weeks have
+    ended), candidate (a draft never committed — alternatives for a coming
+    cycle), abandoned. In a gap week between cycles there is no current plan.
+    Pass a plan_id from here to the other plan tools.
+    """
+    conn = _conn()
+    try:
+        return json.dumps(plan_summaries(conn, date.today()))
+    except Exception as e:
+        return json.dumps({"error": describe_error(e, None)})
 
 
 def _draft_state(conn: sqlite3.Connection, plan_id: int) -> dict[str, object]:
@@ -1805,8 +1834,8 @@ def _draft_state(conn: sqlite3.Connection, plan_id: int) -> dict[str, object]:
 @mcp.tool()
 def start_plan_draft(
     title: str,
-    race_date: str,
-    distance_bucket: str,
+    race_date: str | None = None,
+    distance_bucket: str | None = None,
     goal_time_s: int | None = None,
 ) -> str:
     """
@@ -1816,9 +1845,15 @@ def start_plan_draft(
     athlete approves each block, get_draft to narrate what's missing, and
     commit_plan once they've seen the whole thing and said go.
 
-    Unlike commit_plan, this never rejects for an already-active plan — a
-    draft may coexist with one (drafting next season during a taper is
-    normal); the "only one active plan" rule is enforced at commit time.
+    The race is optional: omit race_date and distance_bucket when the target
+    race isn't chosen yet and set it later with set_draft_race. goal_time_s
+    needs a race.
+
+    Any number of drafts may coexist, with each other and with committed
+    plans — drafting several candidates for the next cycle during a taper is
+    normal. Pass the returned plan_id to the other draft tools when more than
+    one draft is open. Overlap with a committed plan is rejected at commit
+    time, not here.
 
     Returns the new draft's state (see get_draft's return shape) on success,
     or {"error": "..."} naming the offending field (empty title, invalid
@@ -1839,47 +1874,52 @@ def start_plan_draft(
 
 
 @mcp.tool()
-def start_revision_draft() -> str:
+def start_revision_draft(plan_id: int | None = None) -> str:
     """
-    Starts a revision draft for the active plan: copies its current (latest
-    committed) version's weeks/days verbatim into a new draft version, which
-    the athlete then edits incrementally via set_draft_weeks/set_draft_days —
-    only the weeks that actually change need a call; everything else is
-    already there from the copy. Rejects if the active plan already has a
-    draft in progress (one draft per plan — commit or discard it first).
+    Starts a revision draft for a committed plan (default: the current plan;
+    pass plan_id to revise a past or next one, e.g. to add a post-race week):
+    copies its latest committed version's race and weeks/days verbatim into a
+    new draft version, which the athlete then edits incrementally via
+    set_draft_weeks/set_draft_days/set_draft_race — only what actually
+    changes needs a call; everything else is already there from the copy.
+    Rejects if the plan already has a draft in progress (one draft per plan —
+    commit or discard it first).
 
     Check freshness (the response's last_sync_at/days_stale) before revising
     off the current numbers — a stale sync means the athlete's recent
     training isn't reflected yet, not that it didn't happen.
 
     Returns the new draft's state (see get_draft's return shape) on success,
-    or {"error": "..."}: no active plan, or a draft already in progress.
+    or {"error": "..."}: no current plan, or a draft already in progress.
     """
     conn = _conn()
     try:
-        p = get_active_plan(conn)
-        if p is None:
-            return json.dumps({"error": "no active plan to revise"})
+        if plan_id is None:
+            p = current_plan(conn, date.today())
+            if p is None:
+                return json.dumps({"error": "no current plan to revise; pass plan_id"})
+            plan_id = p["plan_id"]
         try:
-            _plan_start_revision_draft(conn, p["plan_id"])
+            _plan_start_revision_draft(conn, plan_id)
         except PlanValidationError as e:
             return json.dumps({"error": str(e)})
-        return json.dumps(_fmt_paces(_draft_state(conn, p["plan_id"])))
+        return json.dumps(_fmt_paces(_draft_state(conn, plan_id)))
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
 
 @mcp.tool()
-def get_draft() -> str:
+def get_draft(plan_id: int | None = None) -> str:
     """
-    Current state of the one in-progress draft (started via start_plan_draft
-    or start_revision_draft): its weeks/days as authored so far — zone-
+    Current state of an in-progress draft (started via start_plan_draft or
+    start_revision_draft; plan_id picks one when several are open, as with
+    candidate plans): its race and weeks/days as authored so far — zone-
     anchored day targets stay unresolved until commit_plan freezes them —
     plus:
 
     gaps: plain-English messages naming what commit_plan's global validation
       would reject right now ("weeks 6-20 unauthored", "week of 2026-08-03
-      has days but no week row", "weeks don't reach race week..."). Narrate
+      has days but no week row", "weeks don't include race week..."). Narrate
       these honestly rather than assuming a batch landed clean.
     week_mileage: program-computed per-week day-mileage sum (day_miles_total,
       days_missing_miles) against the authored target_miles/target_miles_hi
@@ -1902,7 +1942,7 @@ def get_draft() -> str:
     """
     conn = _conn()
     try:
-        resolved = _resolve_draft(conn)
+        resolved = _resolve_draft(conn, plan_id)
         if isinstance(resolved, dict):
             return json.dumps(resolved)
         plan_id, _version_id = resolved
@@ -1912,14 +1952,46 @@ def get_draft() -> str:
 
 
 @mcp.tool()
-def set_draft_weeks(weeks: list[WeekInput]) -> str:
+def set_draft_race(
+    race_date: str | None = None,
+    distance_bucket: str | None = None,
+    goal_time_s: int | None = None,
+    plan_id: int | None = None,
+) -> str:
+    """
+    Sets or clears the in-progress draft's target race. With race_date
+    (YYYY-MM-DD) and distance_bucket (e.g. "marathon", "5K") it replaces the
+    race, goal_time_s optional; with no race_date it clears the race. A
+    revision starts with the prior version's race, so call this to move the
+    race date or drop the race. The race decides which week commit_plan
+    requires the plan to include, and which synced race completes the plan.
+
+    Returns the full draft state (see get_draft), or {"error": "..."}.
+    """
+    conn = _conn()
+    try:
+        resolved = _resolve_draft(conn, plan_id)
+        if isinstance(resolved, dict):
+            return json.dumps(resolved)
+        plan_id, version_id = resolved
+        try:
+            _plan_set_draft_race(conn, version_id, race_date, distance_bucket, goal_time_s)
+        except PlanValidationError as e:
+            return json.dumps({"error": str(e)})
+        return json.dumps(_fmt_paces(_draft_state(conn, plan_id)))
+    except Exception as e:
+        return json.dumps({"error": describe_error(e, None)})
+
+
+@mcp.tool()
+def set_draft_weeks(weeks: list[WeekInput], plan_id: int | None = None) -> str:
     """
     Upserts any subset of the in-progress draft's weeks, by week_start — call
     it in batches as the athlete approves each block ("here's the first 5
     weeks, look good?"); a partial batch that leaves gaps mid-plan is
     expected, not an error. Only local field validation runs here (Monday-
     aligned, non-negative targets, known phase, target_miles_hi >=
-    target_miles); contiguity and reaching the race week are commit_plan's
+    target_miles); contiguity and covering the race week are commit_plan's
     job, since a partial draft legitimately doesn't satisfy those yet.
 
     weeks: list of {week_start (Monday, YYYY-MM-DD), target_miles,
@@ -1939,7 +2011,7 @@ def set_draft_weeks(weeks: list[WeekInput]) -> str:
     """
     conn = _conn()
     try:
-        resolved = _resolve_draft(conn)
+        resolved = _resolve_draft(conn, plan_id)
         if isinstance(resolved, dict):
             return json.dumps(resolved)
         plan_id, version_id = resolved
@@ -1956,7 +2028,7 @@ def set_draft_weeks(weeks: list[WeekInput]) -> str:
 
 
 @mcp.tool()
-def set_draft_days(days: list[DayInput]) -> str:
+def set_draft_days(days: list[DayInput], plan_id: int | None = None) -> str:
     """
     Upserts any subset of the in-progress draft's days, by (date, seq) — call
     alongside set_draft_weeks. A day may be authored before its week row
@@ -1988,7 +2060,7 @@ def set_draft_days(days: list[DayInput]) -> str:
     """
     conn = _conn()
     try:
-        resolved = _resolve_draft(conn)
+        resolved = _resolve_draft(conn, plan_id)
         if isinstance(resolved, dict):
             return json.dumps(resolved)
         plan_id, version_id = resolved
@@ -2005,7 +2077,7 @@ def set_draft_days(days: list[DayInput]) -> str:
 
 
 @mcp.tool()
-def delete_draft_weeks(week_starts: list[str]) -> str:
+def delete_draft_weeks(week_starts: list[str], plan_id: int | None = None) -> str:
     """
     Deletes the given week_starts from the in-progress draft, and any days
     that fall inside them (no orphan day rows left behind). No-ops on
@@ -2018,7 +2090,7 @@ def delete_draft_weeks(week_starts: list[str]) -> str:
     """
     conn = _conn()
     try:
-        resolved = _resolve_draft(conn)
+        resolved = _resolve_draft(conn, plan_id)
         if isinstance(resolved, dict):
             return json.dumps(resolved)
         plan_id, version_id = resolved
@@ -2035,7 +2107,7 @@ def delete_draft_weeks(week_starts: list[str]) -> str:
 
 
 @mcp.tool()
-def delete_draft_days(dates: list[str]) -> str:
+def delete_draft_days(dates: list[str], plan_id: int | None = None) -> str:
     """
     Deletes days from the in-progress draft by date (YYYY-MM-DD) — every seq
     for that date is removed, so a double counts as one delete. No-ops on
@@ -2048,7 +2120,7 @@ def delete_draft_days(dates: list[str]) -> str:
     """
     conn = _conn()
     try:
-        resolved = _resolve_draft(conn)
+        resolved = _resolve_draft(conn, plan_id)
         if isinstance(resolved, dict):
             return json.dumps(resolved)
         plan_id, version_id = resolved
@@ -2065,10 +2137,11 @@ def delete_draft_days(dates: list[str]) -> str:
 
 
 @mcp.tool()
-def commit_plan(note: str) -> str:
+def commit_plan(note: str, plan_id: int | None = None) -> str:
     """
     Commits the in-progress draft: runs full global validation (contiguous
-    Mondays, ends at the race week, every day falls in a committed week,
+    Mondays, includes the race week when a race is set (it may run past it),
+    no week shared with another committed plan, every day falls in a committed week,
     every week's authored mileage band agrees with the program-computed sum
     of its mileage-slot days — see week_mileage below), re-freezes every
     zone-anchored day target as of today (commit IS "authoring" for the
@@ -2096,10 +2169,11 @@ def commit_plan(note: str) -> str:
     plan's first-ever commit (a backdated week 1 is legitimate authored
     history — mid-block import — not something to protect from itself).
 
-    Rejects committing a brand-new plan while a *different* plan is already
-    active (a draft may coexist with one, but only one plan can hold the
-    active slot); revising the currently-active plan itself is always
-    allowed.
+    Rejects a commit whose weeks overlap any week of another committed,
+    non-abandoned plan (the error names that plan and the weeks). Plans for
+    consecutive cycles must not share a week: whichever plan includes the
+    post-race week owns it. When several candidates cover the same weeks,
+    commit one and discard_draft the rest.
 
     Finishes by re-running the incremental derive pass, so plan_adherence rows
     exist for any already-elapsed weeks immediately after this call (see
@@ -2118,7 +2192,7 @@ def commit_plan(note: str) -> str:
     """
     conn = _conn()
     try:
-        resolved = _resolve_draft(conn)
+        resolved = _resolve_draft(conn, plan_id)
         if isinstance(resolved, dict):
             return json.dumps(resolved)
         plan_id, version_id = resolved
@@ -2151,7 +2225,7 @@ def commit_plan(note: str) -> str:
         bundle = get_version(conn, version_id)
         assert bundle is not None
         result = {
-            "plan": get_active_plan(conn),
+            "plan": get_plan(conn, plan_id),
             "version_n": bundle["version"]["version_n"],
             "week_count": len(bundle["weeks"]),
             "weeks": bundle["weeks"],
@@ -2166,7 +2240,7 @@ def commit_plan(note: str) -> str:
 
 
 @mcp.tool()
-def discard_draft() -> str:
+def discard_draft(plan_id: int | None = None) -> str:
     """
     Deletes the in-progress draft's weeks/days and its version row. If the
     plan itself was never committed (a from-scratch draft, not a revision),
@@ -2182,7 +2256,7 @@ def discard_draft() -> str:
     """
     conn = _conn()
     try:
-        resolved = _resolve_draft(conn)
+        resolved = _resolve_draft(conn, plan_id)
         if isinstance(resolved, dict):
             return json.dumps(resolved)
         plan_id, _version_id = resolved
@@ -2197,9 +2271,10 @@ def discard_draft() -> str:
 
 
 @mcp.tool()
-def get_training_plan(version_n: int | None = None, compare_to: int | None = None) -> str:
+def get_training_plan(version_n: int | None = None, compare_to: int | None = None, plan_id: int | None = None) -> str:
     """
-    Reads the active plan's committed history: a specific version_n, or the
+    Reads a plan's committed history (plan_id, default the current plan —
+    see list_plans for the others): a specific version_n, or the
     latest committed version by default (a revision's in-progress draft, if
     any, never surfaces here — see get_draft for that). Always includes
     `versions` (version_n, created_at, note, author for every committed
@@ -2209,8 +2284,9 @@ def get_training_plan(version_n: int | None = None, compare_to: int | None = Non
     next Monday).
 
     compare_to: optional version_n to diff against the returned version —
-    added/removed/changed weeks and days, via plan.diff_versions (computed on
-    the fly, never stored). Surfaced as result["diff"] when given.
+    added/removed/changed weeks and days and any race change, via
+    plan.diff_versions (computed on the fly, never stored). Surfaced as
+    result["diff"] when given.
 
     last_sync_at / days_stale (whole days since the last miles-sync; null
     when never synced) travel with every read. Stale actuals are missing
@@ -2223,14 +2299,14 @@ def get_training_plan(version_n: int | None = None, compare_to: int | None = Non
     today. Never characterize this week's volume without stating
     actuals_as_of; null when today falls outside the plan window.
 
-    Returns {"error": "no active plan"} if there is none, or {"error": ...}
+    Returns {"error": "no plan"} if there is none, or {"error": ...}
     naming the missing version_n / compare_to.
     """
     conn = _conn()
     try:
-        p = get_active_plan(conn)
+        p = _plan_or_default(conn, plan_id)
         if p is None:
-            return json.dumps({"error": "no active plan"})
+            return json.dumps({"error": "no plan"})
         plan_id = p["plan_id"]
 
         version_rows = conn.execute(
@@ -2326,7 +2402,7 @@ def log_plan_adjustment(
     only; week-scoped adherence scoring already absorbs in-week moves.
 
     log_date: YYYY-MM-DD. action: skipped | moved | modified | note.
-    plan_id defaults to the active plan.
+    plan_id defaults to the current plan.
 
     Returns {"log_id": ...} on success, or {"error": ...} naming the offending
     field — never a traceback.
@@ -2334,9 +2410,9 @@ def log_plan_adjustment(
     conn = _conn()
     try:
         if plan_id is None:
-            p = get_active_plan(conn)
+            p = current_plan(conn, date.today())
             if p is None:
-                return json.dumps({"error": "no active plan"})
+                return json.dumps({"error": "no current plan; pass plan_id"})
             plan_id = p["plan_id"]
         try:
             log_id = add_log_entry(
@@ -2355,13 +2431,13 @@ def log_plan_adjustment(
 def abandon_plan(reason: str, plan_id: int | None = None) -> str:
     """
     Flips a plan's status to 'abandoned' and records the reason in plan_log
-    (action='note'). plan_id defaults to the active plan. Frees up the active
-    slot so a draft (start_plan_draft + commit_plan) can take it.
+    (action='note'). plan_id defaults to the current plan. An abandoned plan
+    no longer blocks other plans' weeks and is no longer scored.
 
     reason is required and must be non-empty.
 
-    Returns {"plan": {...}} on success, or {"error": ...} — no active plan,
-    plan not found, plan already not active, or an empty reason.
+    Returns {"plan": {...}} on success, or {"error": ...} — no current plan,
+    plan not found, plan not active, or an empty reason.
     """
     conn = _conn()
     try:
@@ -2369,12 +2445,12 @@ def abandon_plan(reason: str, plan_id: int | None = None) -> str:
             return json.dumps({"error": "abandon_plan requires a non-empty reason"})
 
         if plan_id is None:
-            p = get_active_plan(conn)
+            p = current_plan(conn, date.today())
             if p is None:
-                return json.dumps({"error": "no active plan"})
+                return json.dumps({"error": "no current plan; pass plan_id"})
             plan_id = p["plan_id"]
         else:
-            row = conn.execute("SELECT plan_id, status FROM plans WHERE plan_id = ?", [plan_id]).fetchone()
+            row = get_plan(conn, plan_id)
             if row is None:
                 return json.dumps({"error": f"plan {plan_id} does not exist"})
             if row["status"] != "active":
@@ -2387,20 +2463,16 @@ def abandon_plan(reason: str, plan_id: int | None = None) -> str:
         except PlanValidationError as e:
             return json.dumps({"error": str(e)})
 
-        updated = conn.execute(
-            "SELECT plan_id, title, race_date, distance_bucket, goal_time_s, status, created_at "
-            "FROM plans WHERE plan_id = ?", [plan_id],
-        ).fetchone()
-        return json.dumps({"plan": dict(updated)})
+        return json.dumps({"plan": get_plan(conn, plan_id)})
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
 
 @mcp.tool()
-def get_plan_adherence() -> str:
+def get_plan_adherence(plan_id: int | None = None) -> str:
     """
-    Weekly adherence for the active plan's completed weeks (week's Sunday
-    before today) — the judgment layer over get_training_plan's plain
+    Weekly adherence for a plan's completed weeks (plan_id, default the
+    current plan; week's Sunday before today) — the judgment layer over get_training_plan's plain
     numbers. Each week is scored against the plan version that governed it
     at the time (version_n_used), never today's plan even if it's been
     revised since — rewriting history to look adherent is structurally
@@ -2439,14 +2511,14 @@ def get_plan_adherence() -> str:
     `headline`: "N of M weeks on plan" — counts on+close bands together as
     "on plan" (see band note above). Lead with this number over flags.
 
-    Returns {"error": "no active plan"} or {"error": "no completed weeks
+    Returns {"error": "no plan"} or {"error": "no completed weeks
     yet"} (a brand-new plan whose first week hasn't finished) as applicable.
     """
     conn = _conn()
     try:
-        p = get_active_plan(conn)
+        p = _plan_or_default(conn, plan_id)
         if p is None:
-            return json.dumps({"error": "no active plan"})
+            return json.dumps({"error": "no plan"})
 
         rows = conn.execute("""
             SELECT week_start, version_n_used, actual_miles, actual_workouts,
@@ -2560,7 +2632,7 @@ def run_sql(query: str) -> str:
 
     Plan tables — athlete-authored ground truth, like activities: NOT derived,
     exempt from derive_all rebuilds. Write access is via start_plan_draft /
-    start_revision_draft / set_draft_weeks / set_draft_days / delete_draft_weeks
+    start_revision_draft / set_draft_race / set_draft_weeks / set_draft_days / delete_draft_weeks
     / delete_draft_days / commit_plan / discard_draft / log_plan_adjustment /
     abandon_plan (see those tools); read access to the current plan is better
     served by get_training_plan (committed versions) / get_draft (the mutable
@@ -2568,14 +2640,15 @@ def run_sql(query: str) -> str:
     history.
 
     Table: plans
-      plan_id, title, race_date, distance_bucket, goal_time_s, status
-      (draft|active|completed|abandoned), created_at. At most one row has
-      status='active'; a draft plan may coexist with it (drafting next
-      season's plan during a taper is normal — see start_plan_draft).
+      plan_id, title, status (draft|active|completed|abandoned), created_at.
+      Several plans may be active (their weeks never overlap) alongside draft
+      candidates; the race lives on plan_versions (see list_plans for roles).
 
     Table: plan_versions  (append-only; there is no UPDATE path — a revision is
       always a brand new version_id with a full new set of weeks/days)
-      version_id, plan_id, version_n, created_at, committed_at (NULL = this is
+      version_id, plan_id, version_n, created_at, race_date / distance_bucket /
+      goal_time_s (this version's target race; nullable — a plan's race is its
+      latest committed version's), committed_at (NULL = this is
       the one mutable draft — its weeks/days may still change; a real
       timestamp = committed and immutable from then on. Contemporaneous
       scoring keys on committed_at, not created_at — a draft revision edited
@@ -2614,8 +2687,8 @@ def run_sql(query: str) -> str:
 
     Table: plan_adherence  (DERIVED — rebuilt from scratch by derive_all and
       versioned by DERIVE_VERSION like fitness_checkpoints; one row per
-      completed week of the active plan; empty when there's no active plan
-      or it hasn't reached a completed week yet. Prefer get_plan_adherence
+      completed week of each active or completed plan; empty until a plan has
+      a completed week. Prefer get_plan_adherence
       for normal reads — it also surfaces pattern flags.)
       plan_id, week_start, version_n_used (the plan version this week was
       scored against — see plan.current_version_for_week), actual_miles,

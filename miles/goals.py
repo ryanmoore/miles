@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, NamedTuple, cast
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 from . import elements, notes, plan
 from .db import PlanGoalRow
@@ -228,10 +228,11 @@ class GoalFlag(TypedDict):
     message: str
 
 
-class GoalResult(PlanGoalRow):
-    weeks: NotRequired[list[WeekResult]]  # weekly goals
-    flags: NotRequired[list[GoalFlag]]
-    progress: NotRequired[Progress]  # cycle goals
+class GoalResult(PlanGoalRow, total=False):
+    """A goal as stored (unset fields omitted) plus its judgment."""
+    weeks: list[WeekResult]  # weekly goals
+    flags: list[GoalFlag]
+    progress: Progress  # cycle goals
 
 
 class GoalResults(TypedDict):
@@ -285,6 +286,11 @@ def _value(g: PlanGoalRow, week: _Week) -> float:
     return GOAL_TYPES[g["type"]][0](week, g["params"])
 
 
+def _result(g: PlanGoalRow, **computed: object) -> GoalResult:
+    """The goal without its unset fields, plus what was computed for it."""
+    return cast(GoalResult, {**{k: v for k, v in g.items() if v is not None and v != {} and v is not False}, **computed})
+
+
 def _weekly_result(
     g: PlanGoalRow, plan_weeks: Sequence[str], judged: Mapping[str, PlanGoalRow | None], data: Mapping[str, _Week]
 ) -> GoalResult:
@@ -308,7 +314,7 @@ def _weekly_result(
                     "type": "goal_under_target", "goal": g["key"], "weeks": len(run), "since": run[0]["week_start"],
                     "message": f"{g['key']} {numbers} in the last {spell(len(run))} weeks",
                 })
-    return {**g, "weeks": rows, "flags": flags}
+    return _result(g, weeks=rows, flags=flags)
 
 
 def _cycle_result(g: PlanGoalRow, plan_weeks: Sequence[str], data: Mapping[str, _Week]) -> GoalResult:
@@ -321,7 +327,7 @@ def _cycle_result(g: PlanGoalRow, plan_weeks: Sequence[str], data: Mapping[str, 
     else:
         so_far = round(statistics.fmean(values), 1) if values else None
         met, reachable = so_far is not None and so_far >= g["target"], None
-    return {**g, "progress": {"so_far": so_far, "scored": len(values), "left": left, "met": met, "reachable": reachable}}
+    return _result(g, progress={"so_far": so_far, "scored": len(values), "left": left, "met": met, "reachable": reachable})
 
 
 def plan_goal_results(conn: sqlite3.Connection, plan_id: int) -> GoalResults:

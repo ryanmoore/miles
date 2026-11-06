@@ -33,8 +33,9 @@ assert Path(_DB_ENV).resolve() != (_REPO / "data" / "activities.db").resolve(), 
 
 sys.path.insert(0, str(_REPO))
 
-from miles import db, notes, plan  # noqa: E402
+from miles import db, goals, notes, plan  # noqa: E402
 from miles.derive import derive_all  # noqa: E402
+from miles.fitness import MILE_M  # noqa: E402
 from miles.periods import monday_of  # noqa: E402
 
 N_WEEKS = 16
@@ -82,6 +83,16 @@ Aim for **8 g of carbs per kg** of body weight each day, mostly from low-fiber f
 
 Cut fiber and keep fluids up. Nothing new.
 """
+
+
+# Runs per week of the demo marathon that carry a strides note, and how far each
+# week's synced miles fall from its target.
+STRIDE_RUNS = [2, 3, 2, 1, 1, 2, 3, 2, 2, 1, 1, 2, 2, 2, 2, 0]
+MILES_FACTOR = [1.0, 0.95, 1.05, 0.9, 1.0, 1.05, 1.0, 0.98, 1.06, 1.0, 0.92, 1.04, 0.96, 1.0, 0.9, 1.0]
+DEMO_ID_FLOOR = 9_000_000  # races and runs seeded here sit above every real activity id
+DEMO_RUN_ID = 9_100_000
+# 20 m segments: easy running, then six strides.
+STRIDE_PARTS = [(250, 3.2)] + [p for _ in range(6) for p in ((6, 5.8), (24, 3.2))] + [(20, 3.2)]
 
 
 def week_starts() -> list[date]:
@@ -212,6 +223,67 @@ def simple_plan(
     return plan_id, version_id
 
 
+def add_demo_runs(conn: sqlite3.Connection) -> list[tuple[int, int, str]]:
+    """Synced runs for the demo marathon's weeks, scaled from each week's target:
+    Tuesday easy, Thursday workout, Saturday easy, Sunday long (three shakeouts
+    in race week). Returns (activity_id, week index, run type) in date order."""
+    workout_types = {"easy": 0, "long_run": 2, "workout": 3}
+    runs: list[tuple[int, int, str]] = []
+    for i, week in enumerate(week_starts()):
+        if PHASES[i] == "race":
+            plan_runs = [(0, 0.15, "easy"), (1, 0.15, "easy"), (3, 0.15, "easy")]
+        else:
+            plan_runs = [(1, 0.2, "easy"), (3, 0.25, "workout" if TARGET_WORKOUTS[i] else "easy"), (5, 0.15, "easy"), (6, 0.4, "long_run")]
+        for weekday, share, run_type in plan_runs:
+            activity_id = DEMO_RUN_ID + len(runs)
+            miles = TARGET_MILES[i] * MILES_FACTOR[i] * share
+            conn.execute(
+                "INSERT INTO activities (activity_id, name, sport_type, start_date, workout_type, run_type, distance_m, "
+                "moving_time_s, synced_at) VALUES (?, ?, 'Run', ?, ?, ?, ?, ?, ?)",
+                [activity_id, f"Demo {run_type.replace('_', ' ')}", f"{(week + timedelta(days=weekday)).isoformat()}T07:00:00",
+                 workout_types[run_type], run_type, miles * MILE_M, round(miles * 540), datetime.now(timezone.utc).isoformat()],
+            )
+            runs.append((activity_id, i, run_type))
+    conn.commit()
+    return runs
+
+
+def add_stride_segments(conn: sqlite3.Connection, activity_id: int, week: int) -> None:
+    rows, idx = [], 0
+    for count, speed in STRIDE_PARTS:
+        for _ in range(count):
+            rows.append((activity_id, idx, 20.0 * idx, 0, round(speed * 100), 140))
+            idx += 1
+    conn.execute(
+        "INSERT INTO terrain_segment_dates (activity_id, start_date, segment_count) VALUES (?, ?, ?)",
+        [activity_id, week_starts()[week].isoformat(), idx],
+    )
+    conn.executemany(
+        "INSERT INTO terrain_segments (activity_id, idx, dist_m, grade_dpct, speed_cms, heartrate, is_walking, ele_source) "
+        "VALUES (?, ?, ?, ?, ?, ?, 0, 1)",
+        rows,
+    )
+    conn.commit()
+
+
+def add_stride_notes(conn: sqlite3.Connection, runs: list[tuple[int, int, str]]) -> None:
+    """Strides notes on STRIDE_RUNS[week] of each week's non-workout runs, plus two
+    stream-detection cases: a workout whose note lists only its reps (the strides
+    after it still count) and a run whose detection the athlete rejected."""
+    strides = [{"type": "strides", "count": 6, "duration_s": 20, "source": "athlete"}]
+    for week in range(N_WEEKS):
+        week_runs = [(a, t) for a, w, t in runs if w == week]
+        if week == 9:
+            rejected = week_runs[2][0]
+            add_stride_segments(conn, rejected, week)
+            notes.set_run_note(conn, rejected, {"short": "Easy; the surges were traffic lights.", "elements": [{"type": "strides", "count": 0, "source": "athlete"}]})
+        for activity_id, run_type in [r for r in week_runs if r[1] != "workout"][: STRIDE_RUNS[week]]:
+            notes.set_run_note(conn, activity_id, {"short": "Easy with strides.", "elements": strides, "tags": ["strides"]})
+    workout = next(a for a, w, t in runs if w == 7 and t == "workout")
+    add_stride_segments(conn, workout, 7)
+    notes.set_run_note(conn, workout, {"short": "Tempo, strides after.", "elements": [{"type": "reps", "count": 1, "source": "laps"}]})
+
+
 def add_race_run(conn: sqlite3.Connection, activity_id: int, race_day: date, distance_m: float, moving_time_s: int) -> None:
     conn.execute(
         "INSERT INTO activities (activity_id, name, sport_type, start_date, workout_type, run_type, distance_m, moving_time_s, synced_at) "
@@ -233,6 +305,29 @@ def seed_past_plan(conn: sqlite3.Connection) -> None:
     add_race_run(conn, 9_000_001, race_saturday + timedelta(days=1), 10000.0, 46 * 60)
 
 
+def demo_goals() -> list[dict[str, object]]:
+    """The demo marathon's emphasis: strides twice a week (none in race week),
+    eight weeks over 40 miles before the taper, and a steady average."""
+    weeks = week_starts()
+    return [
+        {
+            "key": "strides", "horizon": "weekly", "type": "element_sessions",
+            "params": {"types": ["strides", "hill_sprints"]}, "target": 2, "flag": True,
+            "overrides": {weeks[-1].isoformat(): 0},
+            "why": "Keep leg speed ticking over while the mileage builds.",
+        },
+        {
+            "key": "big weeks", "horizon": "cycle", "type": "weekly_miles", "params": {},
+            "aggregate": "weeks_at_least", "threshold": 40, "target": 8, "to_week": weeks[12].isoformat(),
+            "why": "Enough 40-mile weeks before the taper to carry the marathon.",
+        },
+        {
+            "key": "average", "horizon": "cycle", "type": "weekly_miles", "params": {},
+            "aggregate": "average", "target": 38, "why": "A steady average guards against one big week hiding a soft block.",
+        },
+    ]
+
+
 def seed_current_plan(conn: sqlite3.Connection) -> None:
     plan_id, v1_id = plan.start_plan_draft(
         conn, title="Demo Marathon", race_date=RACE_DATE.isoformat(),
@@ -241,6 +336,7 @@ def seed_current_plan(conn: sqlite3.Connection) -> None:
     days = build_days(TARGET_MILES, TARGET_LONG_RUN)
     plan.upsert_draft_days(conn, v1_id, days)
     plan.upsert_draft_weeks(conn, v1_id, build_weeks(days, TARGET_LONG_RUN))
+    goals.set_draft_goals(conn, v1_id, demo_goals())
     plan.commit_plan(conn, plan_id, note="Initial 16-week build for the demo marathon.")
     # Version 1 governs from week 1 whatever its committed_at, so this date
     # only makes the history read as authored before the plan began.
@@ -279,10 +375,13 @@ def seed_current_plan(conn: sqlite3.Connection) -> None:
 
 def seed(conn: sqlite3.Connection) -> None:
     db.init_db(conn)
-    for table in ("plan_docs", "plan_adherence", "plan_log", "plan_days", "plan_weeks", "plan_versions", "plans"):
+    for table in ("plan_docs", "plan_goals", "plan_adherence", "plan_log", "plan_days", "plan_weeks", "plan_versions", "plans"):
         conn.execute(f"DELETE FROM {table}")
+    for table in ("run_notes", "terrain_segments", "terrain_segment_dates", "activities"):
+        conn.execute(f"DELETE FROM {table} WHERE activity_id >= {DEMO_ID_FLOOR}")
     seed_past_plan(conn)
     seed_current_plan(conn)
+    add_stride_notes(conn, add_demo_runs(conn))
     # Next block: committed, race not chosen yet. Two candidates for the cycle after it.
     simple_plan(conn, "Next block", THIS_MONDAY + timedelta(weeks=1), 12)
     after = THIS_MONDAY + timedelta(weeks=13)

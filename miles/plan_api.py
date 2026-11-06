@@ -755,7 +755,7 @@ def get_plan_adherence(plan_id: int | None = None) -> PlanAdherenceResponse | No
     )
 
 
-@router.get("/api/plan-goals")
+@router.get("/api/plan-goals", response_model=None)
 def get_plan_goals(plan_id: int | None = None) -> goals.GoalResults | None:
     """The plan's goals with weekly values and cycle progress (see goals.plan_goal_results);
     null when there is no plan, an empty list when it has no goals."""

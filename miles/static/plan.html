@@ -127,6 +127,24 @@
       transform: translateY(-1px);
     }
 
+    /* Goals — one row per goal; weekly goals draw a mark per plan week. Unscored
+       weeks are an outline, met weeks muted, missed weeks the only loud mark. */
+    .plan-view .goals-panel { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+    .plan-view .goal-row { padding: 0.625rem 1rem; border-top: 1px solid var(--gridline); }
+    .plan-view .goal-row:first-child { border-top: none; }
+    .plan-view .goal-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.625rem; font-size: 0.8125rem; }
+    .plan-view .goal-key { font-weight: 650; }
+    .plan-view .goal-target, .plan-view .goal-why { font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .plan-view .goal-strip { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 0.375rem; }
+    .plan-view .goal-mark { width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--border); }
+    .plan-view .goal-mark.met { background: var(--border); }
+    .plan-view .goal-mark.missed { background: var(--series-6); border-color: var(--series-6); }
+    .plan-view .goal-progress { font-size: 0.8125rem; margin-top: 0.25rem; font-variant-numeric: tabular-nums; }
+    .plan-view .goal-flag { display: flex; gap: 0.5rem; align-items: baseline; font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; }
+    .plan-view .cwk-goals { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
+    .plan-view .goal-chip { font-size: 0.6875rem; padding: 0 0.375rem; border-radius: 999px; border: 1px solid var(--gridline); color: var(--muted); font-variant-numeric: tabular-nums; }
+    .plan-view .goal-chip.missed { color: var(--series-6); border-color: var(--series-6); }
+
     /* Calendar — each week is a summary row (.cwk-sum) over a collapsible
        body holding its days: a Monday through Sunday grid, or below the
        width that fits it (720px grid + main's 2rem gutters = 784px) stacked
@@ -858,7 +876,7 @@
   const TAB_SLOTS = {
     trends: [['easy', 220], ['workouts', 220], ['mileage', 220], ['load', 260], ['fitness', 24]],
     all: [['all', 220]],
-    plan: [['plans', 40], ['head', 220], ['chart', 260], ['calendar', 320], ['docs', 0], ['flags', 0], ['versions', 120]],
+    plan: [['plans', 40], ['head', 220], ['goals', 90], ['chart', 260], ['calendar', 320], ['docs', 0], ['flags', 0], ['versions', 120]],
   };
 
   // Every Trends/Plan-section render function inserts here; the first call
@@ -1400,7 +1418,7 @@
       <p class="chart-caption">${esc(note)}</p>`;
   }
 
-  function renderRetrospective(data, retro) {
+  function renderRetrospective(data, retro, goals) {
     const { plan } = data;
     if (!retro) {
       slotEl('head').insertAdjacentHTML('beforeend', `
@@ -1442,6 +1460,21 @@
         <div class="stat-sub">${goal.predicted_time != null ? `${goal.predicted_time} predicted (${esc(goal.predicted_confidence ?? '')})` : 'no pre-race fitness estimate'}</div>
       </div>` : '';
 
+    const goalStats = (goals?.goals ?? []).map(g => {
+      if (g.horizon === 'weekly') {
+        const scored = g.weeks.filter(w => w.value != null);
+        return `<div class="stat">
+          <div class="stat-label">${esc(g.key)}</div>
+          <div class="stat-value">${scored.filter(w => w.met).length}<span class="stat-sub">of ${scored.length} weeks met</span></div>
+        </div>`;
+      }
+      return `<div class="stat">
+        <div class="stat-label">${esc(g.key)}</div>
+        <div class="stat-value">${g.progress.met ? 'Met' : 'Not met'}</div>
+        <div class="stat-sub">${esc(goalProgressText(g))}</div>
+      </div>`;
+    }).join('');
+
     slotEl('head').insertAdjacentHTML('beforeend', `
       <section id="section-retrospective">
         <h2>Race retrospective</h2>
@@ -1450,6 +1483,7 @@
           ${adherenceStat}
           ${raceStat}
           ${goalStat}
+          ${goalStats}
         </div>
         ${buildCompareTable(retro.plan_ramp, retro.detected_build)}
       </section>`);
@@ -1742,9 +1776,60 @@
     </div>`;
   }
 
+  // -----------------------------------------------------------------------
+  // Goals — see adr/0007. Weekly goals: a chip per calendar week and a strip
+  // of weekly marks; cycle goals: progress text.
+  // -----------------------------------------------------------------------
+
+  const GOAL_UNIT = { weekly_miles: 'mi', element_sessions: 'runs', tagged_runs: 'runs', run_kind: 'runs', activity_days: 'days' };
+
+  function goalChipsHTML(goals, weekStart) {
+    const chips = (goals?.goals ?? []).filter(g => g.horizon === 'weekly').map(g => {
+      const w = g.weeks.find(x => x.week_start === weekStart);
+      if (!w) return '';
+      const text = w.value == null ? `${g.key} ${trimMiles(w.target)}` : `${g.key} ${trimMiles(w.value)}/${trimMiles(w.target)}`;
+      return `<span class="goal-chip${w.met === false ? ' missed' : ''}">${esc(text)}</span>`;
+    }).join('');
+    return chips ? `<div class="cwk-goals">${chips}</div>` : '';
+  }
+
+  function goalProgressText(g) {
+    const unit = GOAL_UNIT[g.type], p = g.progress;
+    const span = g.from_week || g.to_week ? ` (${g.from_week ? shortDate(g.from_week) : 'start'} – ${g.to_week ? shortDate(g.to_week) : 'end'})` : '';
+    const left = p.left ? ` · ${p.left} week${p.left === 1 ? '' : 's'} left` : '';
+    if (g.aggregate === 'weeks_at_least') {
+      return `${trimMiles(p.so_far)} of ${trimMiles(g.target)} weeks ≥ ${trimMiles(g.threshold)} ${unit}${span}${left}${!p.met && !p.reachable ? ' · out of reach' : ''}`;
+    }
+    return `avg ${p.so_far == null ? '—' : trimMiles(p.so_far)} of ${trimMiles(g.target)} ${unit}/wk${span}${left}`;
+  }
+
+  function renderGoals(goals) {
+    if (!goals || !goals.goals.length) return;
+    const row = g => {
+      const unit = GOAL_UNIT[g.type];
+      const weekly = g.horizon === 'weekly';
+      const marks = weekly ? `<div class="goal-strip">${g.weeks.map(w =>
+        `<span class="goal-mark${w.met == null ? '' : w.met ? ' met' : ' missed'}" title="${esc(`${weekRangeLabel(w.week_start)}: ${w.value == null ? 'not scored' : `${trimMiles(w.value)} of ${trimMiles(w.target)}`}`)}"></span>`).join('')}</div>` : '';
+      return `<div class="goal-row">
+        <div class="goal-head"><span class="goal-key">${esc(g.key)}</span>
+          <span class="goal-target">${weekly ? `≥ ${trimMiles(g.target)} ${unit}/wk` : g.aggregate === 'average' ? `average ≥ ${trimMiles(g.target)} ${unit}/wk` : `${trimMiles(g.target)} weeks ≥ ${trimMiles(g.threshold)} ${unit}`}</span></div>
+        <div class="goal-why">${esc(g.why)}</div>
+        ${marks}
+        ${weekly ? '' : `<div class="goal-progress">${esc(goalProgressText(g))}</div>`}
+        ${(g.flags ?? []).map(f => `<div class="goal-flag"><span class="flag-dot"></span><span>${esc(f.message)}</span></div>`).join('')}
+      </div>`;
+    };
+    slotEl('goals').insertAdjacentHTML('beforeend', `
+      <section id="section-goals">
+        <h2>Goals</h2>
+        <p class="desc">This cycle's emphasis · a mark per week (filled: met, red: missed, outline: not scored yet) · cycle goals roll the weeks up</p>
+        <div class="goals-panel">${goals.goals.map(row).join('')}</div>
+      </section>`);
+  }
+
   // One-line summary of a week: range, phase, miles, long run, workouts, band.
   // Actuals are shown only for the current and past weeks.
-  function weekSummaryHTML(week, actualByDate, band) {
+  function weekSummaryHTML(week, actualByDate, band, goals) {
     const actual = !week.is_future;
     const runs = Array.from({ length: 7 }, (_, i) => actualByDate.get(addDays(week.week_start, i)) ?? []).flat();
     const miles = actual ? `${week.actual_miles.toFixed(1)} of ${targetMilesLabel(week)} mi` : `${targetMilesLabel(week)} mi`;
@@ -1764,13 +1849,14 @@
         <span class="cwk-chev">&rsaquo;</span>
       </div>
       <div class="cwk-line">${[miles, longRun, workouts].filter(Boolean).map(t => `<span>${esc(t)}</span>`).join('')}</div>
+      ${goalChipsHTML(goals, week.week_start)}
       ${week.note ? `<div class="cwk-note" title="${esc(week.note)}">${esc(week.note)}</div>` : ''}`;
   }
 
   // Current week first, then upcoming weeks in order, then past weeks most
   // recent first under a History divider. One week is expanded at a time by
   // the nav; tapping a summary toggles its week independently.
-  function renderCalendar(data, bandByWeek) {
+  function renderCalendar(data, bandByWeek, goals) {
     const { weeks, days, actual, log } = data;
     if (!weeks.length) return;
 
@@ -1781,7 +1867,7 @@
     const hasBands = bandByWeek && bandByWeek.size > 0;
 
     const weekHTML = w => `<div class="cwk${w.is_current ? ' current' : ''}" data-week="${w.week_start}">
-        <button type="button" class="cwk-sum" aria-expanded="false">${weekSummaryHTML(w, actualByDate, bandByWeek?.get(w.week_start))}</button>
+        <button type="button" class="cwk-sum" aria-expanded="false">${weekSummaryHTML(w, actualByDate, bandByWeek?.get(w.week_start), goals)}</button>
         <div class="cwk-body" hidden>
           <div class="cal">
             <div class="cal-header">${weekdayLabels.map(d => `<div class="cal-hcell">${d}</div>`).join('')}</div>
@@ -2754,6 +2840,7 @@
     return res.json();
   }
 
+  const loadGoals = () => loadPlanApi('/api/plan-goals', SELECTED_PLAN);
   const loadRetrospective = () => loadPlanApi('/api/plan-retrospective', SELECTED_PLAN);
   const loadReadiness = () => loadPlanApi('/api/plan-readiness', SELECTED_PLAN);
 
@@ -2848,6 +2935,7 @@
   function startSecondaryPanels(currentP, planP) {
     const get = (promise, fallback) => promise.catch(() => fallback);
     const adherenceP = loadAdherence();
+    const goalsP = loadGoals();
 
     // The target-band chart needs a current plan; otherwise the plain rolling window.
     const progressionP = currentP.then(d => (d && d.role === 'current' ? loadProgression() : loadProgressionFallback()));
@@ -2866,21 +2954,22 @@
     fillPanel('plans', [plansP, get(planP, null)], renderPlans);
     fillPanel('all', [plansP], renderAllPlans);
     const bandsP = get(adherenceP.then(a => new Map((a.weeks ?? []).map(w => [w.week_start, w.band]))), new Map());
-    fillPanel('head', [planP, headExtraP, get(adherenceP, null), echartsReady],
-      (data, extra, adherence) => {
+    fillPanel('head', [planP, headExtraP, get(adherenceP, null), echartsReady, get(goalsP, null)],
+      (data, extra, adherence, _echarts, goals) => {
         if (!data) return renderPlanEmptyCard();
         if (data.role === 'candidate') {
           slotEl('head').insertAdjacentHTML('beforeend', `<div class="retro-marker">Draft — not committed</div>`);
         } else if (data.plan.status === 'completed') {
           slotEl('head').insertAdjacentHTML('beforeend', `<div class="retro-marker">Retrospective</div>`);
-          renderRetrospective(data, extra);
+          renderRetrospective(data, extra, goals);
         } else {
           renderReadiness(data, adherence, extra);
         }
       });
+    fillPanel('goals', [goalsP], renderGoals);
     fillPanel('chart', [planP, bandsP, get(adherenceP, null), echartsReady],
       (data, bands, adherence) => { if (data) renderChart(data, bands, adherence?.flags ?? []); });
-    fillPanel('calendar', [planP, bandsP], (data, bands) => { if (data) renderCalendar(data, bands); });
+    fillPanel('calendar', [planP, bandsP, get(goalsP, null)], (data, bands, goals) => { if (data) renderCalendar(data, bands, goals); });
     fillPanel('docs', [planP], renderDocs);
     fillPanel('flags', [adherenceP], renderFlags);
     fillPanel('versions', [loadVersions()], renderVersions);

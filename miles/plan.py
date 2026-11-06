@@ -854,7 +854,7 @@ def start_revision_draft(conn: sqlite3.Connection, plan_id: int) -> int:
     )
     conn.execute(
         f"INSERT INTO plan_goals (version_id, {GOAL_COLS}) "
-        f"SELECT ?, {GOAL_COLS} FROM plan_goals WHERE version_id = ?",
+        f"SELECT ?, {GOAL_COLS} FROM plan_goals WHERE version_id = ? ORDER BY rowid",
         [version_id, source["version"]["version_id"]],
     )
     conn.commit()

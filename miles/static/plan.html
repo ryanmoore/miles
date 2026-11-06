@@ -637,9 +637,6 @@
     .plan-view .readiness-link { color: var(--accent); text-decoration: none; white-space: nowrap; }
     .plan-view .readiness-link:hover { text-decoration: underline; }
 
-    .plan-view .all-plans { margin-bottom: 1rem; }
-    .plan-view .all-plans summary { cursor: pointer; font-size: 0.8125rem; color: var(--text-secondary); margin-bottom: 0.5rem; }
-
     /* Latest-version annotation on the Version history header — the strip
        stat this page used to carry, demoted to context. */
     .plan-view .version-annot {
@@ -662,6 +659,7 @@
       <button class="mode-tab" data-tab="today">Today</button>
       <button class="mode-tab" data-tab="trends">Trends</button>
       <button class="mode-tab" data-tab="plan">Plan</button>
+      <button class="mode-tab" data-tab="all">All</button>
     </div>
   </div>
   <div id="root"></div>
@@ -839,7 +837,7 @@
   // everywhere (see renderProgressionEasy/Workouts/renderRecentMileage).
   // -----------------------------------------------------------------------
 
-  const PLAN_TABS = ['today', 'trends', 'plan'];
+  const PLAN_TABS = ['today', 'trends', 'plan', 'all'];
 
   // ECharts measures its container at init, and every Trends/Plan chart is
   // built while its panel is hidden (zero-size) — so each instance registers
@@ -859,6 +857,7 @@
   // until its own data arrives, so one slow request delays only its panel.
   const TAB_SLOTS = {
     trends: [['easy', 220], ['workouts', 220], ['mileage', 220], ['load', 260], ['fitness', 24]],
+    all: [['all', 220]],
     plan: [['plans', 40], ['head', 220], ['chart', 260], ['calendar', 320], ['docs', 0], ['flags', 0], ['versions', 120]],
   };
 
@@ -892,9 +891,14 @@
       <div id="tab-plan" class="tab-panel" hidden>
         <p class="desc plan-tab-note">Plans are created, amended, and abandoned in chat with <code>miles:miles-plan</code>.</p>
         ${TAB_SLOTS.plan.map(slotHTML).join('')}
-      </div>`);
+      </div>
+      <div id="tab-all" class="tab-panel" hidden>${TAB_SLOTS.all.map(slotHTML).join('')}</div>`);
     document.querySelectorAll('#plan-tabs .mode-tab').forEach(btn => {
-      btn.addEventListener('click', () => activatePlanTab(btn.dataset.tab));
+      btn.addEventListener('click', () => {
+        // The tab button means the current plan; ?plan= is only for links that carry it.
+        if (btn.dataset.tab === 'plan' && SELECTED_PLAN) location.href = `${location.pathname}#plan`;
+        else activatePlanTab(btn.dataset.tab);
+      });
     });
   }
 
@@ -2772,7 +2776,7 @@
   }
 
   // -----------------------------------------------------------------------
-  // Plan switcher + all-plans table — one /api/plans fetch; switching is a
+  // Plan switcher + All tab's plans table — one /api/plans fetch; switching is a
   // link to ?plan=<id>, so the URL always says which plan the tab shows.
   // -----------------------------------------------------------------------
 
@@ -2780,7 +2784,7 @@
 
   function planChipHTML(p, selectedId) {
     const race = p.race ? ` · ${shortDate(p.race.date)}` : '';
-    return `<a class="chip${p.plan_id === selectedId ? ' selected' : ''}" href="?plan=${p.plan_id}#plan">${esc(p.title)}${race}<span class="chip-tag ${p.role}">${ROLE_TAG[p.role]}</span></a>`;
+    return `<a class="chip${p.plan_id === selectedId ? ' selected' : ''}" href="${p.role === 'current' ? location.pathname : `?plan=${p.plan_id}`}#plan">${esc(p.title)}${race}<span class="chip-tag ${p.role}">${ROLE_TAG[p.role]}</span></a>`;
   }
 
   function plansTableHTML(plans) {
@@ -2828,8 +2832,13 @@
     slotEl('plans').insertAdjacentHTML('beforeend', `
       <section id="section-plans">
         <div class="chip-row plan-switch">${ordered.map(p => planChipHTML(p, selectedId)).join('')}</div>
-        <details class="all-plans"><summary>All plans</summary>${plansTableHTML(plans)}</details>
       </section>`);
+  }
+
+  // Newest first by start week; plans with no weeks last.
+  function renderAllPlans(plans) {
+    const sorted = [...plans].sort((a, b) => (b.first_week ?? '').localeCompare(a.first_week ?? ''));
+    slotEl('all').insertAdjacentHTML('beforeend', plansTableHTML(sorted));
     makeSortable(document.getElementById('plans-table'));
   }
 
@@ -2853,7 +2862,9 @@
       if (d.plan.status === 'completed') return loadRetrospective();
       return d.plan.status === 'active' ? loadReadiness() : null;
     });
-    fillPanel('plans', [loadPlans(), get(planP, null)], renderPlans);
+    const plansP = loadPlans();
+    fillPanel('plans', [plansP, get(planP, null)], renderPlans);
+    fillPanel('all', [plansP], renderAllPlans);
     const bandsP = get(adherenceP.then(a => new Map((a.weeks ?? []).map(w => [w.week_start, w.band]))), new Map());
     fillPanel('head', [planP, headExtraP, get(adherenceP, null), echartsReady],
       (data, extra, adherence) => {

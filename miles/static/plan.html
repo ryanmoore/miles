@@ -8,13 +8,13 @@
   <link rel="stylesheet" href="/theme.css">
   <script id="echarts-script" defer src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js" integrity="sha384-pPi0zxBAoDu6+JXW/C68UZLvBUUtU+7zonhif43rqj7pxsGyqyqzcian2Rj37Rss" crossorigin="anonymous"></script>
   <style>
+    .plan-view .plan-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.75rem; }
     .plan-view h1 {
       font-size: 1.25rem;
       font-weight: 650;
       letter-spacing: -0.02em;
-      margin-bottom: 0.25rem;
     }
-    .plan-view .subtitle { font-size: 0.8125rem; color: var(--muted); margin-bottom: 1.25rem; }
+    .plan-view .plan-head .mode-tabs { margin-bottom: 0; }
 
     /* Empty state */
     .plan-view .plan-empty {
@@ -269,12 +269,11 @@
 
     /* Today view — one kicker line, then a two-column at-a-glance grid:
        the session card is the hero on the left, the whole week's story
-       (chips, meter, last-week comparison) stacks dense on the right.
+       (chips, last-week comparison) stacks dense on the right.
        Width-capped so it reads as one unit, and short enough that the
        whole tab fits a desktop viewport without scrolling. */
 
-    .plan-view .race-countdown { font-size: 0.875rem; color: var(--text-secondary); }
-    .plan-view .race-countdown-num { font-size: 1.375rem; font-weight: 700; color: var(--text); margin-right: 0.375rem; }
+    .plan-view .today-kicker { font-size: 0.875rem; color: var(--text-secondary); }
     .plan-view .kicker-sub { font-size: 0.75rem; color: var(--muted); }
 
     .plan-view .today-grid {
@@ -315,13 +314,12 @@
       margin-bottom: 0.125rem;
     }
     .plan-view .today-title { font-size: 1.0625rem; font-weight: 650; color: var(--text); margin-bottom: 0.25rem; }
-    .plan-view .today-rest, .plan-view .today-race, .plan-view .today-raceweek {
+    .plan-view .today-rest {
       font-size: 1.0625rem;
       font-weight: 650;
       color: var(--text);
       margin-bottom: 0.375rem;
     }
-    .plan-view .today-raceweek { font-size: 0.8125rem; font-weight: 600; color: var(--accent); margin-bottom: 0.625rem; }
     .plan-view .today-targets { font-size: 0.8125rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; margin-bottom: 0.25rem; line-height: 1.6; }
     /* The session's lead figure ("6.0 mi", "8–10 × 3:00 @ …") — display size,
        so proportional figures, not tabular. */
@@ -370,7 +368,7 @@
       color: var(--muted);
       line-height: 1.45;
       display: -webkit-box;
-      -webkit-line-clamp: 2;
+      -webkit-line-clamp: 1;
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
@@ -397,17 +395,14 @@
     .plan-view .day-chip.today { border-width: 2px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--chip-color) 30%, transparent); }
     .plan-view .day-chip.upcoming { border-style: dashed; }
 
-    /* Signed actual-vs-plan delta, right-aligned immediately above the meter
-       it summarizes — same weight/size as .week-headline, neutral color. */
-    .plan-view .week-delta-row { display: flex; justify-content: flex-end; }
-    .plan-view .week-delta { font-size: 0.9375rem; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }
+    .plan-view .week-headline small { font-size: 0.75rem; font-weight: 500; color: var(--muted); }
 
-    /* Expected-by-now meter — a single ratio against a limit, one accent hue;
-       the marker is a plain neutral tick, not a second judgment color. */
-    .plan-view .meter { position: relative; height: 8px; background: var(--gridline); border-radius: 4px; overflow: visible; margin-bottom: 0.375rem; }
-    .plan-view .meter-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 4px; }
-    .plan-view .meter-range { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 4px; }
-    .plan-view .meter-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text-secondary); }
+    /* One scrolling row on phones; wraps from the chrome breakpoint up. */
+    .plan-view .plan-switch { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-bottom: 0.75rem; }
+    .plan-view .plan-switch .chip { flex-shrink: 0; white-space: nowrap; text-decoration: none; }
+    .plan-view .chip-tag { font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; margin-left: 0.35rem; }
+    .plan-view .chip-tag.current { font-weight: 700; opacity: 1; }
+    @media (min-width: 640px) { .plan-view .plan-switch { flex-wrap: wrap; } }
 
     .plan-view .vs-chart-wrap { margin: 0.375rem 0; flex: 1 1 240px; max-width: 360px; }
     .plan-view .vs-chart-wrap svg { display: block; width: 100%; height: auto; }
@@ -661,8 +656,14 @@
 <script src="/charts.js"></script>
 
 <main class="plan-view">
-  <h1>Plan</h1>
-  <p class="subtitle" id="subtitle">Loading…</p>
+  <div class="plan-head">
+    <h1>Plan</h1>
+    <div class="mode-tabs" id="plan-tabs">
+      <button class="mode-tab" data-tab="today">Today</button>
+      <button class="mode-tab" data-tab="trends">Trends</button>
+      <button class="mode-tab" data-tab="plan">Plan</button>
+    </div>
+  </div>
   <div id="root"></div>
 </main>
 
@@ -804,23 +805,6 @@
     return `Left: ${miles}${sessions}`;
   }
 
-  // "On track for 50.1 mi · target 50–54": actual so far plus what is still scheduled.
-  function projectionLine(ws) {
-    if (ws.target_miles == null) return '';
-    const projected = ws.actual_miles_so_far + (ws.remaining_planned_miles ?? 0);
-    return `On track for ${projected.toFixed(1)} mi · target ${targetMilesLabel(ws)}`;
-  }
-
-  // "Last week 49.3 of 58–62 · Next week 54"
-  function neighbourWeeksLine(weeks) {
-    const i = (weeks ?? []).findIndex(w => w.is_current);
-    if (i < 0) return '';
-    const parts = [];
-    if (weeks[i - 1]) parts.push(`Last week ${trimMiles(weeks[i - 1].actual_miles)} of ${targetMilesLabel(weeks[i - 1])}`);
-    if (weeks[i + 1]) parts.push(`Next week ${targetMilesLabel(weeks[i + 1])}`);
-    return parts.join(' · ');
-  }
-
   // Adherence bands — read straight off theme.css so light/dark both work,
   // same idiom as chartTheme() in nav.js but scoped to the three band colors.
   function cssVar(name) {
@@ -903,11 +887,6 @@
 
   function renderTabs() {
     document.getElementById('root').insertAdjacentHTML('beforeend', `
-      <div class="mode-tabs" id="plan-tabs">
-        <button class="mode-tab" data-tab="today">Today</button>
-        <button class="mode-tab" data-tab="trends">Trends</button>
-        <button class="mode-tab" data-tab="plan">Plan</button>
-      </div>
       <div id="tab-today" class="tab-panel"><div class="skeleton" style="height:240px"></div></div>
       <div id="tab-trends" class="tab-panel" hidden>${TAB_SLOTS.trends.map(slotHTML).join('')}</div>
       <div id="tab-plan" class="tab-panel" hidden>
@@ -2372,13 +2351,20 @@
   // server-side, so this rendering layer only formats what's already there).
   // -----------------------------------------------------------------------
 
+  const wdDate = d => new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).replace(',', '');
+
+  function kickerHTML(dateStr, parts, syncedThrough) {
+    const synced = syncedThrough ? ` <span class="kicker-sub">· synced through ${shortDate(syncedThrough)}</span>` : '';
+    return `<div class="today-kicker">${[wdDate(dateStr), ...parts].join(' · ')}${synced}</div>`;
+  }
+
   function todayKickerHTML(data) {
     const { plan, today } = data;
-    const synced = data.synced_through ? ` <span class="kicker-sub">· synced through ${shortDate(data.synced_through)}</span>` : '';
-    if (!plan.race_date) return `<div class="race-countdown">${esc(plan.title)}${synced}</div>`;
-    const days = Math.round((new Date(plan.race_date + 'T00:00:00') - new Date(today.date + 'T00:00:00')) / 86400000);
-    if (days <= 0) return `<div class="race-countdown">${esc(plan.title)} · ${shortDate(plan.race_date)}${synced}</div>`;
-    return `<div class="race-countdown"><span class="race-countdown-num">${days}</span> day${days === 1 ? '' : 's'} to ${esc(plan.title)} <span class="kicker-sub">${shortDate(plan.race_date)}</span>${synced}</div>`;
+    const days = plan.race_date
+      ? Math.round((new Date(plan.race_date + 'T00:00:00') - new Date(today.date + 'T00:00:00')) / 86400000) : -1;
+    const when = days === 0 ? 'Race day' : days === 1 ? 'Race tomorrow' : `Race in ${days} days`;
+    const race = days < 0 ? [] : days === 0 ? [when] : [when, `${distLabel(plan.distance_bucket)} ${wdDate(plan.race_date)}`];
+    return kickerHTML(today.date, race, data.synced_through);
   }
 
   // The card's hero is the first non-strength session (strength supplements
@@ -2409,7 +2395,7 @@
   }
 
   function todaySessionHTML(data) {
-    const { today, plan } = data;
+    const { today } = data;
     if (!today || !today.week_start) {
       return `<div class="today-card"><p class="desc" style="margin:0">Outside the plan window.</p></div>`;
     }
@@ -2418,27 +2404,21 @@
     const others = sessions.filter(d => d !== hero);
     const dateLine = `<div class="panel-label">Today · ${new Date(today.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</div>`;
     const parts = [dateLine];
-    if (today.is_race_day) {
-      parts.push(`<div class="today-race">Race day — ${esc(plan.title)}.</div>`);
+    if (!hero || hero.slot === 'rest') {
+      parts.push(`<div class="today-rest">Rest day.</div>`);
       if (hero && hero.note) parts.push(`<p class="today-note">${esc(hero.note)}</p>`);
     } else {
-      if (today.is_race_week) parts.push(`<div class="today-raceweek">Race week — ${esc(plan.title)} is ${shortDate(plan.race_date)}.</div>`);
-      if (!hero || hero.slot === 'rest') {
-        parts.push(`<div class="today-rest">Rest day.</div>`);
-        if (hero && hero.note) parts.push(`<p class="today-note">${esc(hero.note)}</p>`);
-      } else {
-        const glyph = hero.terrain === 'trail' ? TRAIL_GLYPH : '';
-        const label = hero.title ? esc(hero.title) : (SLOT_LABEL[hero.slot] ?? hero.slot);
-        parts.push(`<div class="today-slot" style="color:${SLOT_COLOR[hero.slot] ?? 'var(--text)'}">${esc(SLOT_LABEL[hero.slot] ?? hero.slot)}</div>`);
-        parts.push(`<div class="today-title">${label}${glyph}</div>`);
-        const lines = describeDayTarget(hero);
-        if (lines.length) {
-          // First line is the session itself ("6.0 mi", "8–10 × 3:00 @ …") —
-          // it gets display size; the rest stay secondary.
-          parts.push(`<div class="today-targets">${lines.map((l, i) => `<div${i === 0 ? ' class="target-lead"' : ''}>${esc(l)}</div>`).join('')}</div>`);
-        }
-        if (hero.note) parts.push(`<p class="today-note">${esc(hero.note)}</p>`);
+      const glyph = hero.terrain === 'trail' ? TRAIL_GLYPH : '';
+      const label = hero.title ? esc(hero.title) : (SLOT_LABEL[hero.slot] ?? hero.slot);
+      parts.push(`<div class="today-slot" style="color:${SLOT_COLOR[hero.slot] ?? 'var(--text)'}">${esc(SLOT_LABEL[hero.slot] ?? hero.slot)}</div>`);
+      parts.push(`<div class="today-title">${label}${glyph}</div>`);
+      const lines = describeDayTarget(hero);
+      if (lines.length) {
+        // First line is the session itself ("6.0 mi", "8–10 × 3:00 @ …") —
+        // it gets display size; the rest stay secondary.
+        parts.push(`<div class="today-targets">${lines.map((l, i) => `<div${i === 0 ? ' class="target-lead"' : ''}>${esc(l)}</div>`).join('')}</div>`);
       }
+      if (hero.note) parts.push(`<p class="today-note">${esc(hero.note)}</p>`);
     }
     parts.push(alsoTodayHTML(others));
     const docs = docsOn(PLAN_DATA.docs, today.date);
@@ -2505,6 +2485,9 @@
   // "the date passed". On a multi-session day the number sums target_miles
   // across every non-rest session (an 8+4 double reads "12"); color/label
   // follow the first non-strength session.
+  const scheduledOn = dateStr => (PLAN_DATA.dayByDate.get(dateStr) ?? []).filter(d => d.slot !== 'rest');
+  const plannedMilesOf = scheduled => scheduled.reduce((s, d) => s + (d.target_miles ?? 0), 0);
+
   function dayChip(dateStr, todayStr) {
     const sessions = PLAN_DATA.dayByDate.get(dateStr) ?? [];
     const runs = PLAN_DATA.actualByDate.get(dateStr) ?? [];
@@ -2519,8 +2502,8 @@
     const label = primary ? (SLOT_LABEL[primary.slot] ?? primary.slot) : 'Rest';
     const wd = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
 
-    const scheduled = sessions.filter(d => d.slot !== 'rest');
-    const milesTotal = scheduled.reduce((s, d) => s + (d.target_miles ?? 0), 0);
+    const scheduled = scheduledOn(dateStr);
+    const milesTotal = plannedMilesOf(scheduled);
     const hasMiles = scheduled.some(d => d.target_miles != null);
     const minutesOnly = !hasMiles ? scheduled.find(d => d.target_minutes != null) : undefined;
     const plannedNum = hasMiles ? trimMiles(milesTotal)
@@ -2557,107 +2540,89 @@
     const ws = week_so_far;
     const started = ws && ws.week_started;
     const headline = !started ? '' : ws.target_miles == null
-      ? `${ws.actual_workouts_so_far} of ${ws.target_workouts} workouts so far`
-      : `${ws.actual_miles_so_far.toFixed(1)} of ${targetMilesLabel(ws)} mi so far`;
+      ? `${ws.actual_workouts_so_far} of ${ws.target_workouts} workouts`
+      : `${ws.actual_miles_so_far.toFixed(1)} of ${targetMilesLabel(ws)} mi`;
     const progress = !ws ? ''
       : !started ? `<p class="week-shape">Sync hasn't reached this week yet.</p>`
-      : `${meterHTML(ws)}${[leftLine(ws), projectionLine(ws), neighbourWeeksLine(data.weeks)]
-          .filter(Boolean).map(t => `<p class="week-shape">${esc(t)}</p>`).join('')}`;
+      : `<p class="week-shape">${esc(leftLine(ws))}</p>`;
     return `
       <div class="week-card">
         <div class="week-card-head">
-          <span class="panel-label">This week${ws ? ` · ${esc(ws.phase)} phase` : ''}</span>
+          <span class="panel-label">This week${ws ? ` · ${esc(ws.phase)}` : ''}</span>
           ${headline ? `<span class="week-headline">${esc(headline)}</span>` : ''}
         </div>
         <div class="day-chip-row">${chips}</div>
         ${ws && ws.note ? `<p class="week-note-line" title="${esc(ws.note)}">${esc(ws.note)}</p>` : ''}
         ${progress}
         <div class="week-divider"></div>
-        ${vsLastWeekHTML(data)}
+        ${vsLastWeekHTML(data, true)}
       </div>`;
   }
 
-  // Expected-by-now marker — a single ratio against a limit (a meter, not a
-  // bar chart): one accent fill, a lighter band for a range week's [lo, hi],
-  // and a plain neutral tick for the pro-rated expectation. No color codes
-  // ahead/behind — the numbers next to it carry that, not the marker.
-  function meterHTML(ws) {
-    if (!ws || ws.target_miles == null) return '';
-    const hi = ws.target_miles_hi ?? ws.target_miles;
-    const scaleMax = Math.max(hi, ws.actual_miles_so_far, ws.expected_miles_by_now ?? 0, 1) * 1.05;
-    const pct = v => Math.max(0, Math.min(100, (v / scaleMax) * 100));
-    const rangeBand = ws.target_miles_hi != null
-      ? `<div class="meter-range" style="left:${pct(ws.target_miles)}%;width:${(pct(ws.target_miles_hi) - pct(ws.target_miles)).toFixed(2)}%"></div>` : '';
-    const mark = ws.expected_miles_by_now != null
-      ? `<div class="meter-mark" style="left:${pct(ws.expected_miles_by_now)}%" title="plan pace: ~${ws.expected_miles_by_now.toFixed(1)} mi by now"></div>` : '';
-    return `${deltaLineHTML(ws)}<div class="meter">${rangeBand}<div class="meter-fill" style="width:${pct(ws.actual_miles_so_far)}%"></div>${mark}</div>`;
-  }
-
-  // The most-scanned number on the card: the meter's fill-vs-tick gap made
-  // explicit as a signed figure, right above the meter it describes. Text
-  // emphasis only — no red/green, same "numbers carry the judgment" rule as
-  // the meter itself, since mid-week "behind" is often just a reshuffle.
-  function deltaLineHTML(ws) {
-    if (ws.actual_miles_so_far == null || ws.expected_miles_by_now == null) return '';
-    const delta = ws.actual_miles_so_far - ws.expected_miles_by_now;
-    const sign = delta >= 0 ? '+' : '';
-    const title = `synced miles vs the plan's scheduled mileage for earlier days, plus today once a run has synced — moving runs between days shifts this until the week closes`;
-    return `<div class="week-delta-row"><span class="week-delta" title="${esc(title)}">${sign}${delta.toFixed(1)} mi vs plan</span></div>`;
-  }
-
-  // Cumulative miles over Mon–Sun as two lines: last week in full (muted),
-  // this week through the cutoff (accent). Dots mark both weeks at the cutoff
-  // day, labelled with their running totals; the lighter-colored one sits
-  // above or below the other so the labels never collide.
-  function cumulativeLinesSVG(vw) {
-    const W = 300, H = 84, x0 = 12, x1 = 288, yTop = 16, yBot = 62;
+  // Cumulative miles over Mon–Sun: last week in full (muted), this week
+  // through the cutoff (accent), and, with a plan, the planned week in full
+  // (dashed). Dots mark each line at the cutoff day; their labels sit beside
+  // the dots and are pushed apart vertically so they never overlap.
+  function cumulativeLinesSVG(vw, plannedDaily) {
+    const W = 300, H = 84, x0 = 12, x1 = 288, yTop = 16, yBot = 62, labelGap = 12;
     const cutoff = vw.cutoff_offset;
-    const lastPts = [], thisPts = [];
-    let last = 0, cur = 0;
-    vw.days.forEach((d, i) => {
-      last += d.last_week_miles;
-      lastPts.push(last);
-      if (i <= cutoff) { cur += d.miles; thisPts.push(cur); }
-    });
-    const maxVal = Math.max(0.1, ...lastPts, ...thisPts);
+    const cum = (arr, n) => { let t = 0; return arr.slice(0, n).map(v => (t += v)); };
+    const lastPts = cum(vw.days.map(d => d.last_week_miles), 7);
+    const thisPts = cum(vw.days.map(d => d.miles), cutoff + 1);
+    const planPts = plannedDaily ? cum(plannedDaily, 7) : [];
+    const maxVal = Math.max(0.1, ...lastPts, ...thisPts, ...planPts);
     const X = i => x0 + (i * (x1 - x0)) / 6;
     const Y = v => yBot - (v / maxVal) * (yBot - yTop);
     const path = pts => pts.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join('');
-    const thisAt = thisPts[cutoff], lastAt = lastPts[cutoff];
-    const anchor = cutoff >= 5 ? 'end' : 'middle';
-    const label = (v, above, fill) =>
-      `<text x="${X(cutoff).toFixed(1)}" y="${(Y(v) + (above ? -7 : 13)).toFixed(1)}" text-anchor="${anchor}" font-size="11" fill="${fill}">${v.toFixed(1)}</text>`;
+    const dots = [
+      { v: thisPts[cutoff], r: 4, fill: 'var(--accent)', text: 'var(--accent)', tip: `This week through ${shortDate(vw.days[cutoff].date)}` },
+      { v: lastPts[cutoff], r: 3, fill: 'var(--muted)', text: 'var(--text-secondary)', tip: `Last week through ${shortDate(vw.days[cutoff].last_week_date)}`, opacity: 0.7 },
+    ];
+    if (plannedDaily) dots.push({ v: planPts[cutoff], r: 3, fill: 'var(--muted)', text: 'var(--text-secondary)', tip: `Plan through ${shortDate(vw.days[cutoff].date)}` });
+    const byY = dots.slice().sort((a, b) => Y(a.v) - Y(b.v));
+    byY.forEach((d, i) => { d.ly = Math.max(Y(d.v) + 4, i ? byY[i - 1].ly + labelGap : -Infinity); });
+    for (let i = byY.length - 2; i >= 0; i--) byY[i].ly = Math.min(byY[i].ly, byY[i + 1].ly - labelGap);
+    const end = cutoff >= 5;
+    const marks = dots.map(d => `
+      <circle cx="${X(cutoff).toFixed(1)}" cy="${Y(d.v).toFixed(1)}" r="${d.r}" fill="${d.fill}" fill-opacity="${d.opacity ?? 1}"><title>${d.tip}: ${d.v.toFixed(1)} mi</title></circle>
+      <text x="${(X(cutoff) + (end ? -7 : 7)).toFixed(1)}" y="${d.ly.toFixed(1)}" text-anchor="${end ? 'end' : 'start'}" font-size="11" fill="${d.text}" stroke="var(--surface)" stroke-width="3" paint-order="stroke">${d.v.toFixed(1)}</text>`).join('');
     const weekdays = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((w, i) =>
       `<text x="${X(i).toFixed(1)}" y="${H - 4}" text-anchor="middle" font-size="10" fill="var(--muted)">${w}</text>`).join('');
-    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cumulative miles, this week against last week">
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cumulative miles, this week against last week${plannedDaily ? ' and the plan' : ''}">
       <line x1="${x0}" x2="${x1}" y1="${yBot}" y2="${yBot}" stroke="var(--gridline)"/>
+      ${plannedDaily ? `<path d="${path(planPts)}" fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="4 3" stroke-linejoin="round"/>` : ''}
       <path d="${path(lastPts)}" fill="none" stroke="var(--muted)" stroke-opacity="0.55" stroke-width="2" stroke-linejoin="round"/>
       <path d="${path(thisPts)}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round"/>
-      <circle cx="${X(cutoff).toFixed(1)}" cy="${Y(lastAt).toFixed(1)}" r="3" fill="var(--muted)" fill-opacity="0.7"><title>Last week through ${shortDate(vw.days[cutoff].last_week_date)}: ${lastAt.toFixed(1)} mi</title></circle>
-      <circle cx="${X(cutoff).toFixed(1)}" cy="${Y(thisAt).toFixed(1)}" r="4" fill="var(--accent)"><title>This week through ${shortDate(vw.days[cutoff].date)}: ${thisAt.toFixed(1)} mi</title></circle>
-      ${label(thisAt, thisAt >= lastAt, 'var(--accent)')}${label(lastAt, thisAt < lastAt, 'var(--text-secondary)')}
+      ${marks}
       ${weekdays}
     </svg>`;
   }
 
-  function vsLastWeekHTML(data) {
+  // `planned` adds the plan line and the "vs plan" figure; the dashboard,
+  // with no plan behind it, passes nothing.
+  function vsLastWeekHTML(data, planned) {
     const vw = data.vs_last_week;
-    const head = `<span class="panel-label">vs last week at this point</span>`;
     if (!vw) {
       return `
-        <div class="week-card-head">${head}</div>
+        <div class="week-card-head"><span class="panel-label">vs last week at this point</span></div>
         <p class="week-shape">Not enough synced data this week yet to compare.</p>`;
     }
-    const sign = vw.delta_miles >= 0 ? '+' : '';
+    const signed = v => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}`;
+    const plannedDaily = planned ? vw.days.map(d => plannedMilesOf(scheduledOn(d.date))) : null;
+    const hasPlan = plannedDaily?.some(m => m > 0);
+    const ws = data.week_so_far;
+    const vsPlan = hasPlan && ws?.expected_miles_by_now != null
+      ? ` · <small>vs plan</small> ${signed(ws.actual_miles_so_far - ws.expected_miles_by_now)}` : '';
     return `
       <div class="week-card-head">
-        ${head}
-        <span class="week-headline">${sign}${vw.delta_miles.toFixed(1)} mi</span>
+        <span class="panel-label">Cumulative miles</span>
+        <span class="week-headline"><small>vs last week</small> ${signed(vw.delta_miles)}${vsPlan}</span>
       </div>
       <div class="vs-row">
-        <div class="vs-chart-wrap">${cumulativeLinesSVG(vw)}</div>
+        <div class="vs-chart-wrap">${cumulativeLinesSVG(vw, hasPlan ? plannedDaily : null)}</div>
         <div class="chart-legend">
           <span class="legend-swatch"><span class="legend-box" style="background:var(--accent)"></span>This week</span>
+          ${hasPlan ? `<span class="legend-swatch"><span class="legend-line"></span>Plan</span>` : ''}
           <span class="legend-swatch"><span class="legend-box" style="background:var(--muted);opacity:0.55"></span>Last week</span>
         </div>
       </div>`;
@@ -2667,7 +2632,7 @@
   // Today dashboard — the Today tab's content whenever there's no active
   // plan to show targets against (a completed-only plan, or none at all).
   // Actual-only: synced runs as direct links, and a week-so-far card built
-  // purely from /api/today's numbers — no targets, meter, or ramp, since
+  // purely from /api/today's numbers — no targets, or ramp, since
   // there's nothing to compare against. See PLAN_DATA construction in the
   // load orchestrator: actualByDate merges /api/today's actual map on top of
   // any plan's own (a completed plan's window rarely reaches "this week"),
@@ -2675,11 +2640,8 @@
   // -----------------------------------------------------------------------
 
   function dashboardKickerHTML(today) {
-    const dateLabel = new Date(today.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
     const ws = today.week_so_far;
-    const synced = ws.week_started && ws.week_cutoff_date < today.date
-      ? ` <span class="kicker-sub">· synced through ${shortDate(ws.week_cutoff_date)}</span>` : '';
-    return `<div class="race-countdown">${esc(dateLabel)}${synced}</div>`;
+    return kickerHTML(today.date, [], ws.week_started && ws.week_cutoff_date < today.date ? ws.week_cutoff_date : null);
   }
 
   // The hero card holds real links to activity detail (runLine's link mode)
@@ -2809,31 +2771,20 @@
     return res.json();
   }
 
-  function renderHeader(data) {
-    if (!data) {
-      document.title = 'Miles · Plan';
-      document.getElementById('subtitle').textContent = 'No plan yet.';
-      return;
-    }
-    const { plan, role } = data;
-    document.title = `Miles · ${plan.title}`;
-    const race = plan.race_date ? `${distLabel(plan.distance_bucket)} · ${longDate(plan.race_date)}` : 'no race set';
-    document.getElementById('subtitle').textContent = `${plan.title} · ${race} · ${role === 'candidate' ? 'draft' : role}`;
-  }
-
   // -----------------------------------------------------------------------
   // Plan switcher + all-plans table — one /api/plans fetch; switching is a
   // link to ?plan=<id>, so the URL always says which plan the tab shows.
   // -----------------------------------------------------------------------
 
-  const ROLE_GROUPS = [['past', 'Past'], ['current', 'Current'], ['next', 'Next'], ['candidate', 'Candidates (drafts)']];
+  const ROLE_TAG = { past: 'past', current: 'current', next: 'next', candidate: 'draft' };
 
   function planChipHTML(p, selectedId) {
     const race = p.race ? ` · ${shortDate(p.race.date)}` : '';
-    return `<a class="chip${p.plan_id === selectedId ? ' selected' : ''}" href="?plan=${p.plan_id}#plan">${esc(p.title)}${race}</a>`;
+    return `<a class="chip${p.plan_id === selectedId ? ' selected' : ''}" href="?plan=${p.plan_id}#plan">${esc(p.title)}${race}<span class="chip-tag ${p.role}">${ROLE_TAG[p.role]}</span></a>`;
   }
 
   function plansTableHTML(plans) {
+    const mi = v => v != null ? v.toFixed(1) : '—';
     const row = p => `<tr>
       <td><a class="entity-link" href="?plan=${p.plan_id}#plan">${esc(p.title)}</a></td>
       <td>${p.role}</td>
@@ -2844,8 +2795,8 @@
       <td class="r">${p.result_time_s != null ? fmt.time(p.result_time_s) : '—'}</td>
       <td class="r hide-sm">${p.versions}</td>
       <td class="r">${p.adherence ? `${p.adherence.weeks_on_or_close}/${p.adherence.weeks_completed}` : '—'}</td>
-      <td class="r hide-sm">${p.peak_target_miles ?? '—'}</td>
-      <td class="r hide-sm">${p.peak_actual_miles ?? '—'}</td>
+      <td class="r hide-sm">${mi(p.peak_target_miles)}</td>
+      <td class="r hide-sm">${mi(p.peak_actual_miles)}</td>
     </tr>`;
     return `<div class="scroll dense"><table id="plans-table">
       <thead><tr>
@@ -2873,12 +2824,10 @@
   function renderPlans(plans, data) {
     if (!plans.length) return;
     const selectedId = data ? data.plan.plan_id : null;
-    const groups = ROLE_GROUPS.map(([role, label]) => [label, plans.filter(p => p.role === role)]).filter(([, ps]) => ps.length);
+    const ordered = Object.keys(ROLE_TAG).flatMap(role => plans.filter(p => p.role === role));
     slotEl('plans').insertAdjacentHTML('beforeend', `
       <section id="section-plans">
-        ${groups.map(([label, ps]) => `
-          <div class="subchart-label">${label}</div>
-          <div class="chip-row">${ps.map(p => planChipHTML(p, selectedId)).join('')}</div>`).join('')}
+        <div class="chip-row plan-switch">${ordered.map(p => planChipHTML(p, selectedId)).join('')}</div>
         <details class="all-plans"><summary>All plans</summary>${plansTableHTML(plans)}</details>
       </section>`);
     makeSortable(document.getElementById('plans-table'));
@@ -2944,11 +2893,10 @@
     }
     startSecondaryPanels(currentP, planP);
   }).catch(err => {
-    document.getElementById('subtitle').textContent = `Error: ${err.message}`;
     document.getElementById('tab-today').innerHTML = `<p class="desc">Couldn't load today: ${esc(err.message)}</p>`;
     startSecondaryPanels(currentP, planP);
   });
-  planP.then(renderHeader, err => { document.getElementById('subtitle').textContent = `Error: ${err.message}`; });
+  planP.then(d => { document.title = d ? `Miles · ${d.plan.title}` : 'Miles · Plan'; }, () => {});
 
   document.getElementById('root').addEventListener('click', e => {
     // A muted in-page link (e.g. the dashboard's "see the Plan tab")

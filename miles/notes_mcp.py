@@ -1,11 +1,11 @@
-"""MCP tools for run and week notes, stream-detected run elements, and recent history."""
+"""MCP tools for run and week notes, plan documents, stream-detected run elements, and recent history."""
 
 import json
 from datetime import date
 
 from mcp.server.fastmcp import FastMCP
 
-from . import db, elements, history, notes
+from . import db, elements, history, notes, plan
 from .derive import connect_derived
 from .errors import reporting
 
@@ -98,6 +98,61 @@ def register_notes_tools(mcp: FastMCP) -> None:
         """Week notes for weeks containing a date in the range (YYYY-MM-DD), oldest first."""
         with db.connection(connect_derived) as conn:
             return json.dumps(notes.get_week_notes(conn, start_date, end_date))
+
+    @mcp.tool()
+    @reporting(notes.NoteError)
+    def set_plan_doc(
+        plan_id: int | None = None,
+        doc_id: int | None = None,
+        title: str | None = None,
+        body: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str:
+        """
+        Create (no doc_id) or update a markdown document on a plan: race-day
+        fueling, carb loading, race logistics, anything the athlete wants to
+        read on a given day. The app shows it on the days it covers (a start
+        without an end covers that one day; no dates attach it to the plan
+        only) and renders the body, tables included. plan_id defaults to the
+        current plan. An update changes only the fields given and replaces
+        the body in place; start_date "" clears the dates. Returns the
+        document without its body.
+        """
+        with db.connection(connect_derived) as conn:
+            if doc_id is None and plan_id is None:
+                found = plan.default_plan(conn, date.today())
+                plan_id = found["plan_id"] if found else None
+            return json.dumps(notes.set_plan_doc(conn, plan_id, doc_id, title, body, start_date, end_date))
+
+    @mcp.tool()
+    @reporting(notes.NoteError)
+    def get_plan_doc(doc_id: int) -> str:
+        """One plan document with its markdown body (see set_plan_doc)."""
+        with db.connection(connect_derived) as conn:
+            found = notes.get_plan_doc(conn, doc_id)
+        if found is None:
+            raise notes.NoteError(f"document {doc_id} does not exist")
+        return json.dumps(found)
+
+    @mcp.tool()
+    def list_plan_docs(plan_id: int | None = None, on_date: str | None = None) -> str:
+        """
+        A plan's documents (no bodies; fetch one with get_plan_doc), dated
+        ones first. plan_id defaults to the current plan; on_date
+        (YYYY-MM-DD) keeps only those covering that day.
+        """
+        with db.connection(connect_derived) as conn:
+            found = plan.get_plan(conn, plan_id) if plan_id is not None else plan.default_plan(conn, date.today())
+            return json.dumps(notes.list_plan_docs(conn, found["plan_id"], on_date) if found else [])
+
+    @mcp.tool()
+    @reporting(notes.NoteError)
+    def delete_plan_doc(doc_id: int) -> str:
+        """Delete one plan document."""
+        with db.connection(connect_derived) as conn:
+            notes.delete_plan_doc(conn, doc_id)
+        return json.dumps({"deleted": doc_id})
 
     @mcp.tool()
     @reporting(ValueError)

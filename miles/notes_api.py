@@ -1,6 +1,6 @@
-"""Read-only note endpoints for the activity and activities pages; notes are written through the MCP tools."""
+"""Read-only note and plan-document endpoints; they are written through the MCP tools."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from . import db, notes
 from .derive import connect_derived
@@ -23,3 +23,13 @@ def get_week_notes(start_date: str = Query(pattern=_DATE), end_date: str = Query
     """Week notes for weeks containing a date in the range."""
     with db.connection(connect_derived) as conn:
         return notes.get_week_notes(conn, start_date, end_date)
+
+
+@router.get("/api/plan-docs/{doc_id}")
+def get_plan_doc(doc_id: int) -> dict[str, object]:
+    """One plan document with its body and plan title."""
+    with db.connection(connect_derived) as conn:
+        found = notes.get_plan_doc(conn, doc_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} does not exist")
+    return found

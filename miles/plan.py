@@ -1302,6 +1302,7 @@ def discard_draft(conn: sqlite3.Connection, plan_id: int) -> None:
     conn.execute("DELETE FROM plan_weeks WHERE version_id = ?", [version_id])
     conn.execute("DELETE FROM plan_versions WHERE version_id = ?", [version_id])
     if plan["status"] == "draft":
+        conn.execute("DELETE FROM plan_docs WHERE plan_id = ?", [plan_id])
         conn.execute("DELETE FROM plans WHERE plan_id = ?", [plan_id])
     conn.commit()
 

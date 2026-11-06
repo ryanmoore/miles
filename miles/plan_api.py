@@ -19,7 +19,7 @@ from typing_extensions import TypedDict
 
 from fastapi import APIRouter, HTTPException
 
-from . import db, heat, plan, plan_adherence
+from . import db, heat, notes, plan, plan_adherence
 from .builds import Build
 from .classifier import classify_workout
 from .derive import CHECKPOINT_PACE_COL, connect_derived as _conn, predicted_pace_for_race
@@ -169,6 +169,7 @@ class PlanResponse(TypedDict):
     version: PlanVersionRow | None
     weeks: list[PlanWeekOut]
     days: list[PlanDayOut]
+    docs: list[dict[str, object]]  # plan_docs metadata (no bodies); see notes.list_plan_docs
     actual: dict[str, list[PlanActivity]]  # keyed by date, every synced run in the plan window
     log: dict[str, list[PlanLogEntry]]  # keyed by date, every plan_log entry in the plan window
     weeks_to_race: int | None  # None for a plan with no race
@@ -591,6 +592,7 @@ def get_plan(plan_id: int | None = None) -> PlanResponse | None:
         version=bundle["version"] if bundle is not None else None,
         weeks=weeks_out,
         days=days_out,
+        docs=notes.list_plan_docs(conn, active["plan_id"]),
         actual=activities,
         log=logs,
         weeks_to_race=weeks_to_race,

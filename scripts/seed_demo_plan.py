@@ -33,7 +33,7 @@ assert Path(_DB_ENV).resolve() != (_REPO / "data" / "activities.db").resolve(), 
 
 sys.path.insert(0, str(_REPO))
 
-from miles import db, plan  # noqa: E402
+from miles import db, notes, plan  # noqa: E402
 from miles.derive import derive_all  # noqa: E402
 from miles.periods import monday_of  # noqa: E402
 
@@ -56,6 +56,32 @@ WORKOUT_ZONE_BY_PHASE = {
     "taper": "marathon",
     "race": None,
 }
+
+
+FUELING_DOC = """# Race-day fueling
+
+Start fueling early and keep it steady; take water at every aid station.
+
+| Time | Mile | Take | Carbs (g) | Notes |
+|------|------|------|-----------|-------|
+| 0:00 | 0 | Breakfast, 90 minutes before the start | 100 | Plain and familiar |
+| 0:45 | 6 | Gel + water at the first aid station | 25 | Sip, do not gulp |
+| 1:30 | 12 | Gel + sports drink at the second aid station | 45 | Half a bottle |
+| 2:15 | 18 | Gel + water at the third aid station | 25 | Add salt if it is warm |
+| 3:00 | 24 | Gel, then whatever the aid station has | 25 | Finish strong |
+
+<b>Raw HTML</b> in a document shows as text.
+"""
+
+CARB_LOAD_DOC = """# Carb load
+
+Aim for **8 g of carbs per kg** of body weight each day, mostly from low-fiber foods.
+
+- Breakfast: oatmeal, banana, honey
+- Dinner: pasta with a plain tomato sauce
+
+Cut fiber and keep fluids up. Nothing new.
+"""
 
 
 def week_starts() -> list[date]:
@@ -244,10 +270,16 @@ def seed_current_plan(conn: sqlite3.Connection) -> None:
     add_race_run(conn, 9_000_002, RACE_DATE, 42195.0, 3 * 3600 + 12 * 60)
     plan.auto_complete_plan(conn)
 
+    notes.set_plan_doc(conn, plan_id, title="Race-day fueling", start_date=RACE_DATE.isoformat(), body=FUELING_DOC)
+    notes.set_plan_doc(
+        conn, plan_id, title="Carb load", body=CARB_LOAD_DOC,
+        start_date=(RACE_DATE - timedelta(days=2)).isoformat(), end_date=(RACE_DATE - timedelta(days=1)).isoformat(),
+    )
+
 
 def seed(conn: sqlite3.Connection) -> None:
     db.init_db(conn)
-    for table in ("plan_adherence", "plan_log", "plan_days", "plan_weeks", "plan_versions", "plans"):
+    for table in ("plan_docs", "plan_adherence", "plan_log", "plan_days", "plan_weeks", "plan_versions", "plans"):
         conn.execute(f"DELETE FROM {table}")
     seed_past_plan(conn)
     seed_current_plan(conn)

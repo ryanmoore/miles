@@ -195,3 +195,54 @@ def test_notes_are_served_read_only_to_the_pages(seeded):
     assert client.get("/api/run-note?id=5").json()["short"] == "Easy"
     (week,) = client.get("/api/week-notes?start_date=2026-10-14&end_date=2026-10-18").json()
     assert (week["week_start"], week["tags"]) == ("2026-10-12", ["travel"])
+
+
+def _docs_on(day: str, plan_id: int = 1) -> list[str]:
+    return [d["title"] for d in _tool("list_plan_docs", plan_id=plan_id, on_date=day)]
+
+
+def test_plan_documents_are_found_on_the_days_they_cover(seeded):
+    fueling = _tool("set_plan_doc", title="Race-day fueling", body="| mile | gel |", start_date="2026-10-18")
+    assert fueling["plan_id"] == 1 and "body" not in fueling  # plan_id defaulted to the current plan
+    _tool("set_plan_doc", plan_id=1, title="Carb load", body="Pasta", start_date="2026-10-16", end_date="2026-10-17")
+    _tool("set_plan_doc", plan_id=1, title="Kit list", body="Shoes")
+    assert [_docs_on(d) for d in ("2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19")] == [
+        [], ["Carb load"], ["Carb load"], ["Race-day fueling"], [],
+    ]
+    assert [d["title"] for d in _tool("list_plan_docs")] == ["Carb load", "Race-day fueling", "Kit list"]
+
+    for args, message in [
+        ({"plan_id": 1, "title": "t", "body": "b", "start_date": "2026-10-18", "end_date": "2026-10-17"}, "before start_date"),
+        ({"plan_id": 1, "title": "t", "body": "b", "end_date": "2026-10-17"}, "needs a start_date"),
+        ({"plan_id": 1, "title": "t", "body": "b", "start_date": "soon"}, "valid ISO date"),
+        ({"plan_id": 1, "title": "t"}, "title and body are required"),
+        ({"plan_id": 9, "title": "t", "body": "b"}, "plan 9 does not exist"),
+        ({"doc_id": 99, "body": "b"}, "document 99 does not exist"),
+    ]:
+        assert message in _tool("set_plan_doc", **args)["error"]
+
+
+def test_plan_documents_update_in_place_and_delete(seeded):
+    doc = _tool("set_plan_doc", title="Carb load", body="Pasta", start_date="2026-10-16", end_date="2026-10-17")
+    _tool("set_plan_doc", doc_id=doc["doc_id"], body="Rice")
+    assert (got := _tool("get_plan_doc", doc_id=doc["doc_id"]))["body"] == "Rice" and got["start_date"] == "2026-10-16"
+    assert got["title"] == "Carb load" and got["plan_title"] == "P"
+    _tool("set_plan_doc", doc_id=doc["doc_id"], start_date="")
+    assert (_tool("get_plan_doc", doc_id=doc["doc_id"])["start_date"], _docs_on("2026-10-16")) == (None, [])
+    _tool("delete_plan_doc", doc_id=doc["doc_id"])
+    assert "does not exist" in _tool("get_plan_doc", doc_id=doc["doc_id"])["error"]
+
+
+def test_plan_documents_reach_the_web_app_and_leave_with_a_discarded_draft(seeded):
+    client = TestClient(api.app)
+    doc = _tool("set_plan_doc", plan_id=1, title="Carb load", body="# Pasta", start_date="2026-10-16")
+    (meta,) = client.get("/api/plan?plan_id=1").json()["docs"]
+    assert (meta["doc_id"], meta["title"], meta["start_date"], meta["end_date"]) == (doc["doc_id"], "Carb load", "2026-10-16", None)
+    assert "body" not in meta
+    assert client.get(f"/api/plan-docs/{doc['doc_id']}").json()["body"] == "# Pasta"
+    assert client.get("/api/plan-docs/99").status_code == 404
+
+    draft = _tool("start_plan_draft", title="Candidate")["plan"]["plan_id"]
+    kept = _tool("set_plan_doc", plan_id=draft, title="Notes", body="x")
+    _tool("discard_draft", plan_id=draft)
+    assert client.get(f"/api/plan-docs/{kept['doc_id']}").status_code == 404

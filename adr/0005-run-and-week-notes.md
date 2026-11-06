@@ -32,6 +32,11 @@ nowhere to live.
   planned days of this week and next into one compact answer whose detail fades
   with age. A session is compared with the latest earlier one of similar
   structure, else the latest of its label.
+- **Plan documents are notes too.** `plan_docs` holds markdown the athlete reads on
+  given days (race-day fueling, carb loading, logistics): a title, a body, and an
+  optional date range (a start alone is one day) on a plan. Authored over MCP, edited
+  in place, never versioned with the plan, deleted with a discarded draft plan; the
+  web app only renders them.
 
 ## Consequences
 

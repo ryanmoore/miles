@@ -1,6 +1,6 @@
-"""Run and week notes, the athlete's annotations: ground truth like the plan
-tables. `derive_all` never touches them and no sync path deletes them (see
-adr/0005-run-and-week-notes.md)."""
+"""Run and week notes and plan documents, the athlete's annotations: ground
+truth like the plan tables. `derive_all` never touches them and no sync path
+deletes them (see adr/0005-run-and-week-notes.md)."""
 
 import json
 import re
@@ -51,6 +51,17 @@ def init_notes_schema(conn: sqlite3.Connection) -> None:
             tags        TEXT,
             note        TEXT,
             written_by  TEXT,
+            updated_at  TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS plan_docs (
+            doc_id      INTEGER PRIMARY KEY,
+            plan_id     INTEGER NOT NULL REFERENCES plans(plan_id) ON DELETE CASCADE,
+            title       TEXT NOT NULL,
+            body        TEXT NOT NULL,
+            start_date  TEXT,
+            end_date    TEXT,
             updated_at  TEXT NOT NULL
         )
     """)
@@ -283,3 +294,88 @@ def list_unnoted_runs(conn: sqlite3.Connection, start_date: str, end_date: str) 
         for r in rows
     )
     return [{k: v for k, v in run.items() if v is not None} for run in runs]
+
+
+PLAN_DOC_META = "doc_id, plan_id, title, start_date, end_date, updated_at"
+
+
+def _iso_date(field: str, value: str) -> str:
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError as e:
+        raise NoteError(f"{field} {value!r} is not a valid ISO date") from e
+
+
+def set_plan_doc(
+    conn: sqlite3.Connection,
+    plan_id: int | None = None,
+    doc_id: int | None = None,
+    title: str | None = None,
+    body: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, object]:
+    """Create a document on plan_id (no doc_id) or update one in place. An
+    update changes only the fields given; an empty start_date clears the date
+    range. A start without an end covers that single day."""
+    if doc_id is None:
+        if plan_id is None or conn.execute("SELECT 1 FROM plans WHERE plan_id = ?", [plan_id]).fetchone() is None:
+            raise NoteError(f"plan {plan_id} does not exist")
+        if not title or body is None:
+            raise NoteError("title and body are required for a new document")
+        current: dict[str, object] = {"title": "", "body": "", "start_date": None, "end_date": None}
+    else:
+        found = conn.execute("SELECT * FROM plan_docs WHERE doc_id = ?", [doc_id]).fetchone()
+        if found is None:
+            raise NoteError(f"document {doc_id} does not exist")
+        current = dict(found)
+    merged = {**current, **{k: v for k, v in (("title", title), ("body", body)) if v is not None}}
+    if start_date == "":
+        merged["start_date"] = merged["end_date"] = None
+    else:
+        if start_date is not None:
+            merged["start_date"] = _iso_date("start_date", start_date)
+        if end_date is not None:
+            merged["end_date"] = _iso_date("end_date", end_date)
+    if merged["end_date"] and not merged["start_date"]:
+        raise NoteError("end_date needs a start_date")
+    if merged["end_date"] and str(merged["end_date"]) < str(merged["start_date"]):
+        raise NoteError("end_date must not be before start_date")
+    row = [merged["title"], merged["body"], merged["start_date"], merged["end_date"], _now()]
+    if doc_id is None:
+        doc_id = conn.execute(
+            "INSERT INTO plan_docs (title, body, start_date, end_date, updated_at, plan_id) VALUES (?, ?, ?, ?, ?, ?)",
+            [*row, plan_id],
+        ).lastrowid
+    else:
+        conn.execute("UPDATE plan_docs SET title = ?, body = ?, start_date = ?, end_date = ?, updated_at = ? WHERE doc_id = ?", [*row, doc_id])
+    conn.commit()
+    return dict(conn.execute(f"SELECT {PLAN_DOC_META} FROM plan_docs WHERE doc_id = ?", [doc_id]).fetchone())
+
+
+def get_plan_doc(conn: sqlite3.Connection, doc_id: int) -> dict[str, object] | None:
+    """One document with its body and its plan's title, or None."""
+    row = conn.execute(
+        "SELECT d.*, p.title AS plan_title FROM plan_docs d JOIN plans p ON p.plan_id = d.plan_id WHERE d.doc_id = ?", [doc_id]
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def list_plan_docs(conn: sqlite3.Connection, plan_id: int, on_date: str | None = None) -> list[dict[str, object]]:
+    """A plan's documents without bodies, dated ones first by start. With
+    on_date, only those whose range covers it."""
+    where = "plan_id = ?"
+    params: list[object] = [plan_id]
+    if on_date is not None:
+        where += " AND ? BETWEEN start_date AND COALESCE(end_date, start_date)"
+        params.append(_iso_date("date", on_date))
+    rows = conn.execute(
+        f"SELECT {PLAN_DOC_META} FROM plan_docs WHERE {where} ORDER BY start_date IS NULL, start_date, doc_id", params
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_plan_doc(conn: sqlite3.Connection, doc_id: int) -> None:
+    if conn.execute("DELETE FROM plan_docs WHERE doc_id = ?", [doc_id]).rowcount == 0:
+        raise NoteError(f"document {doc_id} does not exist")
+    conn.commit()

@@ -412,6 +412,12 @@
     .plan-view .vs-chart-wrap { margin: 0.375rem 0; flex: 1 1 240px; max-width: 360px; }
     .plan-view .vs-chart-wrap svg { display: block; width: 100%; height: auto; }
 
+    .plan-view .doc-link { color: var(--accent); }
+    .plan-view .today-docs { font-size: 0.8125rem; margin-top: 0.5rem; }
+    .plan-view .doc-row { font-size: 0.875rem; padding: 0.25rem 0; }
+    .plan-view .doc-dates { font-size: 0.75rem; color: var(--muted); margin-left: 0.375rem; }
+    #section-docs { margin-bottom: 1rem; }
+
     /* Day detail popover — shared by the calendar and the Today strip. */
     .plan-view .day-popover-backdrop {
       position: fixed;
@@ -869,7 +875,7 @@
   // until its own data arrives, so one slow request delays only its panel.
   const TAB_SLOTS = {
     trends: [['easy', 220], ['workouts', 220], ['mileage', 220], ['load', 260], ['fitness', 24]],
-    plan: [['plans', 40], ['head', 220], ['chart', 260], ['calendar', 320], ['flags', 0], ['versions', 120]],
+    plan: [['plans', 40], ['head', 220], ['chart', 260], ['calendar', 320], ['docs', 0], ['flags', 0], ['versions', 120]],
   };
 
   // Every Trends/Plan-section render function inserts here; the first call
@@ -944,7 +950,17 @@
       dayByDate: data ? groupSessionsByDate(data.days) : new Map(),
       actualByDate: new Map([...(data ? Object.entries(data.actual ?? {}) : []), ...Object.entries(todayActual ?? {})]),
       logByDate: data ? new Map(Object.entries(data.log ?? {})) : new Map(),
+      docs: data?.docs ?? [],
     };
+  }
+
+  // Plan documents whose date range covers dateStr (a start without an end covers that day).
+  function docsOn(docs, dateStr) {
+    return docs.filter(d => d.start_date && d.start_date <= dateStr && dateStr <= (d.end_date ?? d.start_date));
+  }
+
+  function docLinkHTML(doc) {
+    return `<a class="doc-link" href="/doc.html?id=${doc.doc_id}">${esc(doc.title)}</a>`;
   }
 
   // Groups plan_days rows by date, preserving the server's date/seq order —
@@ -975,7 +991,7 @@
       </div>`;
   }
 
-  function dayPopoverHTML(dateStr, sessions, runs, logs) {
+  function dayPopoverHTML(dateStr, sessions, runs, logs, docs) {
     const body = sessions.length
       ? sessions.map(daySessionBlockHTML).join('')
       : `<div class="day-popover-title">Rest</div>`;
@@ -987,7 +1003,8 @@
           ${body}
           ${runs.length ? `<div class="day-popover-section"><div class="subchart-label">Synced</div>${runs.map(r => runLine(r, { showPace: true, link: true })).join('')}</div>` : ''}
           ${logs.length ? `<div class="day-popover-section"><div class="subchart-label">Log</div>${logs.map(l => `<div class="day-popover-log">${esc(l.action)}${l.reason ? ': ' + esc(l.reason) : ''}</div>`).join('')}</div>` : ''}
-          ${!sessions.length && !runs.length && !logs.length ? `<p class="day-popover-empty">No plan data for this day.</p>` : ''}
+          ${docs.length ? `<div class="day-popover-section"><div class="subchart-label">Documents</div>${docs.map(d => `<div class="day-popover-log">📄 ${docLinkHTML(d)}</div>`).join('')}</div>` : ''}
+          ${!sessions.length && !runs.length && !logs.length && !docs.length ? `<p class="day-popover-empty">No plan data for this day.</p>` : ''}
         </div>
       </div>`;
   }
@@ -997,10 +1014,11 @@
     const sessions = data.dayByDate.get(dateStr) ?? [];
     const runs = data.actualByDate.get(dateStr) ?? [];
     const logs = data.logByDate.get(dateStr) ?? [];
-    if (!sessions.length && !runs.length && !logs.length) return; // nothing to show for this date
+    const docs = docsOn(data.docs, dateStr);
+    if (!sessions.length && !runs.length && !logs.length && !docs.length) return; // nothing to show for this date
     // Must land inside main.plan-view — every popover style is scoped under
     // it, and a body-level insert renders as unstyled text at the page bottom.
-    document.querySelector('main.plan-view').insertAdjacentHTML('beforeend', dayPopoverHTML(dateStr, sessions, runs, logs));
+    document.querySelector('main.plan-view').insertAdjacentHTML('beforeend', dayPopoverHTML(dateStr, sessions, runs, logs, docs));
     const backdrop = document.getElementById('day-popover-backdrop');
     function close() {
       backdrop.remove();
@@ -2423,6 +2441,8 @@
       }
     }
     parts.push(alsoTodayHTML(others));
+    const docs = docsOn(PLAN_DATA.docs, today.date);
+    if (docs.length) parts.push(`<div class="today-docs">${docs.map(d => `📄 ${docLinkHTML(d)}`).join(' · ')}</div>`);
     parts.push(todaySyncedHTML(today.date));
     parts.push(upNextHTML(today.date));
     return `<div class="today-card" data-plan-date="${today.date}">${parts.join('')}</div>`;
@@ -2839,6 +2859,17 @@
     </table></div>`;
   }
 
+  function renderDocs(data) {
+    if (!data || !data.docs.length) return;
+    const dates = d => !d.start_date ? '' : d.end_date && d.end_date !== d.start_date
+      ? `${shortDate(d.start_date)} – ${shortDate(d.end_date)}` : shortDate(d.start_date);
+    slotEl('docs').insertAdjacentHTML('beforeend', `
+      <section id="section-docs">
+        <div class="subchart-label">Documents</div>
+        ${data.docs.map(d => `<div class="doc-row">📄 ${docLinkHTML(d)}${dates(d) ? ` <span class="doc-dates">${esc(dates(d))}</span>` : ''}</div>`).join('')}
+      </section>`);
+  }
+
   function renderPlans(plans, data) {
     if (!plans.length) return;
     const selectedId = data ? data.plan.plan_id : null;
@@ -2890,6 +2921,7 @@
     fillPanel('chart', [planP, bandsP, get(adherenceP, null), echartsReady],
       (data, bands, adherence) => { if (data) renderChart(data, bands, adherence?.flags ?? []); });
     fillPanel('calendar', [planP, bandsP], (data, bands) => { if (data) renderCalendar(data, bands); });
+    fillPanel('docs', [planP], renderDocs);
     fillPanel('flags', [adherenceP], renderFlags);
     fillPanel('versions', [loadVersions()], renderVersions);
     planP.then(d => { PLAN_TAB_DATA = planData(d); }, () => {});
@@ -2923,6 +2955,7 @@
     // switches tabs instead of navigating to a real page.
     const jumpTab = e.target.closest('[data-tab-jump]');
     if (jumpTab) { e.preventDefault(); activatePlanTab(jumpTab.dataset.tabJump); return; }
+    if (e.target.closest('a.doc-link')) return;
     const el = e.target.closest('[data-plan-date]');
     if (el) { openDayPopover(el.dataset.planDate, el.closest('#tab-plan') ? PLAN_TAB_DATA : PLAN_DATA); return; }
     // In-page section anchors (e.g. Readiness's "Workout progression" link)

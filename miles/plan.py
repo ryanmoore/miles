@@ -331,13 +331,10 @@ def current_plan(conn: sqlite3.Connection, today: date) -> PlanRow | None:
 def default_plan(conn: sqlite3.Connection, today: date) -> PlanRow | None:
     """The plan a page opens on: the current one; in a gap between cycles the
     most recent past plan, else the earliest next one."""
-    current = current_plan(conn, today)
-    if current is not None:
-        return current
-    by_role: dict[str, list[PlanRow]] = {"past": [], "next": []}
-    for p in list_plans(conn):
-        by_role.get(plan_role(p, today), []).append(p)
-    return by_role["past"][-1] if by_role["past"] else by_role["next"][0] if by_role["next"] else None
+    plans = list_plans(conn)
+    past = [p for p in plans if plan_role(p, today) == "past"]
+    upcoming = [p for p in plans if plan_role(p, today) == "next"]
+    return current_plan(conn, today) or (past[-1] if past else upcoming[0] if upcoming else None)
 
 
 # --- accessors ---------------------------------------------------------------
@@ -1134,32 +1131,31 @@ def _snapshot_past_weeks(conn: sqlite3.Connection, plan_id: int, version_id: int
     m = plan_start
     while m <= this_monday:
         governing = current_version_for_week(conn, plan_id, m)
-        if governing is not None:
-            iso = m.isoformat()
-            week_row = next((w for w in governing["weeks"] if w["week_start"] == iso), None)
+        iso = m.isoformat()
+        week_row = next((w for w in governing["weeks"] if w["week_start"] == iso), None) if governing else None
+        if governing is not None and week_row is not None:  # a week added by the revision rewrites no history
             week_end = (m + timedelta(days=6)).isoformat()
             conn.execute(
                 "DELETE FROM plan_days WHERE version_id = ? AND date >= ? AND date <= ?",
                 (version_id, iso, week_end),
             )
-            if week_row is not None:
-                conn.execute(
-                    "INSERT INTO plan_weeks (version_id, week_start, target_miles, target_miles_hi, "
-                    "target_workouts, target_long_run_miles, target_long_run_minutes, "
-                    "target_strength_days, phase, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(version_id, week_start) DO UPDATE SET "
-                    "target_miles = excluded.target_miles, target_miles_hi = excluded.target_miles_hi, "
-                    "target_workouts = excluded.target_workouts, "
-                    "target_long_run_miles = excluded.target_long_run_miles, "
-                    "target_long_run_minutes = excluded.target_long_run_minutes, "
-                    "target_strength_days = excluded.target_strength_days, "
-                    "phase = excluded.phase, note = excluded.note",
-                    (version_id, iso, week_row["target_miles"], week_row["target_miles_hi"],
-                     week_row["target_workouts"], week_row["target_long_run_miles"],
-                     week_row["target_long_run_minutes"], week_row["target_strength_days"],
-                     week_row["phase"], week_row["note"]),
-                )
-                preserved.append(iso)
+            conn.execute(
+                "INSERT INTO plan_weeks (version_id, week_start, target_miles, target_miles_hi, "
+                "target_workouts, target_long_run_miles, target_long_run_minutes, "
+                "target_strength_days, phase, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(version_id, week_start) DO UPDATE SET "
+                "target_miles = excluded.target_miles, target_miles_hi = excluded.target_miles_hi, "
+                "target_workouts = excluded.target_workouts, "
+                "target_long_run_miles = excluded.target_long_run_miles, "
+                "target_long_run_minutes = excluded.target_long_run_minutes, "
+                "target_strength_days = excluded.target_strength_days, "
+                "phase = excluded.phase, note = excluded.note",
+                (version_id, iso, week_row["target_miles"], week_row["target_miles_hi"],
+                 week_row["target_workouts"], week_row["target_long_run_miles"],
+                 week_row["target_long_run_minutes"], week_row["target_strength_days"],
+                 week_row["phase"], week_row["note"]),
+            )
+            preserved.append(iso)
             for day_row in governing["days"]:
                 if iso <= day_row["date"] <= week_end:
                     conn.execute(

@@ -125,6 +125,18 @@ def test_a_race_week_inside_the_current_plan_does_not_end_it():
     assert plan.plan_role(row, date.today()) == "current"  # this week is its post-race week
 
 
+def test_a_revision_after_the_race_can_add_the_current_week_without_losing_its_days():
+    conn = memory_db()
+    raced = _plan(conn, "Spring 5K", -4, -1, race_week=-1)
+    version_id = plan.start_revision_draft(conn, raced)
+    plan.upsert_draft_weeks(conn, version_id, _weeks(0, 0))
+    plan.upsert_draft_days(conn, version_id, [{"date": THIS_MONDAY.isoformat(), "slot": "easy", "target_miles": 30.0}])
+    plan.commit_plan(conn, raced, note="add the recovery week")
+
+    assert [d["date"] for d in plan.get_version(conn, version_id)["days"]] == [THIS_MONDAY.isoformat()]
+    assert plan.current_plan(conn, date.today())["plan_id"] == raced
+
+
 def test_auto_complete_checks_each_active_plan_against_its_own_race():
     conn = memory_db()
     first = _plan(conn, "First", -8, -3, race_week=-3)

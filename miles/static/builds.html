@@ -262,7 +262,7 @@
       // A completed plan closed out this race — link to its retrospective.
       const planId = racePlans ? racePlans[b.race.date] : undefined;
       const planLink = planId != null
-        ? ` <a class="plan-link" href="/plan.html" title="View plan retrospective">Plan →</a>` : '';
+        ? ` <a class="plan-link" href="/plan.html?plan=${planId}#plan" title="View plan retrospective">Plan →</a>` : '';
       const result = raceByDate.get(b.race.date);
       const timeCell = result?.finish_time_s == null
         ? td(null)

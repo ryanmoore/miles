@@ -237,7 +237,7 @@
       // behavior below still owns everywhere else in the row. A race that
       // closed out a completed plan also links to that plan's retrospective.
       const planLink = r.plan_id != null
-        ? ` <a class="plan-link" href="/plan.html" title="View plan retrospective">Plan →</a>` : '';
+        ? ` <a class="plan-link" href="/plan.html?plan=${r.plan_id}#plan" title="View plan retrospective">Plan →</a>` : '';
       return `<tr class="${isCurrentPR ? 'pr' : ''}${r.strava_url ? ' linked' : ''}"${link}>
         ${td(r.date, 'dim')}
         ${td(catLabel(r.distance_category), '')}

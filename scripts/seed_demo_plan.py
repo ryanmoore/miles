@@ -1,19 +1,18 @@
-"""Seed a realistic 16-week marathon plan into a SCRATCH copy of the DB, for
-visually reviewing plan.html's populated states (active plan, versions + diff,
-plan_log markers, adherence bands, progression charts).
+"""Seed several plans into a SCRATCH copy of the DB, for visually reviewing
+plan.html's states: a past completed plan with two versions (the second moves
+its race), a current plan whose race was last weekend and that includes this
+week as its post-race week, a committed next plan with no race yet, and two
+candidate drafts.
 
-Requires a scratch copy of a DB that already holds a synced history; the
-seeded plan is overlaid on those activities.
+Requires a scratch copy of a DB that already holds a synced history; any
+plans in it are replaced by the seeded ones, overlaid on those activities.
 
 Usage:
     cp data/activities.db /tmp/plan_demo.db
     MILES_DB=/tmp/plan_demo.db uv run python scripts/seed_demo_plan.py
     MILES_DB=/tmp/plan_demo.db uv run uvicorn miles.api:app --port 8001
 
-The plan window (WEEK1_MONDAY..RACE_DATE) starts ten weeks before this week,
-so the first ten weeks overlap synced training and overlay the planned targets,
-and the revision changes only weeks that have not started (a revision never
-rewrites weeks already governed by the earlier version).
+All dates are relative to today, so the roles stay put whenever it is run.
 
 SAFETY: refuses to run unless MILES_DB is set and points somewhere other than
 the repo's real data/activities.db.
@@ -39,8 +38,9 @@ from miles.derive import derive_all  # noqa: E402
 from miles.periods import monday_of  # noqa: E402
 
 N_WEEKS = 16
-WEEK1_MONDAY = monday_of(date.today()) - timedelta(weeks=10)
-RACE_DATE = WEEK1_MONDAY + timedelta(weeks=N_WEEKS) - timedelta(days=1)  # Sunday of week 16
+THIS_MONDAY = monday_of(date.today())
+WEEK1_MONDAY = THIS_MONDAY - timedelta(weeks=N_WEEKS)
+RACE_DATE = THIS_MONDAY - timedelta(days=1)  # last Sunday, the end of week 16
 
 TARGET_MILES = [28, 32, 35, 26, 38, 42, 45, 36, 48, 52, 50, 56, 60, 40, 26, 12]
 TARGET_WORKOUTS = [1, 1, 1, 1, 1, 1, 2, 1, 2, 2, 2, 2, 2, 1, 1, 0]
@@ -164,9 +164,50 @@ def build_days(target_miles: list[int], target_long_run: list[int]) -> list[plan
     return days
 
 
-def seed(conn: sqlite3.Connection) -> None:
-    db.init_db(conn)
+def simple_plan(
+    conn: sqlite3.Connection, title: str, first_monday: date, n_weeks: int,
+    race: dict[str, object] | None = None, commit: bool = True,
+) -> tuple[int, int]:
+    """A plain build (Tuesday easy, Thursday workout, Sunday long) of n_weeks
+    from first_monday. Returns (plan_id, the draft's version_id)."""
+    plan_id, version_id = plan.start_plan_draft(conn, title=title, **(race or {}))  # type: ignore[arg-type]
+    weeks: list[plan.WeekInput] = []
+    days: list[plan.DayInput] = []
+    for i in range(n_weeks):
+        monday = first_monday + timedelta(weeks=i)
+        miles = 20.0 + 2 * i
+        weeks.append(plan.WeekInput(week_start=monday.isoformat(), target_miles=miles, target_workouts=1, phase="base"))
+        for offset, slot, share in ((1, "easy", 0.25), (3, "workout", 0.25), (6, "long", 0.5)):
+            days.append(plan.DayInput(date=(monday + timedelta(days=offset)).isoformat(), slot=slot, target_miles=miles * share))
+    plan.upsert_draft_weeks(conn, version_id, weeks)
+    plan.upsert_draft_days(conn, version_id, days)
+    if commit:
+        plan.commit_plan(conn, plan_id, note=f"Initial {title} plan.")
+    return plan_id, version_id
 
+
+def add_race_run(conn: sqlite3.Connection, activity_id: int, race_day: date, distance_m: float, moving_time_s: int) -> None:
+    conn.execute(
+        "INSERT INTO activities (activity_id, name, sport_type, start_date, workout_type, run_type, distance_m, moving_time_s, synced_at) "
+        "VALUES (?, 'Demo race', 'Run', ?, 1, 'race', ?, ?, ?)",
+        [activity_id, f"{race_day.isoformat()}T08:00:00", distance_m, moving_time_s, datetime.now(timezone.utc).isoformat()],
+    )
+    conn.commit()
+
+
+def seed_past_plan(conn: sqlite3.Connection) -> None:
+    """A 12-week 10K plan that ended the week before the current plan began; its
+    second version moves the race a day and sets a goal."""
+    first = WEEK1_MONDAY - timedelta(weeks=12)
+    race_saturday = first + timedelta(weeks=10, days=5)
+    plan_id, _ = simple_plan(conn, "Spring 10K", first, 12, race={"race_date": race_saturday.isoformat(), "distance_bucket": "10K"})
+    version_id = plan.start_revision_draft(conn, plan_id)
+    plan.set_draft_race(conn, version_id, (race_saturday + timedelta(days=1)).isoformat(), "10K", 45 * 60)
+    plan.commit_plan(conn, plan_id, note="Race moved to Sunday; added a goal time.")
+    add_race_run(conn, 9_000_001, race_saturday + timedelta(days=1), 10000.0, 46 * 60)
+
+
+def seed_current_plan(conn: sqlite3.Connection) -> None:
     plan_id, v1_id = plan.start_plan_draft(
         conn, title="Demo Marathon", race_date=RACE_DATE.isoformat(),
         distance_bucket="marathon", goal_time_s=3 * 3600 + 15 * 60,
@@ -182,22 +223,17 @@ def seed(conn: sqlite3.Connection) -> None:
     conn.commit()
     print(f"created plan_id={plan_id} v1 version_id={v1_id}")
 
-    # Mid-plan revision so version history, the diff view, and contemporaneous
-    # scoring have something to show. A later version governs the weeks that
-    # begin after its committed_at, so backdating it to week 8 makes
-    # version_n_used flip 1 -> 2 from week 9 on.
-    v2_miles = list(TARGET_MILES)
-    v2_miles[12], v2_miles[13], v2_miles[14] = 52, 36, 24
-    v2_long_run = list(TARGET_LONG_RUN)
-    v2_long_run[12] = 18
+    # The post-race recovery week belongs to this plan: a revision adds it
+    # and relaxes the goal.
     v2_id = plan.start_revision_draft(conn, plan_id)
-    days = build_days(v2_miles, v2_long_run)
-    plan.upsert_draft_days(conn, v2_id, days)
-    plan.upsert_draft_weeks(conn, v2_id, build_weeks(days, v2_long_run))
-    plan.commit_plan(conn, plan_id, note="Cutting the true peak week after two weeks of elevated soreness.")
-    revised_at = (datetime.combine(WEEK1_MONDAY + timedelta(weeks=7), datetime.min.time(), tzinfo=timezone.utc) + timedelta(days=1)).isoformat()
-    conn.execute("UPDATE plan_versions SET committed_at = ? WHERE version_id = ?", [revised_at, v2_id])
-    conn.commit()
+    plan.set_draft_race(conn, v2_id, RACE_DATE.isoformat(), "marathon", 3 * 3600 + 10 * 60)
+    plan.upsert_draft_weeks(conn, v2_id, [
+        plan.WeekInput(week_start=THIS_MONDAY.isoformat(), target_miles=12.0, target_workouts=0, phase="base", note="Recovery after the race"),
+    ])
+    plan.upsert_draft_days(conn, v2_id, [
+        plan.DayInput(date=(THIS_MONDAY + timedelta(days=d)).isoformat(), slot="easy", target_miles=4.0) for d in (1, 3, 5)
+    ])
+    plan.commit_plan(conn, plan_id, note="Added the recovery week and eased the goal time.")
     print(f"created v2 version_id={v2_id}")
 
     log1 = plan.add_log_entry(
@@ -205,6 +241,21 @@ def seed(conn: sqlite3.Connection) -> None:
         reason="sore right calf, skipped the Tuesday tempo",
     )
     print(f"created log entry: {log1}")
+    add_race_run(conn, 9_000_002, RACE_DATE, 42195.0, 3 * 3600 + 12 * 60)
+    plan.auto_complete_plan(conn)
+
+
+def seed(conn: sqlite3.Connection) -> None:
+    db.init_db(conn)
+    for table in ("plan_adherence", "plan_log", "plan_days", "plan_weeks", "plan_versions", "plans"):
+        conn.execute(f"DELETE FROM {table}")
+    seed_past_plan(conn)
+    seed_current_plan(conn)
+    # Next block: committed, race not chosen yet. Two candidates for the cycle after it.
+    simple_plan(conn, "Next block", THIS_MONDAY + timedelta(weeks=1), 12)
+    after = THIS_MONDAY + timedelta(weeks=13)
+    simple_plan(conn, "Fall 50K", after, 12, race={"race_date": (after + timedelta(weeks=11, days=5)).isoformat(), "distance_bucket": "50K"}, commit=False)
+    simple_plan(conn, "Spring 5K", after, 8, race={"race_date": (after + timedelta(weeks=7, days=5)).isoformat(), "distance_bucket": "5K"}, commit=False)
 
     counts = derive_all(conn)
     print(f"derive_all counts: {counts}")

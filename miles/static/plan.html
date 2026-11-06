@@ -636,6 +636,9 @@
     .plan-view .readiness-link { color: var(--accent); text-decoration: none; white-space: nowrap; }
     .plan-view .readiness-link:hover { text-decoration: underline; }
 
+    .plan-view .all-plans { margin-bottom: 1rem; }
+    .plan-view .all-plans summary { cursor: pointer; font-size: 0.8125rem; color: var(--text-secondary); margin-bottom: 0.5rem; }
+
     /* Latest-version annotation on the Version history header — the strip
        stat this page used to carry, demoted to context. */
     .plan-view .version-annot {
@@ -866,7 +869,7 @@
   // until its own data arrives, so one slow request delays only its panel.
   const TAB_SLOTS = {
     trends: [['easy', 220], ['workouts', 220], ['mileage', 220], ['load', 260], ['fitness', 24]],
-    plan: [['head', 220], ['chart', 260], ['calendar', 320], ['flags', 0], ['versions', 120]],
+    plan: [['plans', 40], ['head', 220], ['chart', 260], ['calendar', 320], ['flags', 0], ['versions', 120]],
   };
 
   // Every Trends/Plan-section render function inserts here; the first call
@@ -916,7 +919,7 @@
     document.querySelectorAll('#plan-tabs .mode-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === key));
     document.querySelectorAll('.tab-panel').forEach(el => { el.hidden = el.id !== `tab-${key}`; });
     if (TAB_CHARTS[key]) TAB_CHARTS[key].forEach(c => c.resize());
-    history.replaceState(null, '', `#${key}`);
+    history.replaceState(null, '', `${location.search}#${key}`);
   }
 
   // -----------------------------------------------------------------------
@@ -927,7 +930,22 @@
   // in the /api/plan payload.
   // -----------------------------------------------------------------------
 
-  let PLAN_DATA = null; // { dayByDate, actualByDate, logByDate } — set once on load; dayByDate values are seq-ordered session arrays
+  // { dayByDate, actualByDate, logByDate } — dayByDate values are seq-ordered
+  // session arrays. PLAN_DATA is the current plan's (Today tab), PLAN_TAB_DATA
+  // the plan shown on the Plan tab; both are set once on load.
+  let PLAN_DATA = null;
+  let PLAN_TAB_DATA = null;
+
+  // todayActual (when given) is merged over the plan's own actuals: a plan's
+  // window rarely covers "this week" once it has ended, so the Today views
+  // always resolve against fresh data.
+  function planData(data, todayActual) {
+    return {
+      dayByDate: data ? groupSessionsByDate(data.days) : new Map(),
+      actualByDate: new Map([...(data ? Object.entries(data.actual ?? {}) : []), ...Object.entries(todayActual ?? {})]),
+      logByDate: data ? new Map(Object.entries(data.log ?? {})) : new Map(),
+    };
+  }
 
   // Groups plan_days rows by date, preserving the server's date/seq order —
   // a date can carry more than one row (a double run, or a run plus a
@@ -974,11 +992,11 @@
       </div>`;
   }
 
-  function openDayPopover(dateStr) {
-    if (!PLAN_DATA) return;
-    const sessions = PLAN_DATA.dayByDate.get(dateStr) ?? [];
-    const runs = PLAN_DATA.actualByDate.get(dateStr) ?? [];
-    const logs = PLAN_DATA.logByDate.get(dateStr) ?? [];
+  function openDayPopover(dateStr, data) {
+    if (!data) return;
+    const sessions = data.dayByDate.get(dateStr) ?? [];
+    const runs = data.actualByDate.get(dateStr) ?? [];
+    const logs = data.logByDate.get(dateStr) ?? [];
     if (!sessions.length && !runs.length && !logs.length) return; // nothing to show for this date
     // Must land inside main.plan-view — every popover style is scoped under
     // it, and a body-level insert renders as unstyled text at the page bottom.
@@ -1798,7 +1816,7 @@
       </section>`);
 
     const currentIdx = weeks.findIndex(w => w.is_current);
-    let navIdx = currentIdx >= 0 ? currentIdx : weeks.length - 1;
+    let navIdx = currentIdx >= 0 ? currentIdx : (weeks[0].is_future ? 0 : weeks.length - 1);
     const weekEl = i => section.querySelector(`.cwk[data-week="${weeks[i].week_start}"]`);
     const setOpen = (el, open) => {
       el.querySelector('.cwk-sum').setAttribute('aria-expanded', String(open));
@@ -2226,10 +2244,25 @@
   const diffCache = new Map(); // "a:b" -> VersionDiff
 
   const DIFF_FIELD_LABEL = {
+    race_date: 'race date', distance_bucket: 'distance', goal_time_s: 'goal time',
     target_miles: 'target miles', target_workouts: 'workouts', target_long_run_miles: 'long run',
     phase: 'phase', note: 'note', slot: 'slot', title: 'title', target_json: 'workout target',
   };
   function diffFieldLabel(f) { return DIFF_FIELD_LABEL[f] ?? f; }
+
+  const RACE_VALUE = {
+    race_date: v => shortDate(v) + ' ' + v.slice(0, 4),
+    distance_bucket: distLabel,
+    goal_time_s: v => fmt.time(v),
+  };
+  function raceDiffRow([field, [a, b]]) {
+    const show = v => (v == null ? 'none' : RACE_VALUE[field](v));
+    return `<div class="diff-week">
+      <div class="diff-week-start">Race</div>
+      <div class="diff-tag changed">changed</div>
+      <div class="diff-fields">${diffFieldLabel(field)}: ${esc(show(a))} → ${esc(show(b))}</div>
+    </div>`;
+  }
 
   function diffWeekRow(w) {
     return `<div class="diff-week">
@@ -2261,8 +2294,9 @@
     try {
       const diff = await loadDiff(prevId, curId);
       panel.dataset.loaded = '1';
-      panel.innerHTML = diff.changed_weeks.length
-        ? diff.changed_weeks.map(diffWeekRow).join('')
+      const race = Object.entries(diff.changed_race);
+      panel.innerHTML = race.length || diff.changed_weeks.length
+        ? race.map(raceDiffRow).join('') + diff.changed_weeks.map(diffWeekRow).join('')
         : `<p class="diff-empty">No week-level changes between these versions.</p>`;
     } catch (err) {
       panel.innerHTML = `<p class="diff-empty">Error loading diff: ${esc(err.message)}</p>`;
@@ -2275,7 +2309,7 @@
     return `
       <div class="version-item">
         <div class="version-head" data-version-id="${v.version_id}" data-prev-id="${prev ? prev.version_id : ''}">
-          <span class="version-tag">v${v.version_n}</span>
+          <span class="version-tag">v${v.version_n}${v.committed_at ? '' : ' draft'}</span>
           <span class="version-date">${shortDate(dateStr)}</span>
           <span class="version-author">${esc(v.author)}</span>
           <span class="version-note">${esc(v.note ?? '')}</span>
@@ -2322,8 +2356,9 @@
 
   function todayKickerHTML(data) {
     const { plan, today } = data;
-    const days = Math.round((new Date(plan.race_date + 'T00:00:00') - new Date(today.date + 'T00:00:00')) / 86400000);
     const synced = data.synced_through ? ` <span class="kicker-sub">· synced through ${shortDate(data.synced_through)}</span>` : '';
+    if (!plan.race_date) return `<div class="race-countdown">${esc(plan.title)}${synced}</div>`;
+    const days = Math.round((new Date(plan.race_date + 'T00:00:00') - new Date(today.date + 'T00:00:00')) / 86400000);
     if (days <= 0) return `<div class="race-countdown">${esc(plan.title)} · ${shortDate(plan.race_date)}${synced}</div>`;
     return `<div class="race-countdown"><span class="race-countdown-num">${days}</span> day${days === 1 ? '' : 's'} to ${esc(plan.title)} <span class="kicker-sub">${shortDate(plan.race_date)}</span>${synced}</div>`;
   }
@@ -2689,7 +2724,7 @@
         ${dashboardTodayCardHTML(today)}
         ${dashboardWeekCardHTML(today)}
       </div>
-      <p class="desc plan-tab-note">No active plan — see the <a href="#plan" data-tab-jump="plan">Plan tab</a>.</p>`;
+      <p class="desc plan-tab-note">No current plan — see the <a href="#plan" data-tab-jump="plan">Plan tab</a>.</p>`;
   }
 
   function renderToday(data) {
@@ -2707,32 +2742,25 @@
   // Load + orchestrate
   // -----------------------------------------------------------------------
 
-  async function loadPlan() {
-    const res = await fetch('/api/plan');
+  // The plan shown on the Plan tab (?plan=<id>); Today and Trends always use
+  // the server's default, the current plan by date.
+  const SELECTED_PLAN = new URLSearchParams(location.search).get('plan');
+
+  async function loadPlanApi(path, planId) {
+    const res = await fetch(planId ? `${path}?plan_id=${planId}` : path);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   }
 
-  async function loadVersions() {
-    const res = await fetch('/api/plan-versions');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  }
-
-  async function loadAdherence() {
-    const res = await fetch('/api/plan-adherence');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  }
+  const loadPlan = planId => loadPlanApi('/api/plan', planId);
+  const loadVersions = () => loadPlanApi('/api/plan-versions', SELECTED_PLAN);
+  const loadAdherence = () => loadPlanApi('/api/plan-adherence', SELECTED_PLAN);
+  const loadPlans = () => loadPlanApi('/api/plans');
 
   // The active-plan-scoped chart (frozen target bands, plan-window x-axis)
   // vs the plan-independent rolling one (no bands, last RECENT_MILEAGE_WEEKS
   // weeks) — decided once loadPlan() resolves, since it needs plan status.
-  async function loadProgression() {
-    const res = await fetch('/api/plan-progression');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  }
+  const loadProgression = () => loadPlanApi('/api/plan-progression');
 
   async function loadProgressionFallback() {
     const res = await fetch(`/api/progression?weeks=${RECENT_MILEAGE_WEEKS}`);
@@ -2740,17 +2768,8 @@
     return res.json();
   }
 
-  async function loadRetrospective() {
-    const res = await fetch('/api/plan-retrospective');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  }
-
-  async function loadReadiness() {
-    const res = await fetch('/api/plan-readiness');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  }
+  const loadRetrospective = () => loadPlanApi('/api/plan-retrospective', SELECTED_PLAN);
+  const loadReadiness = () => loadPlanApi('/api/plan-readiness', SELECTED_PLAN);
 
   async function loadToday() {
     const res = await fetch('/api/today');
@@ -2773,35 +2792,95 @@
   function renderHeader(data) {
     if (!data) {
       document.title = 'Miles · Plan';
-      document.getElementById('subtitle').textContent = 'No active plan.';
+      document.getElementById('subtitle').textContent = 'No plan yet.';
       return;
     }
-    const { plan } = data;
+    const { plan, role } = data;
     document.title = `Miles · ${plan.title}`;
-    const parts = [distLabel(plan.distance_bucket), longDate(plan.race_date), plan.status];
-    document.getElementById('subtitle').textContent = `${plan.title} · ${parts.join(' · ')}`;
+    const race = plan.race_date ? `${distLabel(plan.distance_bucket)} · ${longDate(plan.race_date)}` : 'no race set';
+    document.getElementById('subtitle').textContent = `${plan.title} · ${race} · ${role === 'candidate' ? 'draft' : role}`;
+  }
+
+  // -----------------------------------------------------------------------
+  // Plan switcher + all-plans table — one /api/plans fetch; switching is a
+  // link to ?plan=<id>, so the URL always says which plan the tab shows.
+  // -----------------------------------------------------------------------
+
+  const ROLE_GROUPS = [['past', 'Past'], ['current', 'Current'], ['next', 'Next'], ['candidate', 'Candidates (drafts)']];
+
+  function planChipHTML(p, selectedId) {
+    const race = p.race ? ` · ${shortDate(p.race.date)}` : '';
+    return `<a class="chip${p.plan_id === selectedId ? ' selected' : ''}" href="?plan=${p.plan_id}#plan">${esc(p.title)}${race}</a>`;
+  }
+
+  function plansTableHTML(plans) {
+    const row = p => `<tr>
+      <td><a class="entity-link" href="?plan=${p.plan_id}#plan">${esc(p.title)}</a></td>
+      <td>${p.role}</td>
+      <td class="hide-sm">${p.first_week ?? '—'}</td>
+      <td class="hide-sm">${p.last_week ?? '—'}</td>
+      <td>${p.race ? `${esc(distLabel(p.race.distance_bucket))} ${p.race.date}` : '—'}</td>
+      <td class="r">${p.race?.goal_time_s != null ? fmt.time(p.race.goal_time_s) : '—'}</td>
+      <td class="r">${p.result_time_s != null ? fmt.time(p.result_time_s) : '—'}</td>
+      <td class="r hide-sm">${p.versions}</td>
+      <td class="r">${p.adherence ? `${p.adherence.weeks_on_or_close}/${p.adherence.weeks_completed}` : '—'}</td>
+      <td class="r hide-sm">${p.peak_target_miles ?? '—'}</td>
+      <td class="r hide-sm">${p.peak_actual_miles ?? '—'}</td>
+    </tr>`;
+    return `<div class="scroll dense"><table id="plans-table">
+      <thead><tr>
+        <th>Plan</th><th>Role</th><th class="hide-sm">First week</th><th class="hide-sm">Last week</th>
+        <th>Race</th><th class="r">Goal</th><th class="r">Result</th><th class="r hide-sm">Versions</th>
+        <th class="r" title="Scored weeks on or close to plan">On plan</th>
+        <th class="r hide-sm" title="Peak target week, miles">Peak plan</th>
+        <th class="r hide-sm" title="Peak synced week, miles">Peak run</th>
+      </tr></thead>
+      <tbody>${plans.map(row).join('')}</tbody>
+    </table></div>`;
+  }
+
+  function renderPlans(plans, data) {
+    if (!plans.length) return;
+    const selectedId = data ? data.plan.plan_id : null;
+    const groups = ROLE_GROUPS.map(([role, label]) => [label, plans.filter(p => p.role === role)]).filter(([, ps]) => ps.length);
+    slotEl('plans').insertAdjacentHTML('beforeend', `
+      <section id="section-plans">
+        ${groups.map(([label, ps]) => `
+          <div class="subchart-label">${label}</div>
+          <div class="chip-row">${ps.map(p => planChipHTML(p, selectedId)).join('')}</div>`).join('')}
+        <details class="all-plans"><summary>All plans</summary>${plansTableHTML(plans)}</details>
+      </section>`);
+    makeSortable(document.getElementById('plans-table'));
   }
 
   // Today needs only /api/plan and /api/today; everything else is fetched
-  // once Today has painted so it never competes with them.
-  function startSecondaryPanels(planP) {
-    const planOrNull = planP.catch(() => null);
-    const status = planOrNull.then(data => (data ? data.plan.status : null));
+  // once Today has painted so it never competes with them. currentP is the
+  // default (current) plan; planP the one the Plan tab shows.
+  function startSecondaryPanels(currentP, planP) {
     const get = (promise, fallback) => promise.catch(() => fallback);
     const adherenceP = loadAdherence();
 
-    const progressionP = status.then(s => (s === 'active' ? loadProgression() : loadProgressionFallback()));
+    // The target-band chart needs a current plan; otherwise the plain rolling window.
+    const progressionP = currentP.then(d => (d && d.role === 'current' ? loadProgression() : loadProgressionFallback()));
     fillPanel('easy', [progressionP, echartsReady], renderProgressionEasy);
     fillPanel('workouts', [progressionP, echartsReady], renderProgressionWorkouts);
     fillPanel('mileage', [loadWeeklyHistory(), echartsReady], renderRecentMileage);
     fillPanel('load', [loadLoad(), echartsReady], renderLoad);
     fillPanel('fitness', [progressionP], renderFitnessStrip);
 
+    const headExtraP = planP.then(d => {
+      if (!d) return null;
+      if (d.plan.status === 'completed') return loadRetrospective();
+      return d.plan.status === 'active' ? loadReadiness() : null;
+    });
+    fillPanel('plans', [loadPlans(), get(planP, null)], renderPlans);
     const bandsP = get(adherenceP.then(a => new Map((a.weeks ?? []).map(w => [w.week_start, w.band]))), new Map());
-    fillPanel('head', [planP, status.then(s => (s === 'completed' ? loadRetrospective() : s === 'active' ? loadReadiness() : null)), get(adherenceP, null), echartsReady],
+    fillPanel('head', [planP, headExtraP, get(adherenceP, null), echartsReady],
       (data, extra, adherence) => {
         if (!data) return renderPlanEmptyCard();
-        if (data.plan.status === 'completed') {
+        if (data.role === 'candidate') {
+          slotEl('head').insertAdjacentHTML('beforeend', `<div class="retro-marker">Draft — not committed</div>`);
+        } else if (data.plan.status === 'completed') {
           slotEl('head').insertAdjacentHTML('beforeend', `<div class="retro-marker">Retrospective</div>`);
           renderRetrospective(data, extra);
         } else {
@@ -2813,41 +2892,31 @@
     fillPanel('calendar', [planP, bandsP], (data, bands) => { if (data) renderCalendar(data, bands); });
     fillPanel('flags', [adherenceP], renderFlags);
     fillPanel('versions', [loadVersions()], renderVersions);
+    planP.then(d => { PLAN_TAB_DATA = planData(d); }, () => {});
   }
 
-  const planP = loadPlan();
+  const currentP = loadPlan();
+  const planP = SELECTED_PLAN ? loadPlan(SELECTED_PLAN) : currentP;
   const todayP = loadToday().catch(() => null);
 
   renderTabs();
-  activatePlanTab((location.hash || '#today').replace('#', ''));
+  activatePlanTab((location.hash || (SELECTED_PLAN ? '#plan' : '#today')).replace('#', ''));
 
-  Promise.all([planP, todayP]).then(([data, today]) => {
-    const status = data ? data.plan.status : null;
-    // actualByDate merges /api/today's map on top of the plan's own (when
-    // one exists) — a completed plan's window rarely still covers "this
-    // week", so the dashboard/popover always resolve against fresh data.
-    PLAN_DATA = {
-      dayByDate: data ? groupSessionsByDate(data.days) : new Map(),
-      actualByDate: new Map([
-        ...(data ? Object.entries(data.actual ?? {}) : []),
-        ...(today ? Object.entries(today.actual ?? {}) : []),
-      ]),
-      logByDate: data ? new Map(Object.entries(data.log ?? {})) : new Map(),
-    };
-
-    renderHeader(data);
+  Promise.all([currentP, todayP]).then(([data, today]) => {
+    PLAN_DATA = planData(data, today?.actual);
     document.getElementById('tab-today').innerHTML = '';
-    if (status === 'active' && data.today) {
+    if (data && data.today) {
       renderToday(data);
     } else if (today) {
       renderTodayDashboard(today);
     }
-    startSecondaryPanels(planP);
+    startSecondaryPanels(currentP, planP);
   }).catch(err => {
     document.getElementById('subtitle').textContent = `Error: ${err.message}`;
     document.getElementById('tab-today').innerHTML = `<p class="desc">Couldn't load today: ${esc(err.message)}</p>`;
-    startSecondaryPanels(planP);
+    startSecondaryPanels(currentP, planP);
   });
+  planP.then(renderHeader, err => { document.getElementById('subtitle').textContent = `Error: ${err.message}`; });
 
   document.getElementById('root').addEventListener('click', e => {
     // A muted in-page link (e.g. the dashboard's "see the Plan tab")
@@ -2855,7 +2924,7 @@
     const jumpTab = e.target.closest('[data-tab-jump]');
     if (jumpTab) { e.preventDefault(); activatePlanTab(jumpTab.dataset.tabJump); return; }
     const el = e.target.closest('[data-plan-date]');
-    if (el) { openDayPopover(el.dataset.planDate); return; }
+    if (el) { openDayPopover(el.dataset.planDate, el.closest('#tab-plan') ? PLAN_TAB_DATA : PLAN_DATA); return; }
     // In-page section anchors (e.g. Readiness's "Workout progression" link)
     // can point into a different, currently-hidden tab — switch tabs before
     // scrolling, or the browser's default jump lands on a zero-height panel.

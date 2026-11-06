@@ -155,9 +155,9 @@ that change need a `set_draft_weeks`/`set_draft_days` call. Same incremental aut
 `get_draft` narration, and commit gate as a fresh draft — including `week_mileage`: a revision
 that nudges a week's band or reshuffles its days can just as easily drift the two apart, so check
 it the same way. `commit_plan`'s `note` explains the revision for future-you. It also silently
-protects every already-elapsed week (`past_weeks_preserved` in the response) against whatever the
-draft proposed for it — relay that whenever non-empty, so the athlete doesn't wonder why their ask
-didn't touch last week.
+protects every week that has already ended (`past_weeks_preserved` in the response) against
+whatever the draft proposed for it — relay that whenever non-empty, so the athlete doesn't wonder
+why their ask didn't touch last week. The in-progress week is revisable.
 
 Not every miss is a revision: day-level reality that doesn't change the contract — a skipped
 run, a workout moved to Thursday, "slept badly all week" — is `log_plan_adjustment` (action +

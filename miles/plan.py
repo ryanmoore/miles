@@ -399,8 +399,9 @@ def current_version_for_week(
     conn: sqlite3.Connection, plan_id: int, week_start: date
 ) -> PlanVersionBundle | None:
     """The version that governs week_start: the latest COMMITTED version whose
-    committed_at is strictly before week_start, with a floor — version 1
-    governs from the plan's first week regardless of its own committed_at.
+    committed_at date (UTC) is on or before the week's Sunday, with a floor —
+    version 1 governs from the plan's first week regardless of its own
+    committed_at. A revision committed mid-week therefore governs that week.
     Drafts (committed_at IS NULL) are never eligible. Returns None when
     week_start precedes the plan's first week, or the plan has no committed
     versions yet."""
@@ -425,10 +426,10 @@ def current_version_for_week(
     if first_week is None or week_start.isoformat() < first_week:
         return None
 
-    week_iso = week_start.isoformat()
+    week_end_iso = (week_start + timedelta(days=6)).isoformat()
     eligible = [
         v for v in versions
-        if v["version_n"] == 1 or (v.get("committed_at") or "")[:10] < week_iso
+        if v["version_n"] == 1 or (v.get("committed_at") or "")[:10] <= week_end_iso
     ]
     if not eligible:
         return None
@@ -1146,12 +1147,11 @@ def get_draft(conn: sqlite3.Connection, plan_id: int) -> DraftBundle:
 
 
 def _snapshot_past_weeks(conn: sqlite3.Connection, plan_id: int, version_id: int) -> list[str]:
-    """Past-week protection for a revision draft, ported from the legacy
-    revise_training_plan tool so it has one home: any week whose Monday is on
-    or before the start of the current week — already governing or already in
-    progress — is overwritten in place with whatever version actually
-    governed it at the time, regardless of what the draft proposed for that
-    week/its days. Makes rewriting history to look adherent structurally
+    """Past-week protection for a revision draft: any week that has ended
+    (its Sunday is before today) is overwritten in place with whatever version
+    actually governed it, regardless of what the draft proposed for that
+    week/its days. The in-progress week and later weeks take the draft as
+    written. Makes rewriting history to look adherent structurally
     impossible no matter which write path produced the draft. Returns the
     week_starts that were overridden this way."""
     this_monday = monday_of(date.today())
@@ -1161,7 +1161,7 @@ def _snapshot_past_weeks(conn: sqlite3.Connection, plan_id: int, version_id: int
 
     preserved: list[str] = []
     m = plan_start
-    while m <= this_monday:
+    while m < this_monday:
         governing = current_version_for_week(conn, plan_id, m)
         iso = m.isoformat()
         week_row = next((w for w in governing["weeks"] if w["week_start"] == iso), None) if governing else None

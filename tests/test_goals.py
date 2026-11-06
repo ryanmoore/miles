@@ -159,6 +159,18 @@ def test_a_revision_copies_goals_and_each_week_is_judged_by_the_goals_that_gover
     assert plan.diff_versions(conn, version_id - 1, version_id)["changed_goals"] == [{"key": "miles", "change": "changed"}]
 
 
+def test_a_mid_week_goal_revision_judges_this_week(conn):
+    _miles_by_week(conn, [12, 12, 12, 12, 12])
+    plan_id, _ = _plan(conn, [_goal(target=10)])
+    version_id = plan.start_revision_draft(conn, plan_id)
+    goals.set_draft_goals(conn, version_id, [_goal(target=100)])
+    plan.commit_plan(conn, plan_id, note="raise it")
+    db.set_meta(conn, "last_sync_at", f"{_monday(1)}T09:00:00+00:00")
+
+    result = goals.plan_goal_results(conn, plan_id)["goals"][0]
+    assert [w["target"] for w in result["weeks"][3:6]] == [10, 100, 100]  # last week ended before the revision
+
+
 @pytest.mark.parametrize(
     "fields, message",
     [

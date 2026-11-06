@@ -22,7 +22,7 @@ athlete hadn't seen yet.
 - **Versions are immutable, append-only snapshots.** A revision writes a
   complete new copy of the week/day rows; no UPDATE path exists. Diffs are
   computed, never stored.
-- **Weeks are judged against the contemporaneous version.** Week W scores
+- **Weeks are judged against the contemporaneous version** *(amended by ADR 0008)*. Week W scores
   against the latest version *committed* before W's Monday (not merely
   created — a draft revision edited over several days takes effect from its
   commit), so revisions take effect the following Monday and rewriting

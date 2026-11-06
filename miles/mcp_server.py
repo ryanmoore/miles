@@ -2213,10 +2213,11 @@ def commit_plan(note: str, plan_id: int | None = None) -> str:
     retry.
 
     For a revision (the plan already has a prior committed version): any
-    week on or before the start of this week — already governing or already
-    in progress — is silently overwritten with whatever version actually
-    governed it at the time, regardless of what the draft proposed for that
-    week or its days. This makes rewriting history to look adherent
+    week that has already ended is silently overwritten with whatever
+    version actually governed it, regardless of what the draft proposed for
+    that week or its days; the in-progress week and later weeks take the
+    draft as written, and a revision committed mid-week becomes the version
+    that judges the in-progress week. This makes rewriting history to look adherent
     structurally impossible. `past_weeks_preserved` in the response lists
     which week_starts were protected this way; it's always empty for a
     plan's first-ever commit (a backdated week 1 is legitimate authored
@@ -2264,7 +2265,7 @@ def commit_plan(note: str, plan_id: int | None = None) -> str:
             plan_start = plan_start_monday(conn, plan_id)
             if plan_start is not None:
                 m = plan_start
-                while m <= this_monday:
+                while m < this_monday:
                     past_weeks_preserved.append(m.isoformat())
                     m += timedelta(weeks=1)
 
@@ -2333,9 +2334,8 @@ def get_training_plan(version_n: int | None = None, compare_to: int | None = Non
     any, never surfaces here — see get_draft for that). Always includes
     `versions` (version_n, created_at, note, author for every committed
     version) and `governing_version_n` — the version_n that currently
-    governs this week per the contemporaneous-version rule (may lag behind
-    the latest version_n right after a mid-week revision; it takes effect
-    next Monday).
+    governs this week: the latest version committed by this week's Sunday,
+    so a mid-week revision governs the week it was committed in.
 
     compare_to: optional version_n to diff against the returned version —
     added/removed/changed weeks, days and goals and any race change, via

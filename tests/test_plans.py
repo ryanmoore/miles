@@ -161,6 +161,32 @@ def test_every_committed_plan_is_scored_through_its_last_week():
     assert scored == {past: 4, current: 4}  # Past's post-race weeks count; Next has not started
 
 
+def test_a_mid_week_revision_changes_this_week_and_judges_it_but_an_ended_week_stays_fixed():
+    conn = memory_db()
+    plan_id = _plan(conn, "Cycle", -3, 2)
+    version_id = plan.start_revision_draft(conn, plan_id)
+    plan.upsert_draft_weeks(conn, version_id, [{**w, "target_miles": 99.0} for w in _weeks(-1, 1)])
+    plan.commit_plan(conn, plan_id, note="reality changed")
+
+    def target(week: int) -> float:
+        monday = THIS_MONDAY + timedelta(weeks=week)
+        bundle = plan.current_version_for_week(conn, plan_id, monday)
+        assert bundle is not None
+        return next(w["target_miles"] for w in bundle["weeks"] if w["week_start"] == monday.isoformat())
+
+    assert [target(w) for w in (-1, 0, 1)] == [29.0, 99.0, 99.0]  # last week kept; this and next take the draft
+
+    db.set_meta(conn, "last_sync_at", f"{(THIS_MONDAY + timedelta(weeks=1)).isoformat()}T09:00:00+00:00")
+    used = {r["week_start"]: r["version_n_used"] for r in plan_adherence.compute_plan_adherence(conn)}
+    assert (used[(THIS_MONDAY - timedelta(weeks=1)).isoformat()], used[THIS_MONDAY.isoformat()]) == (1, 2)
+
+    conn.execute(
+        "UPDATE plan_versions SET committed_at = ? WHERE version_id = ?",
+        (f"{(THIS_MONDAY + timedelta(weeks=1)).isoformat()}T00:30:00+00:00", version_id),
+    )
+    assert target(0) == 30.0  # committed after the week ended, so it no longer judges it
+
+
 def test_plan_endpoints_default_to_the_current_plan_and_take_a_plan_id(monkeypatch):
     conn = memory_db()
     past = _plan(conn, "Past", -8, -5, race_week=-6)

@@ -89,6 +89,8 @@ One per block, with these sections:
 - **Recent weeks** — a short summary of the last few weeks' direction.
   The per-week numbers and per-run detail live in `get_recent_history` and
   the notes; don't copy them here.
+- **Goals** — the plan's goals (`get_plan_goals`), which the athlete chose and why, one line
+  each; update when a revision changes them. Progress stays in miles.
 - **Adjustments** — dated what-and-why for each plan change. The record of
   truth is the plan version note or the `log_plan_adjustment` entry; write
   there first, then summarize here. A decision that changed nothing in the

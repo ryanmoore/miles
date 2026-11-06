@@ -104,7 +104,16 @@ with `get_run_notes` / `get_week_notes`, or as part of `get_recent_history`. A n
 athlete's context: quote its `feel` (which may quote the run's Strava `desc`, the athlete's
 own description), and treat `el_detected` (strides or hill sprints found in
 a stream) as a proposal, not a fact. Write a note when the athlete supplies context for a run
-or week; run `list_unnoted_runs` to draft several at once, and never invent `feel`.
+or week; run `list_unnoted_runs` to draft several at once, and never invent `feel`. In an
+`elements` list, a type the note names overrides the stream detection for that type (`count: 0`
+rejects a false one); record strides or hill sprints done after a workout as their own entries,
+not folded into the reps. Tag runs consistently: plan goals of type `tagged_runs` count tags.
+
+## Plan goals
+
+When describing how a cycle is going, read `get_plan_goals`: each goal's `why`, its weekly
+marks or its cycle progress (so far, weeks scored and left, whether the target is still
+reachable). Relay a flag as a pattern, never a verdict on one week.
 
 ## Fitness estimates: confidence always stated
 

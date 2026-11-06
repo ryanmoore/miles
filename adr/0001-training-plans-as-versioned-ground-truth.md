@@ -51,9 +51,9 @@ athlete hadn't seen yet.
   the target, any day — and a week carrying both forms is satisfied by
   either. A day's `terrain='trail'` suppresses pace judgment entirely (grade
   makes road pace bands meaningless) but never suppresses volume or
-  workout-count credit. Strength activities are counted into
-  `actual_strength_days` and displayed, but never scored — no band, no
-  flag — because gym logging in Strava is too inconsistent to judge silence.
+  workout-count credit. Strength days are never scored — no band, no
+  flag — because gym logging in Strava is too inconsistent to judge silence
+  (ADR 0007 tracks them as an optional goal).
   Flags fire on patterns only — 2+ consecutive qualifying weeks, never a
   single day or week — because ~90% adherence is a great outcome and
   day-level deviation is normal, not failure. Thresholds live as named

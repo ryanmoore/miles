@@ -123,6 +123,14 @@ was once said, wrongly, to an athlete who simply hadn't synced).
    against the band you authored (`target_miles`/`target_miles_hi`). Never hand-sum the days —
    read `day_miles_total` and confirm it's what you intended before moving on. The week band is
    your stated intent; the day sum is the program's math; they must agree.
+   **Goals.** Each cycle has an emphasis (strides a few times a week, a count of high-mileage
+   weeks, an average). Propose one to three goals alongside the skeleton, each with a one-line
+   `why`, confirm them with the athlete, then write them with `set_draft_goals` (it replaces the
+   whole list). Weekly goals suit habits ("2 stride sessions a week", with a 0 override for race
+   week; `flag` only for a habit worth a pattern callout); cycle goals suit long-term trends
+   ("8 weeks over 60 mi", "average 55 a week", with `to_week` to leave out the taper). Types are
+   in the tool description; `tagged_runs` counts any tag recorded in run notes, so tag
+   consistently. Read progress with `get_plan_goals`.
 6. **The commit gate.** `commit_plan(note=...)` only once the athlete has *seen the full draft*
    — Plan page or in-chat, every week, not just the last batch — asked for adjustments, and
    explicitly said to start it. `note` records that approval; confirm what was committed.
@@ -142,7 +150,7 @@ sync is a revision off a partial picture. State plainly what changed ("last two 
 28 and 31 against a 38 target, synced through Tuesday"), propose the *minimal* edit that
 responds, and don't write until approved.
 
-`start_revision_draft` (defaults to the current plan) copies the committed race and weeks/days into a new draft — only the weeks
+`start_revision_draft` (defaults to the current plan) copies the committed race, weeks/days and goals into a new draft — only the weeks
 that change need a `set_draft_weeks`/`set_draft_days` call. Same incremental authoring,
 `get_draft` narration, and commit gate as a fresh draft — including `week_mileage`: a revision
 that nudges a week's band or reshuffles its days can just as easily drift the two apart, so check
@@ -173,8 +181,8 @@ app shows it on those days and on the Plan tab; no dates attaches it to the plan
 
 ## New vocabulary
 
-- **Strength** (`slot: "strength"`) is counted, never judged — prescribe freely; synced strength
-  activities fill the chip and a weekly count but never drive a band or a flag.
+- **Strength** (`slot: "strength"`) is never judged by adherence — prescribe freely. To track
+  strength days per week, use an `activity_days` goal over `["WeightTraining", "Workout"]`.
 - **Trail** (`terrain: "trail"`, composing with any run slot — a trail long run is still a
   `long`) takes the same targets as road, but its pace guidance is advisory only: adherence
   never scores trail pace (grade makes a road band meaningless). Prescribe it without pace

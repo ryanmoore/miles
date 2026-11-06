@@ -180,13 +180,13 @@ Opens a local web interface at `http://localhost:8000` with six pages:
 - **Compare** — put up to four builds (same distance bucket) side by side, chart and stat table
 - **Training** — training periods, weekly volume with race markers, a fitness-trend chart with evidence drill-down, load (acute:chronic ratio and monotony from HR-weighted TRIMP), weekly easy/moderate/hard time by HR and by pace, and the HR-vs-pace efficiency chart with an optional heat adjustment
 - **Years** — year-by-year volume comparison
-- **Plan** — the active training plan vs reality. A **Today** view (today's session, the week at a glance, how the week is going, and a same-weekday comparison to last week) and an **Overall** view (planned-vs-actual weekly chart with adherence bands, color-coded weekly calendar with clickable day details, progression charts, version history); becomes a race retrospective once the goal race is run. Plans are drafted incrementally in conversation via the `miles:miles-plan` skill
+- **Plan** — the current training plan vs reality, with a switcher over past plans, the next one and candidate drafts, and an all-plans comparison table. A **Today** view (today's session, the week at a glance, how the week is going, and a same-weekday comparison to last week) and an **Overall** view (planned-vs-actual weekly chart with adherence bands, color-coded weekly calendar with clickable day details, progression charts, version history); becomes a race retrospective once the goal race is run. Plans are drafted incrementally in conversation via the `miles:miles-plan` skill
 
 ## MCP tools
 
 The tool descriptions the server publishes are the reference; ask Claude Code what a tool does.
 They cover training analysis (mileage, activities, blocks, periods, consistency), races and
-builds, fitness estimates, intensity distribution and training load (injury-risk ratios), workouts and laps, weather, training plans (draft, commit, adherence),
+builds, fitness estimates, intensity distribution and training load (injury-risk ratios), workouts and laps, weather, training plans (`list_plans`, draft, commit, adherence; several plans over time, race optional),
 `get_recent_history` (the last weeks in full detail fading to one line per period, in one call), the athlete's run and week notes
 (`set_run_note`, `get_run_notes`, `list_unnoted_runs`, `set_week_note`, `get_week_notes`) and strides or hill sprints found in a run's stream (`detect_run_elements`),
 stored routes (compare, compose, junctions, proximity), the terrain model, area import, area

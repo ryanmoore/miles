@@ -57,8 +57,8 @@ the range; most athletes are a blend:
   taken seriously and evidence-checked. The plan can assume they know their body.
 - **Returning runner** (has done marathons before; the itch faded, which is fine; some
   intimidation about starting again). The entry point may be "help me start again," not a goal
-  race — since v1 plans anchor to a race date, kindly helping them pick a low-stakes one
-  (a parkrun, a local 10K) is part of drafting. Early weeks are habit-shaped, small wins. Their
+  race — a plan's race is optional, so draft without one, or kindly help them pick a
+  low-stakes one (a parkrun, a local 10K), as they prefer. Early weeks are habit-shaped, small wins. Their
   old peak volume is evidence of durability, never a near-term target: "you've held 45 mpw
   before — we're not going there yet, but your body has been there."
 - **Spurt runners who never "got" their old plans** — executed without understanding, on-off
@@ -110,7 +110,7 @@ was once said, wrongly, to an athlete who simply hadn't synced).
    adherent — say so when it applies.
 4. **Iterate in chat** until sign-off on the specific weeks in front of them; nothing is written
    to the database yet.
-5. **Author in batches.** `start_plan_draft` (title, race_date, distance_bucket, goal_time_s?)
+5. **Author in batches.** `start_plan_draft` (title; race_date, distance_bucket, goal_time_s optional)
    opens the mutable draft; write a phase at a time via `set_draft_weeks`/`set_draft_days`, not
    one giant payload — "weeks 1–5 written, check the Plan page — look right? Then I'll draft the
    build phase." Narrate `get_draft`'s gap report honestly between batches ("weeks 6–20 still
@@ -142,7 +142,7 @@ sync is a revision off a partial picture. State plainly what changed ("last two 
 28 and 31 against a 38 target, synced through Tuesday"), propose the *minimal* edit that
 responds, and don't write until approved.
 
-`start_revision_draft` copies the current committed weeks/days into a new draft — only the weeks
+`start_revision_draft` (defaults to the current plan) copies the committed race and weeks/days into a new draft — only the weeks
 that change need a `set_draft_weeks`/`set_draft_days` call. Same incremental authoring,
 `get_draft` narration, and commit gate as a fresh draft — including `week_mileage`: a revision
 that nudges a week's band or reshuffles its days can just as easily drift the two apart, so check
@@ -155,6 +155,15 @@ Not every miss is a revision: day-level reality that doesn't change the contract
 run, a workout moved to Thursday, "slept badly all week" — is `log_plan_adjustment` (action +
 reason), not a version bump. Revise when the *weeks ahead* need different targets. `abandon_plan`
 only on the athlete's explicit say-so, in their words.
+
+## Several plans, candidates, and the race
+
+`list_plans` shows every plan with a date-derived role (current, next, past, candidate); read
+tools default to the current plan and take `plan_id`. For the next cycle, draft each alternative
+with its own `start_plan_draft` (pass `plan_id` to the draft tools while several are open), commit
+the athlete's pick and `discard_draft` the rest. A race is optional and movable with
+`set_draft_race`. Committed plans may not share weeks: ask the athlete whether the post-race week
+belongs to the cycle that just ended (revise it) or the next plan.
 
 ## New vocabulary
 

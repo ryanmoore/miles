@@ -72,5 +72,6 @@ athlete hadn't seen yet.
 - Snapshot cost is trivial (~120 rows per version for a 16-week plan).
 - One active plan at a time (enforced on create); abandon+create covers the
   edge cases until multiple concurrent plans earn their complexity.
+  *Superseded by ADR 0006: plans may not share weeks, the race lives on the version.*
 - The UI and MCP tools read frozen targets and derived bands; nothing
   re-resolves targets at query time.

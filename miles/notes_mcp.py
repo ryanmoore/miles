@@ -119,8 +119,8 @@ def register_notes_tools(mcp: FastMCP) -> None:
         Create (no doc_id) or update a markdown document on a plan: race-day
         fueling, carb loading, race logistics, anything the athlete wants to
         read on a given day. The app shows it on the days it covers (a start
-        without an end covers that one day; no dates attach it to the plan
-        only) and renders the body, tables included. plan_id defaults to the
+        without an end covers that one day; with no dates it covers the whole
+        plan and Today always lists it) and renders the body, tables included. plan_id defaults to the
         current plan. An update changes only the fields given and replaces
         the body in place; start_date "" clears the dates. Returns the
         document without its body.

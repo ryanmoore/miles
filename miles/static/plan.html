@@ -2511,7 +2511,8 @@
       if (hero.note) parts.push(`<p class="today-note">${esc(hero.note)}</p>`);
     }
     parts.push(alsoTodayHTML(others));
-    const docs = docsOn(PLAN_DATA.docs, today.date);
+    // Undated documents cover the whole plan, so Today always lists them.
+    const docs = [...docsOn(PLAN_DATA.docs, today.date), ...PLAN_DATA.docs.filter(d => !d.start_date)];
     if (docs.length) parts.push(`<div class="today-docs">${docs.map(d => `📄 ${docLinkHTML(d)}`).join(' · ')}</div>`);
     parts.push(todaySyncedHTML(today.date));
     parts.push(upNextHTML(today.date));

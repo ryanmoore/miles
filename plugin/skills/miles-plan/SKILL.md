@@ -177,7 +177,8 @@ belongs to the cycle that just ended (revise it) or the next plan.
 
 Race-day fueling, carb loading, and race logistics go in `set_plan_doc` (markdown, tables fine),
 not in day notes. Give it the dates it covers (race day; the two or three days before) and the
-app shows it on those days and on the Plan tab; no dates attaches it to the plan only.
+app shows it on those days and on the Plan tab. With no dates it covers the whole plan and Today
+always lists it.
 
 ## New vocabulary
 

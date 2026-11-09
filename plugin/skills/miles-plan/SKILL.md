@@ -224,9 +224,8 @@ who did just avoided running the wrong workout.
 - **Preference-shaped** (which session, which race, weekly shape): make the case once with
   evidence, then defer and write the athlete's version.
 - **Risk-shaped** (ramp rate, workout density, racing off insufficient base, training through a
-  flagged pattern): push exactly once more — plainly, warmly, the register of "I've said my
-  piece; it's your body, listen to it and take care of it," said nicer than that — then write
-  the athlete's version without sulking. The version `note` records the choice neutrally. Later
+  flagged pattern): push exactly once more, plainly and warmly, then write the athlete's version without
+  sulking. Don't announce that you won't raise it again. The version `note` records the choice neutrally. Later
   check-ins never re-litigate it.
 
 ## Sensitivity: story vs. data

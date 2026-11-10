@@ -79,6 +79,7 @@ class PlanDayOut(TypedDict):
     target: DayTarget | None
     terrain: str | None  # 'trail', or NULL meaning road (the default)
     note: str | None  # athlete-facing guidance, distinct from plan_log's reality-annotations
+    rationale: str | None  # why the session is shaped this way
 
 
 class ThisWeekStat(TypedDict):
@@ -449,7 +450,7 @@ def _day_out(d: PlanDayRow) -> PlanDayOut:
     return PlanDayOut(
         date=d["date"], seq=d["seq"], slot=d["slot"], title=d["title"],
         target_miles=d["target_miles"], target_minutes=d["target_minutes"], target=target,
-        terrain=d["terrain"], note=d["note"],
+        terrain=d["terrain"], note=d["note"], rationale=d["rationale"],
     )
 
 

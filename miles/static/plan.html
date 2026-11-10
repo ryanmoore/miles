@@ -28,8 +28,7 @@
       line-height: 1.55;
     }
     .plan-view .plan-empty h2 { font-size: 1rem; color: var(--text); margin-bottom: 0.5rem; }
-    .plan-view .plan-empty code,
-    .plan-view .plan-tab-note code {
+    .plan-view .plan-empty code {
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: 4px;
@@ -415,12 +414,10 @@
 
     .plan-view .week-headline small { font-size: 0.75rem; font-weight: 500; color: var(--muted); }
 
-    /* One scrolling row on phones; wraps from the chrome breakpoint up. */
-    .plan-view .plan-switch { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-bottom: 0.75rem; }
-    .plan-view .plan-switch .chip { flex-shrink: 0; white-space: nowrap; text-decoration: none; }
-    .plan-view .chip-tag { font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; margin-left: 0.35rem; }
-    .plan-view .chip-tag.current { font-weight: 700; opacity: 1; }
-    @media (min-width: 640px) { .plan-view .plan-switch { flex-wrap: wrap; } }
+    /* Which plan the Plan tab shows: title and race, with a role pill unless it is the current plan. */
+    .plan-view .plan-which { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.625rem; margin-bottom: 0.75rem; }
+    .plan-view .plan-which-title { font-size: 1.125rem; font-weight: 650; color: var(--text); overflow-wrap: anywhere; }
+    .plan-view .plan-which-race { font-size: 0.8125rem; color: var(--text-secondary); }
 
     .plan-view .vs-chart-wrap { margin: 0.375rem 0; flex: 1 1 240px; max-width: 360px; }
     .plan-view .vs-chart-wrap svg { display: block; width: 100%; height: auto; }
@@ -469,6 +466,18 @@
     .plan-view .day-popover-title { font-size: 1rem; font-weight: 650; color: var(--text); margin-bottom: 0.625rem; }
     .plan-view .day-popover-targets { font-size: 0.8125rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; margin-bottom: 0.5rem; line-height: 1.6; }
     .plan-view .day-popover-note { font-size: 0.8125rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 0.75rem; }
+    /* A workout laid out block by block: amount and effort on one row, recovery and cue muted beneath. */
+    .plan-view .steps { margin-bottom: 0.5rem; }
+    .plan-view .step { padding: 0.375rem 0 0.375rem 0.625rem; border-left: 3px solid var(--baseline); border-bottom: 1px solid var(--gridline); }
+    .plan-view .step.optional { border-left-style: dashed; }
+    .plan-view .step-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.5rem; }
+    .plan-view .step-amt { font-size: 0.9375rem; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }
+    .plan-view .step-effort { font-size: 0.8125rem; color: var(--text-secondary); }
+    .plan-view .step-tag { font-size: 0.625rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+    .plan-view .step-sub { font-size: 0.75rem; color: var(--muted); line-height: 1.4; }
+    .plan-view .why { margin-bottom: 0.75rem; font-size: 0.8125rem; color: var(--text-secondary); line-height: 1.5; }
+    .plan-view .why summary { cursor: pointer; color: var(--muted); font-size: 0.75rem; }
+    .plan-view .why p { margin-top: 0.25rem; }
     .plan-view .day-popover-section { margin-top: 0.625rem; }
     .plan-view .day-popover-log { font-size: 0.8125rem; color: var(--text-secondary); padding: 0.125rem 0; }
     .plan-view .day-popover-empty { font-size: 0.8125rem; color: var(--muted); }
@@ -606,12 +615,7 @@
     .plan-view .retro-link { color: inherit; text-decoration: none; }
     .plan-view .retro-link:hover { text-decoration: underline; }
 
-    /* Retrospective marker — the completed-plan Plan tab's only visual cue
-       that it's showing a closed-out plan rather than an active one, since
-       everything below it (readiness's replacement, chart, calendar) reuses
-       the same layout either way. */
-    .plan-view .retro-marker {
-      display: inline-block;
+    .plan-view .plan-which-role {
       font-size: 0.6875rem;
       font-weight: 700;
       text-transform: uppercase;
@@ -621,7 +625,6 @@
       border: 1px solid var(--border);
       border-radius: 999px;
       padding: 0.125rem 0.625rem;
-      margin-bottom: 0.75rem;
     }
 
     /* Readiness evidence rows — same anatomy as the retrospective (headline
@@ -775,6 +778,8 @@
     if (!day) return [];
     const lines = [];
     const t = day.target || {};
+    // Steps lay the structure out themselves; the single rep line would repeat them.
+    const hasSteps = Array.isArray(t.steps) && t.steps.length > 0;
     let reps = null;
     if (t.reps_lo != null && t.reps_hi != null) reps = `${t.reps_lo}–${t.reps_hi}`;
     else if (t.reps != null) reps = `${t.reps}`;
@@ -783,14 +788,16 @@
     else if (t.rep_distance_m != null) unit = `${(t.rep_distance_m / MILE_M).toFixed(2)}mi`;
     let pace = null;
     if (t.pace_lo != null && t.pace_hi != null) pace = `${fmt.pace(t.pace_lo)}–${fmt.pace(t.pace_hi)}/mi`;
-    if (reps && unit) {
+    if (hasSteps) {
+      // structure is shown by stepsHTML
+    } else if (reps && unit) {
       lines.push(`${reps} × ${unit}${pace ? ` @ ${pace}` : ''}`);
     } else if (pace) {
       lines.push(`@ ${pace}`);
     } else if (t.zone_name) {
       lines.push(`${t.zone_name} pace`);
     }
-    if (day.terrain === 'trail' && pace) lines.push('trail — pace is guidance only, not judged');
+    if (day.terrain === 'trail' && pace && !hasSteps) lines.push('trail — pace is guidance only, not judged');
 
     if (day.target_minutes != null) {
       const slotWord = (SLOT_LABEL[day.slot] ?? day.slot).toLowerCase();
@@ -907,7 +914,6 @@
       <div id="tab-today" class="tab-panel"><div class="skeleton" style="height:240px"></div></div>
       <div id="tab-trends" class="tab-panel" hidden>${TAB_SLOTS.trends.map(slotHTML).join('')}</div>
       <div id="tab-plan" class="tab-panel" hidden>
-        <p class="desc plan-tab-note">Plans are created, amended, and abandoned in chat with <code>miles:miles-plan</code>.</p>
         ${TAB_SLOTS.plan.map(slotHTML).join('')}
       </div>
       <div id="tab-all" class="tab-panel" hidden>${TAB_SLOTS.all.map(slotHTML).join('')}</div>`);
@@ -977,8 +983,39 @@
     return m;
   }
 
-  // One popover block per session: slot label, title, targets, note — in
-  // that order so the colored slot reads first, same as the calendar chip.
+  // The day's `steps` as one row per block ("7 × 3 min", effort beside it,
+  // recovery and cue muted beneath). Empty when the day has none.
+  function stepsHTML(day) {
+    const steps = day.target?.steps;
+    if (!steps?.length) return '';
+    const row = st => {
+      const count = st.reps_lo != null && st.reps_hi != null ? `${st.reps_lo}–${st.reps_hi}` : st.reps;
+      let amt = count != null ? `${count} × ${st.work}` : st.work;
+      if (st.sets != null) amt = `${st.sets} × ${count != null ? `(${amt})` : amt}`;
+      const rest = [st.rest, st.rest_mode].filter(Boolean).join(' · ');
+      return `<div class="step${st.optional ? ' optional' : ''}">
+        <div class="step-main">
+          ${st.label ? `<span class="step-tag">${esc(st.label)}</span>` : ''}
+          <span class="step-amt">${esc(amt)}</span>
+          ${st.effort ? `<span class="step-effort">${esc(st.effort)}</span>` : ''}
+          ${st.optional ? `<span class="step-tag">optional</span>` : ''}
+        </div>
+        ${rest ? `<div class="step-sub">Rest ${esc(rest)}</div>` : ''}
+        ${st.set_rest ? `<div class="step-sub">Between sets ${esc(st.set_rest)}</div>` : ''}
+        ${st.cue ? `<div class="step-sub">${esc(st.cue)}</div>` : ''}
+      </div>`;
+    };
+    return `<div class="steps">${steps.map(row).join('')}</div>`;
+  }
+
+  // The day's rationale, collapsed.
+  function whyHTML(day) {
+    return day.rationale ? `<details class="why"><summary>Why</summary><p>${esc(day.rationale)}</p></details>` : '';
+  }
+
+  // One popover block per session: slot label, title, structure, totals,
+  // guidance, rationale — in that order so the colored slot reads first,
+  // same as the calendar chip.
   function daySessionBlockHTML(day) {
     const glyph = day.terrain === 'trail' ? TRAIL_GLYPH : '';
     const title = day.title ? esc(day.title) : (SLOT_LABEL[day.slot] ?? day.slot);
@@ -987,8 +1024,10 @@
       <div class="day-popover-session">
         <div class="day-popover-slot" style="color:${SLOT_COLOR[day.slot] ?? 'var(--text)'}">${esc(SLOT_LABEL[day.slot] ?? day.slot)}</div>
         <div class="day-popover-title">${title}${glyph}</div>
+        ${stepsHTML(day)}
         ${targetLines.length ? `<div class="day-popover-targets">${targetLines.map(l => `<div>${esc(l)}</div>`).join('')}</div>` : ''}
         ${day.note ? `<p class="day-popover-note">${esc(day.note)}</p>` : ''}
+        ${whyHTML(day)}
       </div>`;
   }
 
@@ -2508,7 +2547,9 @@
         // it gets display size; the rest stay secondary.
         parts.push(`<div class="today-targets">${lines.map((l, i) => `<div${i === 0 ? ' class="target-lead"' : ''}>${esc(l)}</div>`).join('')}</div>`);
       }
+      parts.push(stepsHTML(hero));
       if (hero.note) parts.push(`<p class="today-note">${esc(hero.note)}</p>`);
+      parts.push(whyHTML(hero));
     }
     parts.push(alsoTodayHTML(others));
     // Undated documents cover the whole plan, so Today always lists them.
@@ -2864,16 +2905,11 @@
   }
 
   // -----------------------------------------------------------------------
-  // Plan switcher + All tab's plans table — one /api/plans fetch; switching is a
-  // link to ?plan=<id>, so the URL always says which plan the tab shows.
+  // Plan tab header, and the All tab's plans table (one /api/plans fetch);
+  // its rows link to ?plan=<id>, so the URL always says which plan the tab shows.
   // -----------------------------------------------------------------------
 
-  const ROLE_TAG = { past: 'past', current: 'current', next: 'next', candidate: 'draft' };
-
-  function planChipHTML(p, selectedId) {
-    const race = p.race ? ` · ${shortDate(p.race.date)}` : '';
-    return `<a class="chip${p.plan_id === selectedId ? ' selected' : ''}" href="${p.role === 'current' ? location.pathname : `?plan=${p.plan_id}`}#plan">${esc(p.title)}${race}<span class="chip-tag ${p.role}">${ROLE_TAG[p.role]}</span></a>`;
-  }
+  const ROLE_TAG = { past: 'past', next: 'next', candidate: 'draft' };
 
   function plansTableHTML(plans) {
     const mi = v => v != null ? v.toFixed(1) : '—';
@@ -2913,14 +2949,16 @@
       </section>`);
   }
 
-  function renderPlans(plans, data) {
-    if (!plans.length) return;
-    const selectedId = data ? data.plan.plan_id : null;
-    const ordered = Object.keys(ROLE_TAG).flatMap(role => plans.filter(p => p.role === role));
+  function renderPlanHead(data) {
+    if (!data) return;
+    const { plan, role } = data;
+    const race = plan.race_date ? `${distLabel(plan.distance_bucket)} · ${shortDate(plan.race_date)}` : '';
     slotEl('plans').insertAdjacentHTML('beforeend', `
-      <section id="section-plans">
-        <div class="chip-row plan-switch">${ordered.map(p => planChipHTML(p, selectedId)).join('')}</div>
-      </section>`);
+      <div class="plan-which">
+        <span class="plan-which-title">${esc(plan.title)}</span>
+        ${race ? `<span class="plan-which-race">${esc(race)}</span>` : ''}
+        ${ROLE_TAG[role] ? `<span class="plan-which-role">${ROLE_TAG[role]}</span>` : ''}
+      </div>`);
   }
 
   // Newest first by start week; plans with no weeks last.
@@ -2952,20 +2990,15 @@
       return d.plan.status === 'active' ? loadReadiness() : null;
     });
     const plansP = loadPlans();
-    fillPanel('plans', [plansP, get(planP, null)], renderPlans);
+    fillPanel('plans', [get(planP, null)], renderPlanHead);
     fillPanel('all', [plansP], renderAllPlans);
     const bandsP = get(adherenceP.then(a => new Map((a.weeks ?? []).map(w => [w.week_start, w.band]))), new Map());
     fillPanel('head', [planP, headExtraP, get(adherenceP, null), echartsReady, get(goalsP, null)],
       (data, extra, adherence, _echarts, goals) => {
         if (!data) return renderPlanEmptyCard();
-        if (data.role === 'candidate') {
-          slotEl('head').insertAdjacentHTML('beforeend', `<div class="retro-marker">Draft — not committed</div>`);
-        } else if (data.plan.status === 'completed') {
-          slotEl('head').insertAdjacentHTML('beforeend', `<div class="retro-marker">Retrospective</div>`);
-          renderRetrospective(data, extra, goals);
-        } else {
-          renderReadiness(data, adherence, extra);
-        }
+        if (data.role === 'candidate') return;
+        if (data.plan.status === 'completed') renderRetrospective(data, extra, goals);
+        else renderReadiness(data, adherence, extra);
       });
     fillPanel('goals', [goalsP], renderGoals);
     fillPanel('chart', [planP, bandsP, get(adherenceP, null), echartsReady],

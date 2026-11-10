@@ -85,6 +85,26 @@ Cut fiber and keep fluids up. Nothing new.
 """
 
 
+def structured_session(day: plan.DayInput) -> None:
+    """Gives a day a multi-block workout in `steps`, with guidance and a rationale."""
+    day["slot"] = "workout"
+    day["title"] = "Mixed session"
+    day["target"] = {
+        "steps": [
+            {"work": "10 min", "effort": "easy", "label": "Warm-up"},
+            {"work": "3 min", "reps": 7, "effort": "sub-threshold", "rest": "60 s", "rest_mode": "jog"},
+            {"work": "3 min", "effort": "easy", "label": "Link"},
+            {"work": "400 m", "reps": 5, "effort": "5K effort", "rest": "60 s", "rest_mode": "jog",
+             "cue": "only if the 3-minute reps felt normal", "optional": True},
+            {"work": "300 m", "reps": 4, "sets": 2, "effort": "fast but relaxed", "rest": "90 s", "rest_mode": "walk",
+             "set_rest": "4 min easy jog"},
+            {"work": "10 min", "effort": "easy", "label": "Cool-down"},
+        ],
+    }
+    day["note"] = "Keep the first reps controlled. If the legs feel flat, stop after the 3-minute block and jog home."
+    day["rationale"] = "Sub-threshold volume first, then a short sharper block while the legs are warm; the optional 400s keep the option of more speed work without making it mandatory."
+
+
 # Runs per week of the demo marathon that carry a strides note, and how far each
 # week's synced miles fall from its target.
 STRIDE_RUNS = [2, 3, 2, 1, 1, 2, 3, 2, 2, 1, 1, 2, 2, 2, 2, 0]
@@ -334,6 +354,7 @@ def seed_current_plan(conn: sqlite3.Connection) -> None:
         distance_bucket="marathon", goal_time_s=3 * 3600 + 15 * 60,
     )
     days = build_days(TARGET_MILES, TARGET_LONG_RUN)
+    structured_session(next(d for d in days if d["date"] == (WEEK1_MONDAY + timedelta(weeks=8, days=1)).isoformat()))
     plan.upsert_draft_days(conn, v1_id, days)
     plan.upsert_draft_weeks(conn, v1_id, build_weeks(days, TARGET_LONG_RUN))
     goals.set_draft_goals(conn, v1_id, demo_goals())
@@ -352,9 +373,12 @@ def seed_current_plan(conn: sqlite3.Connection) -> None:
     plan.upsert_draft_weeks(conn, v2_id, [
         plan.WeekInput(week_start=THIS_MONDAY.isoformat(), target_miles=12.0, target_workouts=0, phase="base", note="Recovery after the race"),
     ])
-    plan.upsert_draft_days(conn, v2_id, [
-        plan.DayInput(date=(THIS_MONDAY + timedelta(days=d)).isoformat(), slot="easy", target_miles=4.0) for d in (1, 3, 5)
-    ])
+    recovery_days = [
+        plan.DayInput(date=(THIS_MONDAY + timedelta(days=d)).isoformat(), slot="easy", target_miles=4.0)
+        for d in sorted({1, 3, 5, date.today().weekday()})
+    ]
+    structured_session(next(d for d in recovery_days if d["date"] == date.today().isoformat()))
+    plan.upsert_draft_days(conn, v2_id, recovery_days)
     plan.commit_plan(conn, plan_id, note="Added the recovery week and eased the goal time.")
     print(f"created v2 version_id={v2_id}")
 

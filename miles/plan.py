@@ -17,7 +17,7 @@ week/day/field, so the MCP layer can surface them to a planner agent verbatim.
 import json
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
-from typing import Literal, NotRequired, cast
+from typing import Literal, NotRequired, Required, cast
 
 from typing_extensions import TypedDict
 
@@ -79,6 +79,32 @@ class PlanValidationError(Exception):
     offending week/day/field so they can be relayed to a planner agent as-is."""
 
 
+class DayStep(TypedDict, total=False):
+    """One block of a workout, for reading. work is the amount of one rep or
+    of a steady segment ("3 min", "400 m"); reps/reps_lo/reps_hi absent means
+    a single segment; sets repeats the block."""
+    work: Required[str]
+    reps: int
+    reps_lo: int
+    reps_hi: int
+    sets: int
+    effort: str
+    rest: str
+    rest_mode: str
+    set_rest: str
+    label: str
+    optional: bool
+    cue: str
+
+
+REST_MODES: tuple[str, ...] = ("walk", "jog", "float", "stand")
+MAX_STEPS = 12
+_STEP_TEXT_CAPS: dict[str, int] = {
+    "work": 40, "effort": 40, "rest": 40, "set_rest": 40, "label": 40, "cue": 100,
+}
+_STEP_COUNTS: tuple[str, ...] = ("reps", "reps_lo", "reps_hi", "sets")
+
+
 class DayTarget(TypedDict, total=False):
     """Contents of plan_days.target_json (JSON-encoded). All fields optional.
     reps/rep_distance_m sketch a workout's structure; pace_lo/pace_hi are
@@ -86,7 +112,10 @@ class DayTarget(TypedDict, total=False):
     from zone_name via a live fitness estimate — see _freeze_day_target).
     zone_name is kept alongside the frozen paces for display. reps_lo/reps_hi
     express a rep range ("8-10 x..."); reps stays the point form. Time-based
-    reps use rep_duration_s alongside/instead of rep_distance_m."""
+    reps use rep_duration_s alongside/instead of rep_distance_m. steps is
+    display-only structure for the day popover (see _validate_steps): nothing
+    scores it; adherence and progression read the top-level fields."""
+    steps: list[DayStep]
     reps: int
     reps_lo: int
     reps_hi: int
@@ -129,6 +158,7 @@ class DayInput(TypedDict):
     terrain: NotRequired[str | None]
     note: NotRequired[str | None]
     target_minutes: NotRequired[float | None]
+    rationale: NotRequired[str | None]
 
 
 class PlanVersionBundle(TypedDict):
@@ -263,6 +293,7 @@ def _day_row(row: sqlite3.Row) -> PlanDayRow:
         "terrain": row["terrain"],
         "note": row["note"],
         "target_minutes": float(row["target_minutes"]) if row["target_minutes"] is not None else None,
+        "rationale": row["rationale"],
     }
 
 
@@ -387,7 +418,7 @@ def get_version(conn: sqlite3.Connection, version_id: int) -> PlanVersionBundle 
     days = [
         _day_row(r) for r in conn.execute(
             "SELECT version_id, date, seq, slot, title, target_miles, target_json, "
-            "terrain, note, target_minutes "
+            "terrain, note, target_minutes, rationale "
             "FROM plan_days WHERE version_id = ? ORDER BY date, seq",
             [version_id],
         ).fetchall()
@@ -510,6 +541,37 @@ def completed_plans_by_race_date(conn: sqlite3.Connection) -> dict[str, PlanRow]
     return out
 
 
+def _validate_steps(day_label: str, steps: object) -> None:
+    if not isinstance(steps, list) or len(steps) > MAX_STEPS:
+        raise PlanValidationError(f"{day_label}: target steps must be a list of at most {MAX_STEPS} steps")
+    allowed = set(DayStep.__annotations__)
+    for i, step in enumerate(cast(list[object], steps), 1):
+        label = f"{day_label}: step {i}"
+        if not isinstance(step, dict):
+            raise PlanValidationError(f"{label} must be an object")
+        step = cast(dict[str, object], step)
+        unknown = sorted(set(step) - allowed)
+        if unknown:
+            raise PlanValidationError(f"{label} has unknown keys {unknown}; allowed: {sorted(allowed)}")
+        if not step.get("work"):
+            raise PlanValidationError(f"{label} needs a non-empty work")
+        for key, cap in _STEP_TEXT_CAPS.items():
+            v = step.get(key)
+            if v is not None and (not isinstance(v, str) or len(v) > cap):
+                raise PlanValidationError(f"{label}: {key} must be a string of at most {cap} characters")
+        for key in _STEP_COUNTS:
+            v = step.get(key)
+            if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v < 0):
+                raise PlanValidationError(f"{label}: {key} must be a non-negative integer")
+        lo, hi = step.get("reps_lo"), step.get("reps_hi")
+        if isinstance(lo, int) and isinstance(hi, int) and lo > hi:
+            raise PlanValidationError(f"{label}: reps_lo must be <= reps_hi")
+        if step.get("rest_mode") is not None and step["rest_mode"] not in REST_MODES:
+            raise PlanValidationError(f"{label}: rest_mode must be one of {REST_MODES}")
+        if step.get("optional") is not None and not isinstance(step["optional"], bool):
+            raise PlanValidationError(f"{label}: optional must be true or false")
+
+
 def _validate_day_target(day: DayInput, target: DayTarget) -> DayTarget:
     """Pure field-level validation of one day's target — no conn, no
     resolution. Shared by _freeze_day_target (committed versions: also
@@ -517,6 +579,9 @@ def _validate_day_target(day: DayInput, target: DayTarget) -> DayTarget:
     (drafts: stores zone_name unresolved, resolved later at commit)."""
     day_label = f"day {day['date']} ({day.get('title') or day['slot']})"
     validated = cast(DayTarget, dict(target))
+
+    if "steps" in validated:
+        _validate_steps(day_label, validated["steps"])
 
     reps = validated.get("reps")
     if reps is not None and reps < 0:
@@ -846,10 +911,10 @@ def start_revision_draft(conn: sqlite3.Connection, plan_id: int) -> int:
     )
     conn.executemany(
         "INSERT INTO plan_days (version_id, date, seq, slot, title, target_miles, target_json, "
-        "terrain, note, target_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "terrain, note, target_minutes, rationale) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (version_id, d["date"], d["seq"], d["slot"], d["title"], d["target_miles"], d["target_json"],
-             d["terrain"], d["note"], d["target_minutes"])
+             d["terrain"], d["note"], d["target_minutes"], d["rationale"])
             for d in source["days"]
         ],
     )
@@ -925,16 +990,16 @@ def upsert_draft_days(conn: sqlite3.Connection, version_id: int, days: list[DayI
         rows.append((
             version_id, d["date"], d.get("seq", 1), d["slot"], d.get("title"),
             d.get("target_miles"), json.dumps(validated_target) if validated_target else None,
-            d.get("terrain"), d.get("note"), d.get("target_minutes"),
+            d.get("terrain"), d.get("note"), d.get("target_minutes"), d.get("rationale"),
         ))
 
     conn.executemany(
         "INSERT INTO plan_days (version_id, date, seq, slot, title, target_miles, target_json, "
-        "terrain, note, target_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "terrain, note, target_minutes, rationale) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(version_id, date, seq) DO UPDATE SET "
         "slot = excluded.slot, title = excluded.title, target_miles = excluded.target_miles, "
         "target_json = excluded.target_json, terrain = excluded.terrain, note = excluded.note, "
-        "target_minutes = excluded.target_minutes",
+        "target_minutes = excluded.target_minutes, rationale = excluded.rationale",
         rows,
     )
     conn.commit()
@@ -1191,10 +1256,11 @@ def _snapshot_past_weeks(conn: sqlite3.Connection, plan_id: int, version_id: int
                 if iso <= day_row["date"] <= week_end:
                     conn.execute(
                         "INSERT INTO plan_days (version_id, date, seq, slot, title, target_miles, "
-                        "target_json, terrain, note, target_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "target_json, terrain, note, target_minutes, rationale) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (version_id, day_row["date"], day_row["seq"], day_row["slot"], day_row["title"],
                          day_row["target_miles"], day_row["target_json"], day_row["terrain"],
-                         day_row["note"], day_row["target_minutes"]),
+                         day_row["note"], day_row["target_minutes"], day_row["rationale"]),
                     )
         m += timedelta(weeks=1)
     return preserved
@@ -1272,8 +1338,8 @@ def commit_plan(conn: sqlite3.Connection, plan_id: int, *, note: str) -> int:
 
     week_starts = {w["week_start"] for w in weeks}
     days = [_day_row(r) for r in conn.execute(
-        "SELECT version_id, date, seq, slot, title, target_miles, target_json, terrain, note, target_minutes "
-        "FROM plan_days WHERE version_id = ? ORDER BY date, seq",
+        "SELECT version_id, date, seq, slot, title, target_miles, target_json, terrain, note, target_minutes, "
+        "rationale FROM plan_days WHERE version_id = ? ORDER BY date, seq",
         [version_id],
     ).fetchall()]
     for d in days:

@@ -11,7 +11,7 @@ TODAY = date(2026, 11, 1)  # a Sunday
 
 def _day(d: str, miles: float, slot: str = "easy") -> dict:
     return {"date": d, "seq": 1, "slot": slot, "title": None, "target_miles": miles,
-            "target_minutes": None, "target_json": None, "terrain": None, "note": None}
+            "target_minutes": None, "target_json": None, "terrain": None, "note": None, "rationale": None}
 
 
 def _blocks(conn):

@@ -2040,15 +2040,19 @@ def set_draft_days(days: list[DayInput], plan_id: int | None = None) -> str:
       (default 1; 2+ = doubles), title?, target_miles?, target_minutes?,
       terrain? (road|trail; default road — composes with any run slot rather
       than being one itself: a trail long run is still a long run, and its
-      pace targets are display-guidance only, never scored), note? (athlete-
-      facing execution guidance — effort anchors and warning signs, e.g.
-      "8-10 x 3min LT, go to 10 if feeling great" or "should end feeling
-      like 3-4 more reps were there; HR creeping past the cap before rep 4
-      means the pace is wrong"), target?}. target is a DayTarget: {reps?,
-      reps_lo?, reps_hi? (a rep range; reps stays the point form),
+      pace targets are display-guidance only, never scored), note? (guidance
+      for the athlete on the day: how it should feel, when to stop or adjust —
+      never structure), rationale? (why the session is shaped this way;
+      shown collapsed), target?}. target is a DayTarget:
+      {steps?, reps?, reps_lo?, reps_hi? (a rep range; reps stays the point form),
       rep_duration_s?, rep_distance_m?, pace_lo?, pace_hi?, zone_name?,
       hr_lo?, hr_hi? (bpm; hr_hi alone is a ceiling and renders as "keep HR
-      under X")}. A zone_name with no explicit pace_lo/pace_hi is stored
+      under X")}. steps (at most 12, display-only, never scored) lays the
+      workout out block by block: [{work (required: "3 min", "400 m"), reps? |
+      reps_lo?+reps_hi? (absent = one steady segment), sets?, effort?, rest?
+      ("60 s"), rest_mode? (walk|jog|float|stand), set_rest?, label?,
+      optional? (bool), cue? (one line, <=100 chars; other strings <=40)}].
+      The top-level rep/pace/HR fields stay what adherence reads. A zone_name with no explicit pace_lo/pace_hi is stored
       unresolved and freezes against a live fitness estimate at commit_plan
       time, not now.
 
@@ -2760,8 +2764,9 @@ def run_sql(query: str) -> str:
       (road|trail; NULL means road — composes with any run slot rather than
       being one itself, e.g. a trail long run is still a long run; a trail
       day's pace targets are display-guidance only, never scored), note
-      (day-level athlete-facing guidance, e.g. "8-10 x 3min LT, go to 10 if
-      feeling great" — distinct from plan_log's reality-annotations),
+      (athlete-facing guidance for the day, distinct from plan_log's
+      reality-annotations), rationale (nullable — why the session is shaped
+      this way),
       target_minutes (nullable — duration target alongside or instead of
       target_miles)
 

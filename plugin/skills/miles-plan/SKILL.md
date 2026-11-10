@@ -192,25 +192,35 @@ always lists it.
   run" is as valid a prescription as "16 miles."
 - **Rep ranges** (`reps_lo`/`reps_hi`, or `rep_duration_s` for time reps) let a prescription
   breathe: "8–10 × 3min LT" is the target itself; the go/no-go call ("go to 10 if feeling
-  great") belongs in the day `note`, not the reps field.
+  great") belongs in the day `note`, not the reps field. A step takes the same range.
 - **Week ranges and gaps**: `target_miles` (floor) with `target_miles_hi` (ceiling) means
   "anywhere in this band is fine"; both omitted means the workouts are the whole contract.
 
-## Execution guidance — every quality session says how it should feel
+## A workout day in three layers
 
 An intensity word is not a prescription. "6 × 3 min hard" reads as 5K-or-faster to any eager
 athlete — an LT session mis-run all-out is the canonical failure: a hard workout, just the
-wrong one. Every workout (and any long run with quality in it) ships execution guidance in
-three layers, all surfaced on the Plan page's day view:
+wrong one. Every workout (and any long run with quality in it) is written in three layers,
+all shown on the Plan page's day view:
+
+- **Structure: `target.steps`.** One step per block, in order: the amount of one rep, the
+  count or range, sets, effort, the recovery and its kind, whether the block is optional, and
+  a one-line cue for that block. Warm-ups, easy links and finishes are steps too. Structure
+  never hides in the `note`. Steps are display-only: adherence and progression read the
+  top-level `reps`/`rep_*`/pace/HR fields, so keep setting those for the session's main work.
+- **Guidance: the day `note`**, written for the athlete reading it on the day: what right
+  feels like, the sign it's gone wrong, when to stop or adjust ("should end feeling like 3–4
+  more reps were there", "HR past the cap by rep 3 means the pace is wrong, not the fitness").
+- **Rationale: `rationale`**, shown collapsed: why the session is shaped this way, and
+  what to weigh before changing it.
+
+Intensity itself is carried by numbers:
 
 - **A pace band** — `zone_name` (freezes to the athlete's own zones at commit) or explicit
   `pace_lo`/`pace_hi`. The band *is* the intensity; a title or slot word never carries it alone.
 - **An HR guardrail** where the athlete's record shows HR data — `hr_lo`/`hr_hi`; `hr_hi`
   alone is a ceiling and renders as "keep HR under X". Prefer a ceiling with permission to
   drift late ("shouldn't see 162 until the last two reps") over a narrow band to chase.
-- **A feel anchor in the day `note`** — what right feels like and the sign it's gone wrong:
-  "should end feeling like 3–4 more reps were there", "first rep should feel too easy",
-  "HR past the cap by rep 3 means the pace is wrong, not the fitness".
 
 Calibrate the register to training age (the profiles above). A high-volume veteran can be
 told "easier side of LT" and will nail it — shorthand is respectful there, and over-explaining

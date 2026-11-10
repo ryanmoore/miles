@@ -145,6 +145,7 @@ class PlanDayRow(TypedDict):
     terrain: str | None  # 'trail', or NULL meaning road (the default)
     note: str | None  # athlete-facing guidance, distinct from plan_log's reality-annotations
     target_minutes: float | None
+    rationale: str | None  # why the session is shaped this way; shown collapsed
 
 
 class PlanLogRow(TypedDict):
@@ -251,7 +252,7 @@ def connection(opener: Callable[[], sqlite3.Connection] | None = None) -> Iterat
         conn.close()
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def add_missing_columns(conn: sqlite3.Connection, table: str, *columns: str) -> bool:
@@ -539,7 +540,7 @@ def init_db(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (version_id, date, seq)
         )
     """)
-    add_missing_columns(conn, "plan_days", "terrain TEXT", "note TEXT", "target_minutes REAL")
+    add_missing_columns(conn, "plan_days", "terrain TEXT", "note TEXT", "target_minutes REAL", "rationale TEXT")
     # "Life happened" annotations — day-level reality that never touches the plan
     # or bumps a version. No FK to a version; scoped to the plan only.
     conn.execute("""

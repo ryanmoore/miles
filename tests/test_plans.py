@@ -234,3 +234,47 @@ def test_candidate_drafts_are_addressed_by_plan_id_and_listed(monkeypatch):
     assert tool("get_draft", plan_id=a)["gaps"] == []
     assert tool("commit_plan", note="ok", plan_id=a)["plan"]["plan_id"] == a
     assert {p["plan_id"]: p["role"] for p in tool("list_plans")} == {a: "next", b: "candidate"}
+
+
+_STEP = {"work": "3 min", "reps": 7, "effort": "sub-threshold", "rest": "60 s", "rest_mode": "jog"}
+
+
+def test_steps_and_rationale_survive_commit_and_a_revision():
+    conn = memory_db()
+    plan_id, version_id = plan.start_plan_draft(conn, title="Base")
+    plan.upsert_draft_weeks(conn, version_id, _weeks(0, 0))
+    day: plan.DayInput = {
+        "date": THIS_MONDAY.isoformat(), "slot": "workout", "target_miles": 30.0,
+        "target": {"steps": [_STEP, {"work": "10 min", "label": "Warm-up"}]},
+        "note": "keep it relaxed", "rationale": "builds volume at threshold",
+    }
+    plan.upsert_draft_days(conn, version_id, [day])
+    plan.commit_plan(conn, plan_id, note="ok")
+
+    revised = plan.start_revision_draft(conn, plan_id)
+    for vid in (version_id, revised):
+        (row,) = plan.get_version(conn, vid)["days"]
+        assert row["rationale"] == "builds volume at threshold"
+        assert '"steps"' in (row["target_json"] or "")
+    assert plan_api._day_out(row)["rationale"] == "builds volume at threshold"
+
+
+@pytest.mark.parametrize("target, message", [
+    ({"steps": "3 min"}, "list of at most 12"),
+    ({"steps": [{"work": "3 min"}] * 13}, "list of at most 12"),
+    ({"steps": [{"reps": 3}]}, "step 1 needs a non-empty work"),
+    ({"steps": [_STEP, {"work": "3 min", "pace": "fast"}]}, "step 2 has unknown keys"),
+    ({"steps": [{"work": "3 min", "rest_mode": "crawl"}]}, "rest_mode must be one of"),
+    ({"steps": [{"work": "x" * 41}]}, "work must be a string of at most 40"),
+    ({"steps": [{"work": "3 min", "cue": "x" * 101}]}, "cue must be a string of at most 100"),
+    ({"steps": [{"work": "3 min", "reps_lo": 5, "reps_hi": 3}]}, "reps_lo must be <= reps_hi"),
+    ({"steps": [{"work": "3 min", "sets": -1}]}, "sets must be a non-negative integer"),
+    ({"steps": [{"work": "3 min", "optional": "yes"}]}, "optional must be true or false"),
+])
+def test_invalid_steps_are_rejected_naming_the_day_and_step(target, message):
+    conn = memory_db()
+    _, version_id = plan.start_plan_draft(conn, title="Base")
+    day: plan.DayInput = {"date": THIS_MONDAY.isoformat(), "slot": "workout", "title": "Reps", "target": target}
+    with pytest.raises(plan.PlanValidationError, match=message) as e:
+        plan.upsert_draft_days(conn, version_id, [day])
+    assert "Reps" in str(e.value)

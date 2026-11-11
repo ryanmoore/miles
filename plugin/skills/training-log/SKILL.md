@@ -21,9 +21,9 @@ miles' run and week notes, not here; the log keeps capacities, reference
 sessions, the watch list, an adjustments summary, and the block close-out, and
 points at notes instead of copying per-run numbers.
 
-Until the miles server stores these, they are markdown files the deployment
-keeps outside this plugin. The session's context names where they are. If it
-doesn't, ask before creating them anywhere.
+Both are notebook pages on the miles server: `runner` and `log`. Read them with
+`get_notebook` and write them with `set_notebook_page`, which replaces the whole
+page, so read the page just before writing it and send back the full body.
 
 ## Which document?
 

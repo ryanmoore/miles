@@ -7,7 +7,8 @@ const NAV_LINKS = [
   { href: "/plan.html", label: "Plan" },
   { href: "/activities.html", label: "Activities" },
   { href: "/training.html", label: "Training" },
-  { href: "/routes.html", label: "Routes", sheetOnPhone: true },  // the phone tab bar fits four tabs and More
+  { href: "/routes.html", label: "Routes", sheetOnPhone: true },
+  { href: "/doc.html", label: "Notebook", sheetOnPhone: true },  // the phone tab bar fits four tabs and More
   {
     label: "History",
     children: [
@@ -22,6 +23,7 @@ const NAV_LINKS = [
 
 // "/" and "/index.html" land on Plan (index.html redirects there).
 function isLinkActive(href, path) {
+  if (href === "/doc.html") return path === href && !location.search.includes("id=");  // plan documents share the page
   return href === "/plan.html"
     ? (path === "/plan.html" || path === "/" || path === "/index.html")
     : path === href;

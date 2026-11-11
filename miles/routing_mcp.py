@@ -4,7 +4,6 @@ and feet, drive times minutes; the modules underneath work in meters and
 seconds, and the conversion happens only here."""
 
 import json
-import os
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -13,6 +12,7 @@ from mcp.server.fastmcp import FastMCP
 from . import candidate_sets, db, drive_starts, network, route_search, search_jobs, sections, survey
 from .errors import reporting
 from .fitness import FT_PER_M, MILE_M
+from .format import app_url
 from .offload import threaded
 
 
@@ -536,8 +536,7 @@ def register_routing_tools(mcp: FastMCP) -> None:
         """
         with db.connection() as conn:
             set_id, expires_at = candidate_sets.create_set(conn, candidate_ids, title, notes)
-        base = os.environ.get("MILES_PUBLIC_URL", "").rstrip("/")
-        return json.dumps({"set_id": set_id, "url": f"{base}/candidates.html?set={set_id}", "expires_at": expires_at})
+        return json.dumps({"set_id": set_id, "url": app_url(f"/candidates.html?set={set_id}"), "expires_at": expires_at})
 
     @mcp.tool()
     @threaded

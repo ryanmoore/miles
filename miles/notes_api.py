@@ -1,4 +1,4 @@
-"""Read-only note and plan-document endpoints; they are written through the MCP tools."""
+"""Read-only note, plan-document and notebook endpoints; they are written through the MCP tools."""
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -33,3 +33,20 @@ def get_plan_doc(doc_id: int) -> dict[str, object]:
     if found is None:
         raise HTTPException(status_code=404, detail=f"document {doc_id} does not exist")
     return found
+
+
+@router.get("/api/notebook")
+def list_notebook() -> list[dict[str, object]]:
+    """The notebook's pages without bodies."""
+    with db.connection(connect_derived) as conn:
+        return notes.list_notebook(conn)
+
+
+@router.get("/api/notebook/{name}")
+def get_notebook_page(name: str) -> dict[str, object]:
+    """One notebook page with its body."""
+    with db.connection(connect_derived) as conn:
+        found, _ = notes.get_notebook_pages(conn, [name])
+    if not found:
+        raise HTTPException(status_code=404, detail=f"page {name!r} does not exist")
+    return found[0]

@@ -252,7 +252,7 @@ def connection(opener: Callable[[], sqlite3.Connection] | None = None) -> Iterat
         conn.close()
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def add_missing_columns(conn: sqlite3.Connection, table: str, *columns: str) -> bool:

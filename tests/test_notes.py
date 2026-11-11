@@ -9,7 +9,7 @@ from miles import api, db, mcp_server
 END = "2026-10-18"  # a Sunday; the week of 2026-10-12 is the latest
 
 
-def _tool(name: str, **args):
+def _tool(name: str, /, **args):
     return call_tool(mcp_server.mcp, name, args)
 
 
@@ -231,3 +231,29 @@ def test_plan_documents_reach_the_web_app_and_leave_with_a_discarded_draft(seede
     kept = _tool("set_plan_doc", plan_id=draft, title="Notes", body="x")
     _tool("discard_draft", plan_id=draft)
     assert client.get(f"/api/plan-docs/{kept['doc_id']}").status_code == 404
+
+
+def test_notebook_pages_round_trip_replace_and_delete(seeded, monkeypatch):
+    monkeypatch.setenv("MILES_PUBLIC_URL", "http://miles-host:8000/")
+    _tool("set_notebook_page", name="runner", body="# Profile")
+    _tool("set_notebook_page", name="log", body="first")
+    page = _tool("set_notebook_page", name="log", body="| a | b |")
+    assert page["url"] == "http://miles-host:8000/doc.html?page=log" and "body" not in page
+
+    got = _tool("get_notebook", pages=["log", "runner", "nope"])
+    assert [(p["name"], p["body"]) for p in got["pages"]] == [("log", "| a | b |"), ("runner", "# Profile")]
+    assert got["missing"] == ["nope"]
+    assert [(p["name"], p["size"], "body" in p) for p in _tool("get_notebook")] == [("log", 9, False), ("runner", 9, False)]
+
+    _tool("delete_notebook_page", name="log")
+    assert _tool("get_notebook", pages=["log"]) == {"pages": [], "missing": ["log"]}
+    assert "does not exist" in _tool("delete_notebook_page", name="log")["error"]
+
+
+def test_notebook_page_names_are_slugs_and_the_web_app_reads_pages(seeded):
+    for name in ("Runner", "-log", "a b", "", "x" * 41):
+        assert "name" in _tool("set_notebook_page", name=name, body="x")["error"]
+    _tool("set_notebook_page", name="x" * 40, body="ok")
+    client = TestClient(api.app)
+    assert client.get(f"/api/notebook/{'x' * 40}").json()["body"] == "ok"
+    assert client.get("/api/notebook/missing").status_code == 404

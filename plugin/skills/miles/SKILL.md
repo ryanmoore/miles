@@ -13,8 +13,8 @@ lane; the athlete decides what to do with the data.
 
 ## The athlete's standing documents
 
-If the session has a runner profile and a training log, read both before judging
-any effort: the profile for HR ranges and how the athlete responds to training,
+Read the notebook pages `runner` (profile) and `log` (training log) with
+`get_notebook` before judging any effort, if they exist: the profile for HR ranges and how the athlete responds to training,
 the log for what the current block is building. Anything worth recording about
 the athlete goes through the `training-log` skill, which decides which document
 it belongs in.

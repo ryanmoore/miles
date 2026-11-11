@@ -13,6 +13,10 @@
     .doc-view .doc-back:hover { text-decoration: underline; }
     .doc-view h1 { font-size: 1.375rem; font-weight: 650; letter-spacing: -0.02em; margin-bottom: 0.25rem; }
     .doc-view .subtitle { font-size: 0.8125rem; color: var(--muted); margin-bottom: 1.25rem; }
+    .doc-view .doc-index ul { list-style: none; padding: 0; }
+    .doc-view .doc-index li { padding: 0.5rem 0; border-bottom: 1px solid var(--gridline); display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; align-items: baseline; }
+    .doc-view .doc-index a { color: var(--accent); font-weight: 600; }
+    .doc-view .doc-index .subtitle { margin: 0; }
     .doc-view .doc-body { font-size: 1rem; line-height: 1.6; color: var(--text); overflow-wrap: anywhere; }
     .doc-view .doc-body > * + * { margin-top: 0.875rem; }
     .doc-view .doc-body h1, .doc-view .doc-body h2, .doc-view .doc-body h3 { font-weight: 650; line-height: 1.3; margin-top: 1.5rem; }
@@ -73,10 +77,9 @@
     return box.innerHTML;
   }
 
-  async function loadDoc() {
-    const id = new URLSearchParams(location.search).get('id');
-    const res = await fetch(`/api/plan-docs/${encodeURIComponent(id)}`);
-    if (!res.ok) throw new Error(res.status === 404 ? 'No such document.' : `HTTP ${res.status}`);
+  async function getJson(url, notFound) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(res.status === 404 ? notFound : `HTTP ${res.status}`);
     return res.json();
   }
 
@@ -86,16 +89,56 @@
       ? `${shortDate(doc.start_date)} – ${shortDate(doc.end_date)}` : shortDate(doc.start_date);
   }
 
-  Promise.all([loadDoc(), markedReady]).then(([doc]) => {
-    document.title = `Miles · ${doc.title}`;
-    document.getElementById('back').href = `/plan.html?plan=${doc.plan_id}#plan`;
-    document.getElementById('doc').innerHTML = `
-      <h1>${esc(doc.title)}</h1>
-      <p class="subtitle">${[esc(doc.plan_title), esc(datesLine(doc))].filter(Boolean).join(' · ')}</p>
-      <div class="doc-body">${renderMarkdown(doc.body)}</div>`;
-  }).catch(err => {
-    document.getElementById('doc').innerHTML = `<p class="desc">Couldn't load this document: ${esc(err.message)}</p>`;
-  });
+  const BODY_SKELETON = '<div class="skeleton" style="height:16rem"></div>';
+  const docEl = document.getElementById('doc');
+  const params = new URLSearchParams(location.search);
+
+  function showError(selector, what, err) {
+    docEl.querySelector(selector).replaceWith(Object.assign(document.createElement('p'), {
+      className: 'desc', textContent: `Couldn't load ${what}: ${err.message}`,
+    }));
+  }
+
+  function showPlanDoc() {
+    Promise.all([getJson(`/api/plan-docs/${encodeURIComponent(params.get('id'))}`, 'No such document.'), markedReady]).then(([doc]) => {
+      document.title = `Miles · ${doc.title}`;
+      document.getElementById('back').href = `/plan.html?plan=${doc.plan_id}#plan`;
+      docEl.innerHTML = `
+        <h1>${esc(doc.title)}</h1>
+        <p class="subtitle">${[esc(doc.plan_title), esc(datesLine(doc))].filter(Boolean).join(' · ')}</p>
+        <div class="doc-body">${renderMarkdown(doc.body)}</div>`;
+    }).catch(err => showError('#doc', 'this document', err));
+  }
+
+  // A notebook page: ?page=<name>. The title is known from the address, so it
+  // renders at once with a skeleton where the body will go.
+  function showNotebookPage(name) {
+    document.title = `Miles · ${name}`;
+    const back = document.getElementById('back');
+    back.textContent = '← Notebook';
+    back.href = '/doc.html';
+    docEl.innerHTML = `<h1>${esc(name)}</h1><p class="subtitle" id="updated">&nbsp;</p><div class="doc-body">${BODY_SKELETON}</div>`;
+    Promise.all([getJson(`/api/notebook/${encodeURIComponent(name)}`, 'No such page.'), markedReady]).then(([page]) => {
+      document.getElementById('updated').textContent = `Updated ${shortDate(page.updated_at.slice(0, 10))}`;
+      docEl.querySelector('.doc-body').innerHTML = renderMarkdown(page.body);
+    }).catch(err => showError('.doc-body', 'this page', err));
+  }
+
+  function showNotebookIndex() {
+    document.title = 'Miles · Notebook';
+    document.getElementById('back').remove();
+    docEl.innerHTML = `<h1>Notebook</h1><p class="subtitle">Standing pages that outlive any plan.</p><div class="doc-index">${BODY_SKELETON}</div>`;
+    getJson('/api/notebook').then(pages => {
+      docEl.querySelector('.doc-index').innerHTML = pages.length
+        ? `<ul>${pages.map(p => `<li><a href="/doc.html?page=${encodeURIComponent(p.name)}">${esc(p.name)}</a>
+            <span class="subtitle">${p.size.toLocaleString()} characters · updated ${esc(shortDate(p.updated_at.slice(0, 10)))}</span></li>`).join('')}</ul>`
+        : '<p class="desc">No pages yet.</p>';
+    }).catch(err => showError('.doc-index', 'the notebook', err));
+  }
+
+  if (params.has('id')) showPlanDoc();
+  else if (params.get('page')) showNotebookPage(params.get('page'));
+  else showNotebookIndex();
 </script>
 </body>
 </html>

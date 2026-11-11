@@ -1,3 +1,11 @@
+import os
+
+
+def app_url(path: str) -> str:
+    """Absolute address of a web app path when MILES_PUBLIC_URL is set, else the path."""
+    return os.environ.get("MILES_PUBLIC_URL", "").rstrip("/") + path
+
+
 def fmt_time(seconds: int | None) -> str:
     """H:MM:SS, or "—" for None."""
     if seconds is None:

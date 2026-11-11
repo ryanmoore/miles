@@ -1,4 +1,4 @@
-"""MCP tools for run and week notes, plan documents, stream-detected run elements, and recent history."""
+"""MCP tools for run and week notes, plan documents, the notebook, stream-detected run elements, and recent history."""
 
 import json
 from datetime import date
@@ -8,6 +8,19 @@ from mcp.server.fastmcp import FastMCP
 from . import db, elements, history, notes, plan
 from .derive import connect_derived
 from .errors import reporting
+from .format import app_url
+
+
+def _linked(item: dict[str, object], path: str) -> dict[str, object]:
+    return {**item, "url": app_url(path)}
+
+
+def _plan_doc_url(doc: dict[str, object]) -> str:
+    return f"/doc.html?id={doc['doc_id']}"
+
+
+def _notebook_url(page: dict[str, object]) -> str:
+    return f"/doc.html?page={page['name']}"
 
 
 def register_notes_tools(mcp: FastMCP) -> None:
@@ -44,7 +57,8 @@ def register_notes_tools(mcp: FastMCP) -> None:
         Returns the stored note.
         """
         with db.connection(connect_derived) as conn:
-            return json.dumps(notes.set_run_note(conn, activity_id, fields))
+            note = notes.set_run_note(conn, activity_id, fields)
+        return json.dumps(_linked(note, f"/activity.html?id={activity_id}"))
 
     @mcp.tool()
     def get_run_notes(
@@ -129,7 +143,8 @@ def register_notes_tools(mcp: FastMCP) -> None:
             if doc_id is None and plan_id is None:
                 found = plan.default_plan(conn, date.today())
                 plan_id = found["plan_id"] if found else None
-            return json.dumps(notes.set_plan_doc(conn, plan_id, doc_id, title, body, start_date, end_date))
+            doc = notes.set_plan_doc(conn, plan_id, doc_id, title, body, start_date, end_date)
+        return json.dumps(_linked(doc, _plan_doc_url(doc)))
 
     @mcp.tool()
     @reporting(notes.NoteError)
@@ -139,7 +154,7 @@ def register_notes_tools(mcp: FastMCP) -> None:
             found = notes.get_plan_doc(conn, doc_id)
         if found is None:
             raise notes.NoteError(f"document {doc_id} does not exist")
-        return json.dumps(found)
+        return json.dumps(_linked(found, _plan_doc_url(found)))
 
     @mcp.tool()
     def list_plan_docs(plan_id: int | None = None, on_date: str | None = None) -> str:
@@ -150,7 +165,8 @@ def register_notes_tools(mcp: FastMCP) -> None:
         """
         with db.connection(connect_derived) as conn:
             found = plan.get_plan(conn, plan_id) if plan_id is not None else plan.default_plan(conn, date.today())
-            return json.dumps(notes.list_plan_docs(conn, found["plan_id"], on_date) if found else [])
+            docs = notes.list_plan_docs(conn, found["plan_id"], on_date) if found else []
+        return json.dumps([_linked(d, _plan_doc_url(d)) for d in docs])
 
     @mcp.tool()
     @reporting(notes.NoteError)
@@ -159,6 +175,46 @@ def register_notes_tools(mcp: FastMCP) -> None:
         with db.connection(connect_derived) as conn:
             notes.delete_plan_doc(conn, doc_id)
         return json.dumps({"deleted": doc_id})
+
+    @mcp.tool()
+    def get_notebook(pages: list[str] | None = None) -> str:
+        """
+        The notebook: named markdown pages that belong to the athlete rather
+        than to a plan, standing documents kept across plans (a profile, a
+        log). miles stores them and does not interpret their contents.
+
+        With `pages` (names), returns those pages with their bodies in one
+        call as {"pages": [...], "missing": [names with no page]}. With none,
+        returns the index without bodies: [{name, updated_at, size, url}],
+        size in characters. Every page carries `url`, its address in the app.
+        """
+        with db.connection(connect_derived) as conn:
+            if pages is None:
+                return json.dumps([_linked(p, _notebook_url(p)) for p in notes.list_notebook(conn)])
+            found, missing = notes.get_notebook_pages(conn, pages)
+        return json.dumps({"pages": [_linked(p, _notebook_url(p)) for p in found], "missing": missing})
+
+    @mcp.tool()
+    @reporting(notes.NoteError)
+    def set_notebook_page(name: str, body: str) -> str:
+        """
+        Create a notebook page or replace it (see get_notebook): the whole
+        body is replaced and there is no history, so read the page first when
+        changing part of it. `name` is a slug: lowercase letters, digits and
+        hyphens, starting with a letter or digit, at most 40 characters.
+        Returns the page without its body.
+        """
+        with db.connection(connect_derived) as conn:
+            page = notes.set_notebook_page(conn, name, body)
+        return json.dumps(_linked(page, _notebook_url(page)))
+
+    @mcp.tool()
+    @reporting(notes.NoteError)
+    def delete_notebook_page(name: str) -> str:
+        """Delete one notebook page."""
+        with db.connection(connect_derived) as conn:
+            notes.delete_notebook_page(conn, name)
+        return json.dumps({"deleted": name})
 
     @mcp.tool()
     @reporting(ValueError)

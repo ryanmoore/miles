@@ -1,6 +1,7 @@
-"""Run and week notes and plan documents, the athlete's annotations: ground
-truth like the plan tables. `derive_all` never touches them and no sync path
-deletes them (see adr/0005-run-and-week-notes.md)."""
+"""Run and week notes, plan documents, and the notebook, the athlete's
+annotations: ground truth like the plan tables. `derive_all` never touches
+them and no sync path deletes them (see adr/0005-run-and-week-notes.md and
+adr/0009-athlete-notebook.md)."""
 
 import json
 import re
@@ -62,6 +63,13 @@ def init_notes_schema(conn: sqlite3.Connection) -> None:
             body        TEXT NOT NULL,
             start_date  TEXT,
             end_date    TEXT,
+            updated_at  TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS notebook_pages (
+            name        TEXT PRIMARY KEY,
+            body        TEXT NOT NULL,
             updated_at  TEXT NOT NULL
         )
     """)
@@ -378,4 +386,40 @@ def list_plan_docs(conn: sqlite3.Connection, plan_id: int, on_date: str | None =
 def delete_plan_doc(conn: sqlite3.Connection, doc_id: int) -> None:
     if conn.execute("DELETE FROM plan_docs WHERE doc_id = ?", [doc_id]).rowcount == 0:
         raise NoteError(f"document {doc_id} does not exist")
+    conn.commit()
+
+
+_PAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+
+def set_notebook_page(conn: sqlite3.Connection, name: str, body: str) -> dict[str, object]:
+    """Create a notebook page or replace its whole body; returns it without the body."""
+    if not _PAGE_NAME.match(name):
+        raise NoteError(f"name {name!r} must be 1-40 lowercase letters, digits and hyphens, starting with a letter or digit")
+    now = _now()
+    conn.execute(
+        "INSERT INTO notebook_pages (name, body, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(name) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
+        [name, body, now],
+    )
+    conn.commit()
+    return {"name": name, "updated_at": now, "size": len(body)}
+
+
+def get_notebook_pages(conn: sqlite3.Connection, names: list[str]) -> tuple[list[dict[str, object]], list[str]]:
+    """The named pages with bodies, in the order asked, and the names with no page."""
+    order = list(dict.fromkeys(names))
+    found = {r["name"]: dict(r) for r in conn.execute(f"SELECT * FROM notebook_pages WHERE name IN ({','.join('?' * len(order))})", order)}
+    return [found[n] for n in order if n in found], [n for n in order if n not in found]
+
+
+def list_notebook(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    """Every page by name without its body; size is the body's length in characters."""
+    rows = conn.execute("SELECT name, updated_at, LENGTH(body) AS size FROM notebook_pages ORDER BY name").fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_notebook_page(conn: sqlite3.Connection, name: str) -> None:
+    if conn.execute("DELETE FROM notebook_pages WHERE name = ?", [name]).rowcount == 0:
+        raise NoteError(f"page {name!r} does not exist")
     conn.commit()

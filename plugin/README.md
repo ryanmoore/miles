@@ -6,6 +6,17 @@ profile and the current block's log, a `route-finder` skill that searches open
 map data for runnable routes, and the `miles` MCP server they all read and
 write through.
 
+## Install
+
+This repo is its own plugin marketplace. In Claude Code:
+
+```
+/plugin marketplace add ryanmoore/miles
+/plugin install miles@miles
+```
+
+Run `/plugin marketplace update miles` to pick up a new version.
+
 ## Setup
 
 `MILES_MCP_URL` must be set in the environment before Claude Code starts, and

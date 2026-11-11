@@ -110,6 +110,14 @@ matches any port) listing every name clients connect by:
 MILES_MCP_ALLOWED_HOSTS='localhost:*,127.0.0.1:*,myhost.example.com:*'
 ```
 
+#### Skills as a plugin
+
+The tools alone answer questions; the skills in `plugin/` (analyst, planner,
+training log, route finder) add the personas that use them well. Install them
+from this repo's marketplace in place of `claude mcp add`; the plugin brings
+its own server entry, pointed at `MILES_MCP_URL`. See
+[`plugin/README.md`](plugin/README.md).
+
 ### 5. Try it
 
 Ask about your training — the `miles:miles` analyst persona picks it up:

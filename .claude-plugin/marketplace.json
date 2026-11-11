@@ -1,0 +1,15 @@
+{
+  "name": "miles",
+  "owner": {
+    "name": "Ryan Moore"
+  },
+  "description": "Skills and MCP tools for a miles training-record server.",
+  "plugins": [
+    {
+      "name": "miles",
+      "source": "./plugin",
+      "description": "Running analysis, plan drafting, training-log upkeep, and route finding, backed by the miles MCP server.",
+      "category": "productivity"
+    }
+  ]
+}

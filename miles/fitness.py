@@ -93,12 +93,18 @@ def _project(time_s: float, from_m: float) -> dict[str, float]:
 
 def _tier1_races(conn: sqlite3.Connection, as_of: date, *, exclude_casual: bool = False) -> _Candidate | None:
     """Races in-window with a known distance category and finish time, combined
-    by recency-weighted average in pace space. A race climbing more than
-    ELEV_GAIN_PER_M_MAX is left out: Riegel reads its finish time as a flat one."""
-    sport_clause, params = run_sport_filter()
+    by recency-weighted average in pace space. Trail races and races climbing
+    more than ELEV_GAIN_PER_M_MAX are left out: Riegel reads a finish time as a
+    flat road one."""
+    sport_clause, params = run_sport_filter(exclude=("TrailRun",))
     effective = effective_run_type_sql()
     window_start = (as_of - timedelta(days=WINDOW_DAYS)).isoformat()
-    casual_clause = "AND (race_effort IS NULL OR race_effort != 'casual')" if exclude_casual else ""
+    # A race this far off its prediction describes the day, not fitness, even
+    # when heart rate promoted it from casual to hard.
+    casual_clause = (
+        f"AND (race_effort IS NULL OR (race_effort != 'casual' AND effort_ratio <= {EFFORT_HARD_MAX_SOFT}))"
+        if exclude_casual else ""
+    )
     rows = conn.execute(f"""
         SELECT activity_id, name, DATE(start_date) AS date, distance_m, moving_time_s
         FROM activities
@@ -317,7 +323,8 @@ def estimate_fitness(
 ) -> FitnessEstimate | None:
     """Best-available fitness estimate as of a date; None when the trailing
     window has no usable signal at all. exclude_casual drops tier-1 races whose
-    persisted race_effort is 'casual' (the derive-layer refinement pass)."""
+    persisted race_effort is 'casual', or whose effort_ratio is past the widest
+    hard band (the derive-layer refinement pass)."""
     tier1 = _tier1_races(conn, as_of, exclude_casual=exclude_casual)
     tier2 = _tier2_workout_laps(conn, as_of)
     tier3 = _tier3_envelope(conn, as_of)

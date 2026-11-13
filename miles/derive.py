@@ -46,7 +46,7 @@ _CONFIDENCE_VALUES = get_args(Confidence)
 
 # Bump whenever any classifier or threshold feeding a derived value changes, so
 # ensure_derived() knows stale rows need a full recompute.
-DERIVE_VERSION = "14"
+DERIVE_VERSION = "15"
 
 _FINAL_CHECKPOINTS = "fitness_checkpoints"
 _SEED_CHECKPOINTS = "fitness_checkpoints_seed"
@@ -210,11 +210,12 @@ def _predicted_pace(conn: sqlite3.Connection, race_date: date, category: str) ->
 def predicted_pace_for_race(conn: sqlite3.Connection, race_date: date, category: str) -> tuple[float, Confidence] | None:
     """(predicted pace min/mi, confidence) for a race's category, from a live fitness
     estimate as of the day before the race. Unlike a shared monthly checkpoint, this
-    window can never include the race itself. None when the category has no tracked
-    prediction or no estimate is computable that far back."""
+    window can never include the race itself. Earlier races already judged casual
+    are left out, so one jogged race cannot make the next look raced. None when
+    the category has no tracked prediction or no estimate is computable that far back."""
     if category not in CHECKPOINT_PACE_COL:
         return None
-    est = estimate_fitness(conn, race_date - timedelta(days=1))
+    est = estimate_fitness(conn, race_date - timedelta(days=1), exclude_casual=True)
     if est is None:
         return None
     pace = est["predicted"].get(category)
@@ -247,7 +248,8 @@ def _race_effort_pass(conn: sqlite3.Connection, *, since: str | None = None) -> 
     if since is not None:
         query += " AND DATE(start_date) >= ?"
         params.append(since)
-    rows = conn.execute(query, params).fetchall()
+    # Oldest first: each race's estimate reads the effort already stored on earlier ones.
+    rows = conn.execute(query + " ORDER BY start_date", params).fetchall()
 
     counts: dict[str, int] = {}
     for r in rows:

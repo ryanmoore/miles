@@ -1554,8 +1554,8 @@ def get_fitness_estimate(as_of: str | None = None) -> str:
     """
     Predicted race paces (5K/10K/half/marathon) and derived training zones as of a
     date (YYYY-MM-DD, default today), from the best signal in the trailing 180 days:
-    races (confidence high/medium; hilly races, over ~100 ft/mi of climb, are
-    left out), classified workout laps (medium-low), or the
+    races (confidence high/medium; trail races and hilly ones, over ~100 ft/mi
+    of climb, are left out), classified workout laps (medium-low), or the
     fastest sustained training run scaled to a race-pace envelope (low).
 
     When quoting this, ALWAYS state `confidence` and cite `sources`. `low` is a

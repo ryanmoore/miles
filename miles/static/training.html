@@ -26,6 +26,18 @@
     @media (min-width: 640px) {
       .training-view .eff-periods > .filter-btn { flex: none; max-width: 16rem; }
     }
+    .training-view .range-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; margin-bottom: 1rem; }
+    .training-view .range-picker input {
+      min-height: 2rem;
+      padding: 0 0.375rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.8125rem;
+    }
+    .training-view .range-picker .range-dash { color: var(--muted); }
     .training-view .chart-caption {
       font-size: 0.8125rem;
       color: var(--text-secondary);
@@ -126,7 +138,15 @@
 
   <div class="stat-strip" id="stat-strip" style="display:none"></div>
 
-  <section id="section-fitness" style="display:none">
+  <div class="mode-tabs" id="training-tabs">
+    <button class="mode-tab" data-tab="trends">Trends</button>
+    <button class="mode-tab" data-tab="load">Load</button>
+  </div>
+
+  <div id="tab-trends" class="tab-panel">
+  <div class="range-picker" id="range-trends"></div>
+
+  <section id="section-fitness">
     <h2>Fitness</h2>
     <p class="desc" id="fitness-desc">Monthly predicted race pace · solid = race-confirmed · ring = workout-anchored · hollow = training floor · hover a point for the evidence behind it, click to pin</p>
     <div class="mode-tabs" id="fitness-tabs">
@@ -135,7 +155,7 @@
       <button class="mode-tab" data-dist="half">Half</button>
       <button class="mode-tab" data-dist="marathon">Marathon</button>
     </div>
-    <div class="chart-wrap">
+    <div class="chart-wrap skeleton">
       <div id="chart-fitness" style="width:100%;height:100%"></div>
     </div>
     <div class="evidence-panel" id="fitness-evidence" style="display:none">
@@ -164,33 +184,7 @@
     </div>
   </section>
 
-  <section id="section-load" style="display:none">
-    <h2>Load</h2>
-    <p class="desc">Acute:chronic ratio — last 7 days of TRIMP load (minutes x HR band, runs plus other HR-tracked activities) ÷ the 28-day weekly average · shaded: under 0.8 low, 0.8–1.3 optimal, 1.3–1.5 caution, over 1.5 high · population heuristics, not a diagnosis</p>
-    <div class="chart-wrap">
-      <div id="chart-acwr" style="width:100%;height:100%"></div>
-    </div>
-    <div class="subchart-label">Monotony (7-day mean ÷ standard deviation of daily load; over 2 = little day-to-day variation)</div>
-    <div class="chart-wrap chart-wrap-small">
-      <div id="chart-monotony" style="width:100%;height:100%"></div>
-    </div>
-    <p class="chart-caption" id="load-caption"></p>
-  </section>
-
-  <section id="section-intensity" style="display:none">
-    <h2>Intensity</h2>
-    <p class="desc" id="intensity-desc"></p>
-    <div class="mode-tabs" id="intensity-tabs">
-      <button class="mode-tab active" data-mode="hr">By HR</button>
-      <button class="mode-tab" data-mode="pace">By pace</button>
-    </div>
-    <div class="chart-wrap">
-      <div id="chart-intensity" style="width:100%;height:100%"></div>
-    </div>
-    <p class="chart-caption" id="intensity-caption"></p>
-  </section>
-
-  <section id="section-efficiency" style="display:none">
+  <section id="section-efficiency">
     <h2>Efficiency</h2>
     <p class="desc">Lap heart rate vs pace · are you faster at the same effort? · click a dot to list its laps · pick a quarter range, and optionally a second one to compare against · heat-adjusted corrects each lap's pace to cool conditions (temperature + dew point) · steady laps only keeps 6+ min, 1+ km laps outside warmups, cooldowns and recoveries, where HR has caught up with the pace</p>
     <div class="eff-periods">
@@ -206,7 +200,7 @@
       <input type="checkbox" id="steady-laps-toggle">
       Steady laps only
     </label>
-    <div class="chart-wrap">
+    <div class="chart-wrap skeleton">
       <div id="chart-hr-pace" style="width:100%;height:100%"></div>
     </div>
     <p class="chart-caption" id="eff-caption"></p>
@@ -235,7 +229,7 @@
     </div>
   </section>
 
-  <section id="section-easy-ef" style="display:none">
+  <section id="section-easy-ef">
     <h2>Easy-run efficiency</h2>
     <p class="desc">Meters per heartbeat on easy runs (efficiency factor) · higher is fitter · grade-adjusted for hills, optionally heat-adjusted · skips each run's first 10 minutes, pauses and walking, and needs 20+ minutes after that · line is the 28-day rolling median, drawn only where at least 3 of those 4 weeks have an easy run · year over year lines up the same weeks of every year, so summer compares with summer · click a dot to open the run</p>
     <div class="eff-periods">
@@ -253,19 +247,51 @@
       <input type="checkbox" id="easy-ef-heat" checked>
       Heat-adjusted
     </label>
-    <div class="chart-wrap">
+    <div class="chart-wrap skeleton">
       <div id="chart-easy-ef" style="width:100%;height:100%"></div>
     </div>
     <p class="chart-caption" id="easy-ef-caption"></p>
   </section>
 
-  <section id="section-chart" style="display:none">
+  <section id="section-chart">
     <h2>Weekly Mileage</h2>
     <p class="desc">Shaded bands are detected training periods (label = avg active mpw) · deeper bands within are race builds · vertical lines are races · wide zoom shows a 4-week rolling average, zoom in for weekly bars</p>
-    <div class="chart-wrap">
+    <div class="chart-wrap skeleton">
       <div id="chart-history" style="width:100%;height:100%"></div>
     </div>
+    <p class="chart-caption" id="history-caption"></p>
   </section>
+  </div>
+
+  <div id="tab-load" class="tab-panel" hidden>
+  <div class="range-picker" id="range-load"></div>
+
+  <section id="section-load">
+    <h2>Load</h2>
+    <p class="desc">Acute:chronic ratio — last 7 days of TRIMP load (minutes x HR band, runs plus other HR-tracked activities) ÷ the 28-day weekly average · shaded: under 0.8 low, 0.8–1.3 optimal, 1.3–1.5 caution, over 1.5 high · population heuristics, not a diagnosis</p>
+    <div class="chart-wrap skeleton">
+      <div id="chart-acwr" style="width:100%;height:100%"></div>
+    </div>
+    <div class="subchart-label">Monotony (7-day mean ÷ standard deviation of daily load; over 2 = little day-to-day variation)</div>
+    <div class="chart-wrap chart-wrap-small skeleton">
+      <div id="chart-monotony" style="width:100%;height:100%"></div>
+    </div>
+    <p class="chart-caption" id="load-caption"></p>
+  </section>
+
+  <section id="section-intensity">
+    <h2>Intensity</h2>
+    <p class="desc" id="intensity-desc"></p>
+    <div class="mode-tabs" id="intensity-tabs">
+      <button class="mode-tab active" data-mode="hr">By HR</button>
+      <button class="mode-tab" data-mode="pace">By pace</button>
+    </div>
+    <div class="chart-wrap skeleton">
+      <div id="chart-intensity" style="width:100%;height:100%"></div>
+    </div>
+    <p class="chart-caption" id="intensity-caption"></p>
+  </section>
+  </div>
 
 </main>
 
@@ -307,20 +333,93 @@
 
   function dayMs(d) { return new Date(d + 'T00:00:00').getTime(); }
 
+  // Local-time 'YYYY-MM-DD'.
+  function isoDate(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  // ---- Time range: one per tab, shared by every time-axis chart on it ----
+
+  const TAB_KEYS = ['trends', 'load'];
+  const RANGE_PRESETS = [['all', 'All time'], ['5y', '5 years'], ['3y', '3 years'], ['1y', '1 year'], ['6m', '6 months'], ['3m', '3 months']];
+  const PRESET_MONTHS = { '5y': 60, '3y': 36, '1y': 12, '6m': 6, '3m': 3 };
+  const DEFAULT_PRESET = { trends: 'all', load: '6m' };
+  const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+  const rangeKey = tab => `miles.trainingRange.${tab}`;
+
+  const ranges = {};                           // tab -> { preset, from, to }, ISO dates
+  const rangeSubs = { trends: [], load: [] };  // tab -> callbacks given each new range
+  const tabCharts = { trends: [], load: [] };  // tab -> charts to resize when it is revealed
+  let firstDate;                               // start of the All time preset
+  let activeTab;
+
+  function presetRange(preset) {
+    const d = new Date();
+    const to = isoDate(d);
+    if (preset === 'all') return { preset, from: firstDate, to };
+    d.setMonth(d.getMonth() - PRESET_MONTHS[preset]);
+    return { preset, from: isoDate(d), to };
+  }
+
+  // Presets are saved by name and resolved against today on every load.
+  function restoreRange(tab) {
+    try {
+      const s = JSON.parse(localStorage.getItem(rangeKey(tab)));
+      if (s?.preset === 'custom' && ISO_DATE.test(s.from) && ISO_DATE.test(s.to) && s.from <= s.to) return s;
+      if (s?.preset === 'all' || PRESET_MONTHS[s?.preset]) return presetRange(s.preset);
+    } catch (_) {}
+    return presetRange(DEFAULT_PRESET[tab]);
+  }
+
+  // `except` is the subscriber that produced the change and already shows it.
+  function setRange(tab, range, except) {
+    ranges[tab] = range;
+    try { localStorage.setItem(rangeKey(tab), JSON.stringify(range)); } catch (_) {}
+    syncPicker(tab);
+    rangeSubs[tab].forEach(fn => { if (fn !== except) fn(range); });
+  }
+
+  function syncPicker(tab) {
+    const el = document.getElementById(`range-${tab}`);
+    el.querySelectorAll('[data-preset]').forEach(b => b.classList.toggle('active', b.dataset.preset === ranges[tab].preset));
+    el.querySelector('.range-from').value = ranges[tab].from;
+    el.querySelector('.range-to').value = ranges[tab].to;
+  }
+
+  function mountPicker(tab) {
+    const el = document.getElementById(`range-${tab}`);
+    el.innerHTML = RANGE_PRESETS.map(([k, label]) => `<button type="button" class="mode-tab" data-preset="${k}">${label}</button>`).join('')
+      + '<input type="date" class="range-from" aria-label="From"><span class="range-dash">–</span><input type="date" class="range-to" aria-label="To">';
+    el.addEventListener('click', e => {
+      const btn = e.target.closest('[data-preset]');
+      if (btn) setRange(tab, presetRange(btn.dataset.preset));
+    });
+    el.addEventListener('change', () => {
+      const from = el.querySelector('.range-from').value, to = el.querySelector('.range-to').value;
+      if (from && to && from <= to) setRange(tab, { preset: 'custom', from, to });
+    });
+    syncPicker(tab);
+  }
+
+  // Sections start as a skeleton; the first render, or an error, replaces it.
+  function settle(sectionId, show = true) {
+    const section = document.getElementById(sectionId);
+    section.style.display = show ? '' : 'none';
+    section.querySelectorAll('.skeleton').forEach(el => el.classList.remove('skeleton'));
+  }
+
+  // The range's bounds as time-axis values.
+  const axisBounds = r => ({ min: dayMs(r.from), max: dayMs(r.to) });
+  const inRange = (date, r) => date.slice(0, 10) >= r.from && date.slice(0, 10) <= r.to;
+
   function median(values) {
     const arr = [...values].sort((a, b) => a - b);
     const mid = Math.floor(arr.length / 2);
     return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
   }
 
-  async function load() {
-    const res = await fetch('/api/weekly-history');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  }
-
-  async function loadFitnessFull() {
-    const res = await fetch('/api/fitness-trend-full');
+  async function fetchJson(url) {
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   }
@@ -353,6 +452,17 @@
     const latest = fitnessData.length ? fitnessData[fitnessData.length - 1] : null;
     if (!latest) return '—';
     return `${fmt.pace(latest.paces[fitnessDist])}<span class="stat-sub">${DIST_LABEL[fitnessDist]} pace · ${monthYear(latest.date)}</span>`;
+  }
+
+  function updateFitnessStat() {
+    const stat = document.getElementById('stat-fitness');
+    if (stat) stat.innerHTML = fitnessStatHTML();
+  }
+
+  function renderHeader(data) {
+    document.getElementById('subtitle').textContent =
+      `${data.weeks.length} weeks · ${data.periods.length} periods · ${data.builds.length} builds · ${data.races.length} races`;
+    renderStatStrip(data);
   }
 
   function renderStatStrip(data) {
@@ -406,7 +516,7 @@
   // Symbol only enlarges for a *pinned* point — plain hover keeps normal sizes
   // so sweeping across the line doesn't jitter every marker.
   function fitnessPoints(theme) {
-    return fitnessData.map(f => ({
+    return fitnessData.filter(f => inRange(f.date, ranges.trends)).map(f => ({
       value: [f.date, f.paces[fitnessDist]],
       meta: f,
       symbolSize: fitnessPinned && f.date === fitnessSelected ? 11 : 7,
@@ -478,9 +588,9 @@
   }
 
   function initFitnessChart(fitness) {
-    if (!fitness.length) return;
+    if (!fitness.length) return settle('section-fitness', false);
     fitnessData = fitness;
-    document.getElementById('section-fitness').style.display = '';
+    settle('section-fitness');
 
     const theme = chartTheme();
 
@@ -503,6 +613,7 @@
       },
       xAxis: {
         type: 'time',
+        ...axisBounds(ranges.trends),
         axisLine: { lineStyle: { color: theme.gridline } },
         axisTick: { show: false },
         axisLabel: { fontSize: 11, color: theme.muted },
@@ -565,8 +676,7 @@
         btn.classList.add('active');
         fitnessDist = btn.dataset.dist;
         fitnessChart.setOption({ series: [{ data: fitnessPoints(theme) }] });
-        const stat = document.getElementById('stat-fitness');
-        if (stat) stat.innerHTML = fitnessStatHTML();
+        updateFitnessStat();
       });
     });
 
@@ -578,13 +688,10 @@
       fitnessChart.setOption({ series: [{ data: fitnessPoints(theme) }] });
     });
 
-    window.addEventListener('resize', () => fitnessChart.resize());
-  }
-
-  async function loadHrPace() {
-    const res = await fetch('/api/hr-pace-heatmap');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    tabCharts.trends.push(fitnessChart);
+    rangeSubs.trends.push(range => {
+      fitnessChart.setOption({ xAxis: axisBounds(range), series: [{ data: fitnessPoints(theme) }] });
+    });
   }
 
   const HR_BUCKET_WIDTH = 5;
@@ -702,9 +809,8 @@
 
   // Period A, optionally compared against period B; each a quarter range.
   function initHrPace({ points, activities }) {
-    const section = document.getElementById('section-efficiency');
-    if (!points.length) return;
-    section.style.display = '';
+    if (!points.length) return settle('section-efficiency', false);
+    settle('section-efficiency');
 
     const theme = chartTheme();
     const colors = { a: theme.series[0], b: theme.series[1] };
@@ -996,7 +1102,7 @@
     steadyToggle.addEventListener('change', () => render());
 
     render();
-    window.addEventListener('resize', () => chart.resize());
+    tabCharts.trends.push(chart);
   }
 
   // ---- Easy-run efficiency -------------------------------------------------
@@ -1009,15 +1115,9 @@
   const EASY_EF_WINDOW_WEEKS = EASY_EF_WINDOW_DAYS / 7;
   const EASY_EF_MAX_MISSING_WEEKS = 1;
 
-  async function loadEasyEfficiency() {
-    const res = await fetch('/api/easy-efficiency');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  }
-
   function initEasyEfficiency(runs) {
-    if (!runs || !runs.length) return;
-    document.getElementById('section-easy-ef').style.display = '';
+    if (!runs || !runs.length) return settle('section-easy-ef', false);
+    settle('section-easy-ef');
     const theme = chartTheme();
     const chart = echarts.init(document.getElementById('chart-easy-ef'));
     const gradeToggle = document.getElementById('easy-ef-grade');
@@ -1027,7 +1127,7 @@
 
     const quarters = [...new Set(runs.map(r => quarterOf(r.start_date)))].sort();
     const firstQ = quarters[0], lastQ = quarters[quarters.length - 1];
-    let range = { from: firstQ, to: lastQ };
+    let range = { from: firstQ, to: lastQ }; // year-over-year mode's quarters; the timeline follows the tab's range
     const rangeBtn = document.getElementById('easy-ef-range');
 
     let mode = 'timeline';
@@ -1117,6 +1217,7 @@
     };
 
     function renderTimeline(data) {
+      const view = ranges.trends;
       // Axis spans the 1st-99th percentile of runs, so a few runs with a bad
       // heart-rate reading sit off the chart rather than squash the rest.
       const sorted = data.map(r => r.value).sort((a, b) => a - b);
@@ -1137,6 +1238,7 @@
         },
         xAxis: {
           type: 'time',
+          ...axisBounds(view),
           axisLabel: { fontSize: 11, color: theme.muted, hideOverlap: true },
           axisLine: { lineStyle: { color: theme.gridline } },
           splitLine: { show: false },
@@ -1217,11 +1319,16 @@
     function render() {
       syncTabs();
       try { localStorage.setItem(EASY_EF_STORE_KEY, JSON.stringify({ mode, range, grade: gradeToggle.checked, heat: heatToggle.checked })); } catch (_) {}
+      rangeBtn.parentElement.style.display = mode === 'yoy' ? '' : 'none';
       rangeBtn.innerHTML = `<span class="dot" style="background:${theme.accent}"></span><span class="filter-label">${quarterRangeText(range)}</span>`;
       // Rolling medians come from every run, so a range's first weeks still
       // have a full window behind them.
       const all = withEf();
-      const data = all.filter(r => { const q = quarterOf(r.start_date); return q >= range.from && q <= range.to; });
+      const data = all.filter(r => {
+        if (mode === 'timeline') return inRange(r.start_date, ranges.trends);
+        const q = quarterOf(r.start_date);
+        return q >= range.from && q <= range.to;
+      });
       if (!data.length) {
         chart.clear();
         caption.textContent = 'No easy runs in this range';
@@ -1245,21 +1352,22 @@
     heatToggle.addEventListener('change', render);
 
     render();
-    window.addEventListener('resize', () => chart.resize());
+    tabCharts.trends.push(chart);
+    rangeSubs.trends.push(render);
   }
 
-  const LOAD_WEEKS = 26;
+  // The newest response of each Load tab endpoint; a range inside the span
+  // it was fetched for reuses it. The server reads 28 days of lead-in before
+  // the window, so the ratio is right at the window's first day.
+  const loadWindows = { load: null, intensity: null };
 
-  async function loadIntensity() {
-    const res = await fetch(`/api/intensity-distribution?weeks=${LOAD_WEEKS}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  }
-
-  async function loadLoad() {
-    const res = await fetch(`/api/load?weeks=${LOAD_WEEKS}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+  function loadWindow(kind, path, range) {
+    const have = loadWindows[kind];
+    if (have && have.from <= range.from && have.to >= range.to) return have.promise;
+    const weeks = Math.ceil((dayMs(range.to) - dayMs(range.from)) / WEEK_MS) + 1;
+    const entry = loadWindows[kind] = { ...range, promise: fetchJson(`${path}?weeks=${weeks}&end=${range.to}`) };
+    entry.promise.catch(() => { if (loadWindows[kind] === entry) loadWindows[kind] = null; });
+    return entry.promise;
   }
 
   function shortDay(dateStr) {
@@ -1278,27 +1386,28 @@
     return classified > 0 ? Math.round(100 * z.easy / classified) : null;
   }
 
-  function initIntensity(data) {
-    if (!data || !data.weeks.length) return;
-    document.getElementById('section-intensity').style.display = '';
+  function weekStart(iso) {
+    const d = new Date(`${iso}T00:00:00`);
+    d.setDate(d.getDate() - (d.getDay() + 6) % 7);
+    return isoDate(d);
+  }
+
+  // Returns show(data, range), which draws the weeks of `data` inside `range`.
+  function makeIntensityPanel() {
     const theme = chartTheme();
     const colors = zoneColors(theme);
-    const b = data.hr_bounds_bpm;
-    document.getElementById('intensity-desc').textContent =
-      (b ? `Weekly running time by zone · HR: easy under ${b.easy_max} bpm (80% of max), moderate to ${b.moderate_max} (88%), hard above · `
-         : 'Weekly running time by zone · no max HR configured, so HR time is unclassified · ')
-      + "Pace: each lap's heat-adjusted pace vs the prior month's fitness zones (slower than marathon pace = easy, marathon pace = moderate, threshold and faster = hard)";
-
-    let mode = 'hr';
     const chart = echarts.init(document.getElementById('chart-intensity'));
+    tabCharts.load.push(chart);
+    let mode = 'hr', data, range;
 
     function render() {
+      const weeks = data.weeks.filter(w => inRange(w.week_start, { ...range, from: weekStart(range.from) }));
       const series = ZONE_KEYS.map(k => ({
         name: ZONE_LABEL[k],
         type: 'bar',
         stack: 'zones',
         barMaxWidth: 18,
-        data: data.weeks.map(w => [w.week_start, Math.round(w[mode][k] / 60)]),
+        data: weeks.map(w => [w.week_start, Math.round(w[mode][k] / 60)]),
         itemStyle: { color: colors[k] },
       })).filter(s => s.name !== 'Unclassified' || s.data.some(d => d[1] > 0));
 
@@ -1312,7 +1421,7 @@
           borderColor: theme.gridline,
           textStyle: { fontSize: 12, color: theme.text },
           formatter(params) {
-            const w = data.weeks[params[0].dataIndex];
+            const w = weeks[params[0].dataIndex];
             const z = w[mode];
             const share = easyShare(z);
             const rows = ZONE_KEYS.filter(k => z[k] > 0)
@@ -1322,6 +1431,10 @@
         },
         xAxis: {
           type: 'time',
+          // Bars are centred on their Monday: start half a week early so the
+          // first one stays inside the plot.
+          min: dayMs(weekStart(range.from)) - 3.5 * 86400000,
+          max: dayMs(range.to),
           axisLine: { lineStyle: { color: theme.gridline } },
           axisTick: { show: false },
           axisLabel: { fontSize: 11, color: theme.muted },
@@ -1341,13 +1454,14 @@
         series,
       }, { replaceMerge: ['series'] });
 
-      const hrShare = easyShare(data.totals.hr);
-      const paceShare = easyShare(data.totals.pace);
+      const sum = m => Object.fromEntries(ZONE_KEYS.map(k => [k, weeks.reduce((t, w) => t + w[m][k], 0)]));
       const parts = [];
+      const hrShare = easyShare(sum('hr'));
+      const paceShare = easyShare(sum('pace'));
       if (hrShare != null) parts.push(`${hrShare}% easy by HR`);
       if (paceShare != null) parts.push(`${paceShare}% easy by pace`);
       document.getElementById('intensity-caption').textContent =
-        parts.length ? `Last ${data.weeks.length} weeks: ${parts.join(' · ')}` : '';
+        parts.length ? `${weeks.length} weeks: ${parts.join(' · ')}` : '';
     }
 
     document.querySelectorAll('#intensity-tabs .mode-tab').forEach(btn => {
@@ -1359,22 +1473,53 @@
       });
     });
 
-    render();
-    window.addEventListener('resize', () => chart.resize());
+    return (d, r) => {
+      data = d;
+      range = r;
+      const b = d.hr_bounds_bpm;
+      document.getElementById('intensity-desc').textContent =
+        (b ? `Weekly running time by zone · HR: easy under ${b.easy_max} bpm (80% of max), moderate to ${b.moderate_max} (88%), hard above · `
+           : 'Weekly running time by zone · no max HR configured, so HR time is unclassified · ')
+        + "Pace: each lap's heat-adjusted pace vs the prior month's fitness zones (slower than marathon pace = easy, marathon pace = moderate, threshold and faster = hard)";
+      settle('section-intensity');
+      render();
+    };
   }
 
-  function initLoad(data) {
-    const caption = document.getElementById('load-caption');
-    if (!data) return;
-    document.getElementById('section-load').style.display = '';
-    if (data.note || !data.days.length) {
-      caption.textContent = data.note ?? '';
-      return;
-    }
-    const { charts, captionText } = renderLoadCharts(
-      document.getElementById('chart-acwr'), document.getElementById('chart-monotony'), data);
-    caption.textContent = captionText;
-    window.addEventListener('resize', () => charts.forEach(c => c.resize()));
+  // Returns show(data, range), which draws the days of `data` inside `range`.
+  function makeLoadPanel() {
+    let charts = null;
+    return (data, range) => {
+      const caption = document.getElementById('load-caption');
+      settle('section-load');
+      const days = data.days.filter(d => inRange(d.date, range));
+      if (data.note || !days.length) {
+        charts?.forEach(c => c.clear());
+        caption.textContent = data.note ?? '';
+        return;
+      }
+      // echarts.init hands back the chart already on an element, so each call redraws the same two.
+      const out = renderLoadCharts(
+        document.getElementById('chart-acwr'), document.getElementById('chart-monotony'),
+        { ...data, days, current: days[days.length - 1] });
+      caption.textContent = out.captionText;
+      if (!charts) {
+        charts = out.charts;
+        tabCharts.load.push(...charts);
+      }
+    };
+  }
+
+  function startLoadTab() {
+    const panels = [
+      { kind: 'load', path: '/api/load', section: 'section-load', caption: 'load-caption', label: 'load', show: makeLoadPanel() },
+      { kind: 'intensity', path: '/api/intensity-distribution', section: 'section-intensity', caption: 'intensity-caption', label: 'intensity', show: makeIntensityPanel() },
+    ];
+    const apply = range => panels.forEach(p => loadWindow(p.kind, p.path, range)
+      .then(data => { if (ranges.load === range) p.show(data, range); })
+      .catch(sectionError(p.section, p.caption, p.label)));
+    rangeSubs.load.push(apply);
+    apply(ranges.load);
   }
 
   const WEEK_MS = 7 * 24 * 3600 * 1000;
@@ -1392,7 +1537,7 @@
     // at DST transitions and lands on the wrong date.
     const d = new Date(weeks[0].monday + 'T00:00:00');
     while (true) {
-      const monday = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const monday = isoDate(d);
       out.push({ monday, miles: byMonday.get(monday) ?? 0 });
       if (monday >= lastMonday) break;
       d.setDate(d.getDate() + 7);
@@ -1413,9 +1558,7 @@
     const theme = chartTheme();
     const { weeks, periods, builds, races } = data;
 
-    document.getElementById('section-chart').style.display = '';
-    document.getElementById('subtitle').textContent =
-      `${weeks.length} weeks · ${periods.length} periods · ${builds.length} builds · ${races.length} races`;
+    settle('section-chart');
 
     const barData = weeks.map(w => [w.monday, w.miles]);
     const rollData = rollingAvg(fullWeeksFrom(weeks));
@@ -1465,9 +1608,12 @@
     });
 
     const chart = echarts.init(document.getElementById('chart-history'));
-    const lastDate = weeks.length ? dayMs(weeks[weeks.length - 1].monday) : Date.now();
-    const twoYearsAgo = lastDate - 2 * 365 * 24 * 3600 * 1000;
-    const firstDate = weeks.length ? dayMs(weeks[0].monday) : lastDate;
+    const lastMs = dayMs(weeks[weeks.length - 1].monday);
+    const firstMs = dayMs(weeks[0].monday);
+    const zoomSpan = r => {
+      const start = Math.max(dayMs(r.from), firstMs);
+      return [start, Math.max(Math.min(dayMs(r.to), lastMs), start + WEEK_MS)];
+    };
 
     // Bar mode below the wide-zoom threshold, line (rolling avg) above it —
     // same markArea/markLine attached either way so bands/race lines persist.
@@ -1498,7 +1644,8 @@
       }];
     }
 
-    let currentMode = (lastDate - Math.max(twoYearsAgo, firstDate)) > WIDE_ZOOM_SPAN_MS ? 'line' : 'bar';
+    const [zoomStart, zoomEnd] = zoomSpan(ranges.trends);
+    let currentMode = zoomEnd - zoomStart > WIDE_ZOOM_SPAN_MS ? 'line' : 'bar';
 
     chart.setOption({
       animation: false,
@@ -1519,8 +1666,8 @@
         axisLine: { lineStyle: { color: theme.gridline } },
         axisTick: { show: false },
         axisLabel: { fontSize: 11, color: theme.muted },
-        min: firstDate,
-        max: lastDate,
+        min: firstMs,
+        max: lastMs,
       },
       yAxis: {
         type: 'value',
@@ -1534,10 +1681,10 @@
         axisLabel: { fontSize: 11, color: theme.muted },
       },
       dataZoom: [
-        { type: 'inside', startValue: twoYearsAgo, endValue: lastDate },
+        { type: 'inside', startValue: zoomStart, endValue: zoomEnd },
         {
           type: 'slider', bottom: 12, height: 24,
-          startValue: twoYearsAgo, endValue: lastDate,
+          startValue: zoomStart, endValue: zoomEnd,
           borderColor: theme.gridline,
           textStyle: { color: theme.muted, fontSize: 10 },
           fillerColor: withAlpha(theme.accent, 0.12),
@@ -1547,46 +1694,85 @@
       series: seriesFor(currentMode),
     });
 
-    chart.on('datazoom', () => {
-      const dz = chart.getOption().dataZoom[0];
-      const span = dz.endValue - dz.startValue;
-      const mode = span > WIDE_ZOOM_SPAN_MS ? 'line' : 'bar';
+    function syncMode(spanMs) {
+      const mode = spanMs > WIDE_ZOOM_SPAN_MS ? 'line' : 'bar';
       if (mode === currentMode) return;
       currentMode = mode;
       chart.setOption({ series: seriesFor(mode) }, { replaceMerge: ['series'] });
-    });
+    }
 
-    window.addEventListener('resize', () => chart.resize());
+    // A zoom becomes the tab's custom range. A range set elsewhere is pushed
+    // into the zoom silently, so it does not come back as a zoom event.
+    chart.on('datazoom', () => {
+      const dz = chart.getOption().dataZoom[0];
+      syncMode(dz.endValue - dz.startValue);
+      setRange('trends', { preset: 'custom', from: isoDate(new Date(dz.startValue)), to: isoDate(new Date(dz.endValue)) }, onRange);
+    });
+    function onRange(range) {
+      const [startValue, endValue] = zoomSpan(range);
+      chart.dispatchAction({ type: 'dataZoom', startValue, endValue }, { silent: true });
+      syncMode(endValue - startValue);
+    }
+    rangeSubs.trends.push(onRange);
+    tabCharts.trends.push(chart);
   }
 
   // Section loaders report their own failure in place rather than hiding the section.
   function sectionError(sectionId, captionId, label) {
     return err => {
-      document.getElementById(sectionId).style.display = '';
+      settle(sectionId);
       document.getElementById(captionId).textContent = `Error loading ${label}: ${err.message}`;
-      return null;
     };
   }
 
-  Promise.all([
-    load(),
-    loadFitnessFull().catch(() => []),
-    loadHrPace().catch(() => ({ points: [], activities: [] })),
-    loadIntensity().catch(sectionError('section-intensity', 'intensity-caption', 'intensity')),
-    loadLoad().catch(sectionError('section-load', 'load-caption', 'load')),
-  ]).then(([data, fitness, hrPace, intensity, loadData]) => {
+  const weeklyP = fetchJson('/api/weekly-history');
+  const fitnessP = fetchJson('/api/fitness-trend-full').catch(() => []);
+
+  // Resolves once the tabs' ranges are set; All time needs the first synced week.
+  const rangesReady = weeklyP.then(data => {
     if (!data.weeks.length) {
       renderEmpty();
+      document.querySelectorAll('#training-tabs, .tab-panel').forEach(el => { el.style.display = 'none'; });
       return;
     }
-    initFitnessChart(fitness);
-    initLoad(loadData);
-    initIntensity(intensity);
-    initHrPace(hrPace);
-    loadEasyEfficiency().then(initEasyEfficiency).catch(sectionError('section-easy-ef', 'easy-ef-caption', 'easy-run efficiency'));
-    renderChart(data);
-    renderStatStrip(data);
-  }).catch(err => {
+    firstDate = data.weeks[0].monday;
+    TAB_KEYS.forEach(tab => { ranges[tab] = restoreRange(tab); mountPicker(tab); });
+  });
+
+  // Each tab fetches and draws only when first shown, so a hidden tab never competes with the visible one.
+  const TAB_START = {
+    trends() {
+      fitnessP.then(initFitnessChart);
+      fetchJson('/api/hr-pace-heatmap').catch(() => ({ points: [], activities: [] })).then(initHrPace);
+      fetchJson('/api/easy-efficiency').then(initEasyEfficiency).catch(sectionError('section-easy-ef', 'easy-ef-caption', 'easy-run efficiency'));
+      weeklyP.then(renderChart).catch(sectionError('section-chart', 'history-caption', 'weekly mileage'));
+    },
+    load: startLoadTab,
+  };
+  const startedTabs = new Set();
+
+  function activateTab(key) {
+    if (!TAB_KEYS.includes(key)) key = 'trends';
+    activeTab = key;
+    document.querySelectorAll('#training-tabs .mode-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === key));
+    TAB_KEYS.forEach(k => { document.getElementById(`tab-${k}`).hidden = k !== key; });
+    tabCharts[key].forEach(c => c.resize());
+    history.replaceState(null, '', `${location.search}#${key}`);
+    if (!startedTabs.has(key)) {
+      startedTabs.add(key);
+      rangesReady.then(() => { if (firstDate) TAB_START[key](); });
+    }
+  }
+
+  document.querySelectorAll('#training-tabs .mode-tab').forEach(btn => {
+    btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+  });
+  window.addEventListener('resize', () => tabCharts[activeTab].forEach(c => c.resize()));
+  window.addEventListener('hashchange', () => activateTab(location.hash.slice(1)));
+  activateTab(location.hash.slice(1));
+
+  fitnessP.then(data => { fitnessData = data; updateFitnessStat(); });
+  weeklyP.then(renderHeader).catch(err => {
     document.getElementById('subtitle').textContent = `Error: ${err.message}`;
   });
 </script>

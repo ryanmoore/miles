@@ -1,9 +1,11 @@
+from contextlib import contextmanager
 from datetime import date, timedelta
 
 import pytest
+from fastapi.testclient import TestClient
 from helpers import insert_activity, memory_db
 
-from miles import db, heat, intensity, load
+from miles import api, db, heat, intensity, load, load_api
 
 TODAY = date(2026, 10, 21)  # a Wednesday
 
@@ -179,3 +181,22 @@ def test_a_non_run_without_hr_adds_nothing_and_is_counted():
 
     assert result["unscored_other"] == 1 and result["estimated_runs"] == 0
     assert result["days"][-2]["load"] == 0.0
+
+
+def test_endpoints_serve_a_multi_year_window_ending_in_the_past(monkeypatch):
+    @contextmanager
+    def fake_connection(_connect):
+        yield conn
+
+    conn = memory_db()
+    db.upsert_athlete(conn, max_hr=200, long_run_floor_miles=None)
+    insert_activity(conn, 1, start_date="2020-03-10T08:00:00", moving_time_s=1800, distance_m=5000, average_heartrate=150)
+    monkeypatch.setattr(load_api.db, "connection", fake_connection)
+    client = TestClient(api.app)
+
+    days = client.get("/api/load?weeks=4&end=2020-03-15").json()["days"]
+    assert (days[0]["date"], days[-1]["date"]) == ("2020-02-17", "2020-03-15")
+    assert next(d["load"] for d in days if d["date"] == "2020-03-10") > 0
+
+    weeks = client.get("/api/intensity-distribution?weeks=260&end=2020-03-15").json()["weeks"]
+    assert (len(weeks), weeks[-1]["week_start"], weeks[-1]["hr"]["easy"]) == (260, "2020-03-09", 1800)

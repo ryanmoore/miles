@@ -445,7 +445,7 @@ function renderLoadCharts(acwrEl, monotonyEl, data) {
 
   const c = data.current;
   const parts = [];
-  if (c && c.acwr != null) parts.push(`Today: ratio ${c.acwr.toFixed(2)} (${bandLabel[c.acwr_band].toLowerCase()})`);
+  if (c && c.acwr != null) parts.push(`${c.date === new Date().toLocaleDateString('en-CA') ? 'Today' : dayLabel(c.date)}: ratio ${c.acwr.toFixed(2)} (${bandLabel[c.acwr_band].toLowerCase()})`);
   if (c && c.monotony != null) parts.push(`monotony ${c.monotony.toFixed(2)}${c.monotony > MONOTONY_HIGH ? ' (high)' : ''}`);
   if (data.estimated_runs) parts.push(`${data.estimated_runs} run${data.estimated_runs === 1 ? '' : 's'} without HR charged the median rate`);
   if (data.unscored_other) parts.push(`${data.unscored_other} non-run activit${data.unscored_other === 1 ? 'y' : 'ies'} without HR not counted`);

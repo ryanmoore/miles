@@ -345,7 +345,7 @@ def test_compare_plans_aligns_by_date_when_weeks_overlap_else_by_position(monkey
     assert [w["week"] for w in by_date["weeks"]] == [mon(0), mon(1), mon(2)]
     week0, week1 = by_date["weeks"][0]["sides"], by_date["weeks"][1]["sides"]
     assert week0[1] is None and week0[2]["miles"] == 10.0 and "day_differences" not in week0[0]
-    assert week1[1]["miles"] == 31.0 and week1[2] is None
+    assert week1[1]["miles"] == 21.0 and week1[2] is None  # the days' sum, not the 31 mi target
     assert week1[1]["day_differences"] == [
         {"day": "Mon", "baseline": "rest", "side": "workout 8 mi Hills"},
         {"day": "Tue", "baseline": "rest", "side": "easy 5 mi"},
@@ -353,7 +353,7 @@ def test_compare_plans_aligns_by_date_when_weeks_overlap_else_by_position(monkey
     ]
     assert week0[2]["day_differences"][0] == {"day": "Mon", "baseline": "rest", "side": "long 10 mi"}
     assert by_date["shared_weeks_note"] == f"Figures cover the 2 weeks all plans share, {mon(1)} to {mon(2)}"
-    assert [(s["weeks"], s["total_miles"]) for s in by_date["sides"]] == [(3, 63.0), (2, 63.0), (1, 0.0)]
+    assert [(s["weeks"], s["total_miles"]) for s in by_date["sides"]] == [(3, 63.0), (2, 53.0), (1, 0.0)]
 
     # Pairing is by position unless every other side overlaps the baseline.
     ordinal = tool("compare_plans", sides=[
@@ -458,3 +458,25 @@ def test_compare_summaries_cover_the_shared_weeks_and_strength_only_days_are_lis
     by_date = tool("compare_plans", sides=[{"plan_id": long_plan}, {"plan_id": long_plan, "from_week": mon(1), "to_week": mon(9)}])
     assert by_date["shared_weeks_note"] == f"Figures cover the 9 weeks all plans share, {mon(1)} to {mon(9)}"
     assert tool("compare_plans", sides=[{"plan_id": long_plan}, {"plan_id": long_plan}])["shared_weeks_note"] is None
+
+
+def test_compare_counts_a_week_at_its_days_sum_and_falls_back_to_its_target(monkeypatch):
+    conn = memory_db()
+    monkeypatch.setattr(mcp_server, "_conn", lambda: conn)
+    tool = lambda name, **args: call_tool(mcp_server.mcp, name, args)  # noqa: E731
+    day = lambda w, i: (THIS_MONDAY + timedelta(weeks=w, days=i)).isoformat()  # noqa: E731
+
+    plan_id, version_id = plan.start_plan_draft(conn, title="Ranges")
+    plan.upsert_draft_weeks(conn, version_id, [
+        {"week_start": day(w, 0), "target_miles": 70.0, "target_miles_hi": 75.0, "target_workouts": 1, "phase": "base"} for w in range(3)
+    ])
+    plan.upsert_draft_days(conn, version_id, [
+        {"date": day(0, 0), "slot": "easy", "target_miles": 40.0},
+        {"date": day(0, 1), "slot": "long", "target_miles": 34.0},
+        {"date": day(2, 0), "slot": "easy", "target_miles": 40.0},
+        {"date": day(2, 1), "slot": "long", "target_minutes": 120.0},
+    ])
+    plan.commit_plan(conn, plan_id, note="ok")
+
+    weeks = tool("compare_plans", sides=[{"plan_id": plan_id}, {"plan_id": plan_id}])["weeks"]
+    assert [(w["sides"][0]["miles"], w["sides"][0]["miles_is_target"]) for w in weeks] == [(74.0, False), (72.5, True), (72.5, True)]

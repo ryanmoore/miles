@@ -3079,8 +3079,20 @@
       key, data, title: data.plan.title + (s.draft ? ' (draft)' : ''), uncommitted: isUncommitted(data), href: `?plan=${data.plan.plan_id}${s.draft ? '&draft=1' : ''}#plan`,
       cells: groupSessionsByDate(days), runs: new Map(),
       popover: planData({ ...data, days, actual: {} }),
-      weeks: weeks.map(w => ({ week_start: w.week_start, miles: repMiles(w), workouts: w.target_workouts, long: w.target_long_run_miles })),
+      weeks: weeks.map(w => ({ week_start: w.week_start, ...weekMiles(w, days), workouts: w.target_workouts, long: w.target_long_run_miles })),
     };
+  }
+
+  // A plan week's compare miles and whether they are its target: the sum of its
+  // planned days when it has run days and none lacks miles, else the week's
+  // target (repMiles). plan_compare._week_miles applies the same rule.
+  const COMPARE_RUN_SLOTS = ['easy', 'workout', 'long', 'race'];
+  function weekMiles(w, days) {
+    const run = days.filter(d => mondayOf(d.date) === w.week_start && COMPARE_RUN_SLOTS.includes(d.slot));
+    const total = Math.round(run.reduce((t, d) => t + (d.target_miles ?? 0), 0) * 10) / 10;
+    return total > 0 && run.every(d => d.target_miles != null)
+      ? { miles: total, isTarget: false }
+      : { miles: repMiles(w), isTarget: true };
   }
 
   const pairsByDate = sides => sides.slice(1).every(s => s.weeks.some(w => sides[0].weeks.some(b => b.week_start === w.week_start)));
@@ -3163,7 +3175,7 @@
   function renderCmpChart(...loaded) {
     const sides = loaded.slice(0, CMP_SIDES.length); // the last input is echartsReady
     const { rows } = alignWeeks(sides);
-    const seriesName = s => s.actual ? `${s.title} (actual miles)` : `${s.title} (planned target)`;
+    const seriesName = s => s.actual ? `${s.title} (actual miles)` : `${s.title} (planned)`;
     let view = 'lines';
     try { if (localStorage.getItem(CMP_VIEW_KEY) === 'bars') view = 'bars'; } catch { /* storage unavailable */ }
     slotEl('cmpchart').insertAdjacentHTML('beforeend', `
@@ -3190,8 +3202,8 @@
     };
     const barSeries = (s, i) => ({ ...seriesFor(s, i), type: 'bar', itemStyle: { color: cmpColor(s.key) }, barGap: theme.compact ? '0%' : '10%', barCategoryGap: theme.compact ? '15%' : '30%' });
     const desc = {
-      lines: 'Planned target per week (a range week at its midpoint) · actual synced miles for runs · the first side is the wide band, the others run on top of it',
-      bars: 'Planned target per week (a range week at its midpoint) · actual synced miles for runs · one bar per side per week',
+      lines: 'Planned miles per week (days' sum, else the week target at its range midpoint) · actual synced miles for runs · the first side is the wide band, the others run on top of it',
+      bars: 'Planned miles per week (days' sum, else the week target at its range midpoint) · actual synced miles for runs · one bar per side per week',
     };
     const legendNote = i => view === 'lines' ? ` <span style="color:var(--muted)">· ${CMP_LINE_STYLES[i].glyph}</span>` : '';
     function draw() {
@@ -3247,7 +3259,7 @@
     const runOpts = { showType: true };
     const rowLabel = (s, w) => `<div class="cmp-id" title="${esc(s.title)}">${dot(s)}${esc(s.title)}</div>
       ${byDate ? '' : `<div class="cmp-sub">${esc(weekRangeLabel(w.week_start))}</div>`}
-      <div>${w.miles != null ? `<span class="cmp-mi">${trimMiles(w.miles)} mi</span>` : ''}<span class="cmp-sub">${[w.workouts != null ? `${w.workouts} workout${w.workouts === 1 ? '' : 's'}` : null, w.long != null ? `long ${trimMiles(w.long)}` : null].filter(Boolean).join(' · ')}</span></div>`;
+      <div>${w.miles != null ? `<span class="cmp-mi">${trimMiles(w.miles)} mi${w.isTarget ? ' target' : ''}</span>` : ''}<span class="cmp-sub">${[w.workouts != null ? `${w.workouts} workout${w.workouts === 1 ? '' : 's'}` : null, w.long != null ? `long ${trimMiles(w.long)}` : null].filter(Boolean).join(' · ')}</span></div>`;
     const line = (s, w) => w
       ? `<div class="cmp-line" data-side="${s.key}"><div class="cmp-line-label">${rowLabel(s, w)}</div>${weekRow(w, s.cells, s.runs, none, runOpts)}</div>`
       : `<div class="cmp-line"><div class="cmp-line-label"><div class="cmp-id" title="${esc(s.title)}">${dot(s)}${esc(s.title)}</div></div><div class="cmp-empty">No week on this side</div></div>`;

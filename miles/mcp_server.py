@@ -1829,7 +1829,9 @@ def compare_plans(sides: list[dict[str, object]]) -> str:
     If every other side has a week in common with the baseline's they are
     paired by date (a week some sides lack pairs with null); otherwise all
     sides pair by position, labelled Week 1, 2, ... Returns per-side summaries
-    and, per pairing, each side's week numbers plus, for every side after the
+    and, per pairing, each side's week numbers (a plan week's `miles` is its
+    planned days' sum when all its run days carry miles, else its target, with
+    `miles_is_target` true) plus, for every side after the
     first, day_differences: the weekdays whose session types, total miles (by
     more than max(1 mi, 15% of the larger day)) or (between two plans) titles
     differ from the baseline's; a strength session on one side only is listed

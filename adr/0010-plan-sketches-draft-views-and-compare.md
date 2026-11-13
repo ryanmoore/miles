@@ -33,8 +33,10 @@ but a revision draft had no page, and throwaway drafts piled up as candidates.
 - **Alignment.** If every other side has a week in common with the baseline,
   weeks pair by date and a week only some sides have pairs with nothing for
   the rest. Otherwise all sides pair by position (Week 1 beside Week 1), each
-  keeping its own dates. A week's mileage is its target (a range at its
-  midpoint), or the synced miles for runs.
+  keeping its own dates. A plan week's mileage is the sum of its planned
+  days when it has run days and each carries miles (the plan page's figure),
+  else its target (a range at its midpoint, marked as a target); a runs
+  side's is the synced miles.
 - **Shading is relative to the baseline.** Each non-baseline day is tinted by
   how far it differs from the baseline's same weekday; the baseline row is
   never shaded. A mileage gap of at most max(1 mi, 15% of the larger day) with

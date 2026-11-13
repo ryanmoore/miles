@@ -45,7 +45,8 @@ Session = tuple[str, float | None, str | None]
 
 class SideWeek(TypedDict):
     week_start: str
-    miles: float | None  # the weekly chart's number: a range week's midpoint
+    miles: float | None  # the weekly chart's number, see _week_miles
+    miles_is_target: bool
     workouts: int | None
     long_run_miles: float | None
     days: dict[str, list[Session]]  # weekday name -> sessions, rest days omitted
@@ -105,8 +106,15 @@ def get_actual_weeks(from_week: str, to_week: str) -> ActualWeeksResponse:
     return actual_weeks(_conn(), *window)
 
 
-def _rep_miles(lo: float | None, hi: float | None) -> float | None:
-    return lo if hi is None or lo is None else (lo + hi) / 2
+def _week_miles(w: PlanWeekRow, check: plan.WeekMileageCheck) -> tuple[float | None, bool]:
+    """A plan week's miles and whether they are its target. The sum of its
+    planned days when it has run days and none lacks miles (the plan page's
+    figure, `compute_week_mileage`); otherwise the week's target, a range at
+    its midpoint. plan.html's weekMiles applies the same rule."""
+    if check["day_miles_total"] > 0 and not check["days_missing_miles"]:
+        return check["day_miles_total"], False
+    lo, hi = w["target_miles"], w["target_miles_hi"]
+    return (lo if hi is None or lo is None else (lo + hi) / 2), True
 
 
 def _sessions(days: list[PlanDayRow], week_start: str) -> dict[str, list[Session]]:
@@ -135,20 +143,16 @@ def _plan_side(conn: sqlite3.Connection, spec: Mapping[str, object]) -> Side:
     ]
     if not weeks:
         raise PlanValidationError(f"plan {plan_id} has no weeks in that range")
-    return {
-        "label": row["title"] + (" (draft)" if draft else ""),
-        "is_actual": False,
-        "weeks": [
-            {
-                "week_start": w["week_start"],
-                "miles": _rep_miles(w["target_miles"], w["target_miles_hi"]),
-                "workouts": w["target_workouts"],
-                "long_run_miles": w["target_long_run_miles"],
-                "days": _sessions(bundle["days"], w["week_start"]),
-            }
-            for w in weeks
-        ],
-    }
+    out: list[SideWeek] = []
+    checks = {c["week_start"]: c for c in plan.compute_week_mileage(weeks, bundle["days"])}
+    for w in weeks:
+        miles, is_target = _week_miles(w, checks[w["week_start"]])
+        out.append({
+            "week_start": w["week_start"], "miles": miles, "miles_is_target": is_target,
+            "workouts": w["target_workouts"], "long_run_miles": w["target_long_run_miles"],
+            "days": _sessions(bundle["days"], w["week_start"]),
+        })
+    return {"label": row["title"] + (" (draft)" if draft else ""), "is_actual": False, "weeks": out}
 
 
 def _actual_side(conn: sqlite3.Connection, spec: Mapping[str, object]) -> Side:
@@ -164,7 +168,7 @@ def _actual_side(conn: sqlite3.Connection, spec: Mapping[str, object]) -> Side:
         for name, r in runs:
             days.setdefault(name, []).append((RUN_TYPE_SLOT.get(r["run_type"], "easy"), r["distance_mi"], None))
         weeks.append({
-            "week_start": w["week_start"], "miles": w["actual_miles"], "workouts": w["actual_workouts"],
+            "week_start": w["week_start"], "miles": w["actual_miles"], "miles_is_target": False, "workouts": w["actual_workouts"],
             "long_run_miles": max((r["distance_mi"] for _, r in runs), default=None), "days": days,
         })
     return {"label": "Actual runs", "is_actual": True, "weeks": weeks}
@@ -288,7 +292,7 @@ def compare(conn: sqlite3.Connection, specs: Sequence[Mapping[str, object]]) -> 
             if w is None:
                 entries.append(None)
                 continue
-            entry: dict[str, object] = {k: w[k] for k in ("week_start", "miles", "workouts", "long_run_miles")}
+            entry: dict[str, object] = {k: w[k] for k in ("week_start", "miles", "miles_is_target", "workouts", "long_run_miles")}
             if i:
                 entry["day_differences"] = _day_diffs(cells[0], w, not sides[i]["is_actual"])
             entries.append(entry)

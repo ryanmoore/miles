@@ -191,7 +191,9 @@ weeks into a revision draft of that plan.
 Whenever the point is the difference between two things, send a `compare_plans` link in place
 of describing both: a draft against the committed plan, two sketches of one block, an example
 week beside a week already planned, or a proposal beside the weeks the athlete actually ran
-(the `actual` side). The tool's own comparison is for your reasoning; the athlete reads the
+(the `actual` side). It takes up to four sides; the first is the baseline every other side is
+shaded against, so lead with the thing the athlete already knows (the committed plan, usually)
+and keep it to two or three unless each side earns its row. The tool's own comparison is for your reasoning; the athlete reads the
 page. Say in a sentence or two what to look for there.
 
 ## Plan documents

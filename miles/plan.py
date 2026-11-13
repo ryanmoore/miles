@@ -67,6 +67,9 @@ _DAY_DIFF_FIELDS: tuple[str, ...] = ("slot", "title", "target_miles", "target_js
 # timezone edges where Strava's local start_date lands a day off race_date.
 RACE_MATCH_WINDOW_DAYS = 1
 
+# A sketch is deleted this long after its last write unless committed.
+SKETCH_TTL = timedelta(days=14)
+
 # Run slots contribute mileage; rest/strength never do.
 MILEAGE_SLOTS: frozenset[str] = frozenset({"easy", "workout", "long", "race"})
 # Tolerance (miles) absorbing per-day rounding when checking a week's authored
@@ -243,6 +246,7 @@ def _plan_row(row: sqlite3.Row) -> PlanRow:
         "goal_time_s": int(row["goal_time_s"]) if row["goal_time_s"] is not None else None,
         "status": row["status"],
         "created_at": row["created_at"],
+        "sketch_expires_at": row["sketch_expires_at"],
         "first_week": row["first_week"],
         "last_week": row["last_week"],
     }
@@ -327,7 +331,7 @@ _VERSION_COLS = "version_id, plan_id, version_n, created_at, committed_at, note,
 # A plan's race and week span come from its latest committed version, or its
 # draft when it has never been committed.
 _PLAN_SELECT = f"""
-    SELECT p.plan_id, p.title, p.status, p.created_at,
+    SELECT p.plan_id, p.title, p.status, p.created_at, p.sketch_expires_at,
            v.race_date, v.distance_bucket, v.goal_time_s,
            (SELECT MIN(week_start) FROM plan_weeks WHERE version_id = v.version_id) AS first_week,
            (SELECT MAX(week_start) FROM plan_weeks WHERE version_id = v.version_id) AS last_week
@@ -337,11 +341,13 @@ _PLAN_SELECT = f"""
 """
 
 
-def view_bundle(conn: sqlite3.Connection, plan_id: int) -> PlanVersionBundle | None:
+def view_bundle(conn: sqlite3.Connection, plan_id: int, *, draft: bool = False) -> PlanVersionBundle | None:
     """The version a plan is shown as: its latest committed version, or its
-    draft when it was never committed."""
+    draft when it was never committed. draft=True asks for the draft itself
+    (None when there is none)."""
     row = conn.execute(
-        "SELECT version_id FROM plan_versions WHERE plan_id = ? ORDER BY committed_at IS NULL, version_n DESC LIMIT 1",
+        "SELECT version_id FROM plan_versions WHERE plan_id = ? "
+        + ("AND committed_at IS NULL" if draft else "ORDER BY committed_at IS NULL, version_n DESC LIMIT 1"),
         [plan_id],
     ).fetchone()
     return get_version(conn, int(row["version_id"])) if row is not None else None
@@ -360,7 +366,8 @@ def get_plan(conn: sqlite3.Connection, plan_id: int) -> PlanRow | None:
 
 def list_plans(conn: sqlite3.Connection, where: str = "1") -> list[PlanRow]:
     """Plans matching a SQL condition on p (status), earliest weeks first;
-    never-authored drafts last."""
+    never-authored drafts last. Expired sketches are deleted first."""
+    prune_expired_sketches(conn)
     rows = [_plan_row(r) for r in conn.execute(_PLAN_SELECT + f" WHERE {where}")]
     return sorted(rows, key=lambda p: (p["first_week"] is None, p["first_week"] or "", p["plan_id"]))
 
@@ -368,11 +375,12 @@ def list_plans(conn: sqlite3.Connection, where: str = "1") -> list[PlanRow]:
 # --- roles (derived from dates, never stored) --------------------------------
 
 def plan_role(p: PlanRow, today: date) -> str:
-    """current | next | past | candidate | abandoned. A committed plan is
-    current while its weeks contain this week's Monday, next when they start
-    later, past once they have ended; a never-committed draft is a candidate."""
+    """current | next | past | candidate | sketch | abandoned. A committed plan
+    is current while its weeks contain this week's Monday, next when they start
+    later, past once they have ended; a never-committed draft is a candidate,
+    or a sketch when flagged short-lived."""
     if p["status"] == "draft":
-        return "candidate"
+        return "sketch" if p["sketch_expires_at"] else "candidate"
     if p["status"] == "abandoned":
         return "abandoned"
     monday = monday_of(today).isoformat()
@@ -773,7 +781,26 @@ def require_draft_version(conn: sqlite3.Connection, version_id: int) -> int:
         raise PlanValidationError(
             f"version {version_id} is already committed; only a draft version can be edited"
         )
+    conn.execute(
+        "UPDATE plans SET sketch_expires_at = ? WHERE plan_id = ? AND sketch_expires_at IS NOT NULL",
+        (_sketch_expiry(), row["plan_id"]),
+    )
     return int(row["plan_id"])
+
+
+def _sketch_expiry() -> str:
+    return (datetime.now(timezone.utc) + SKETCH_TTL).isoformat()
+
+
+def prune_expired_sketches(conn: sqlite3.Connection) -> None:
+    """Deletes sketches past their expiry exactly as discard_draft would.
+    Committed versions and ordinary drafts have no expiry and are never touched."""
+    rows = conn.execute(
+        "SELECT plan_id FROM plans WHERE status = 'draft' AND sketch_expires_at < ?",
+        [datetime.now(timezone.utc).isoformat()],
+    ).fetchall()
+    for r in rows:
+        discard_draft(conn, int(r["plan_id"]))
 
 
 def plan_start_monday(conn: sqlite3.Connection, plan_id: int) -> date | None:
@@ -829,10 +856,12 @@ def start_plan_draft(
     race_date: str | None = None,
     distance_bucket: str | None = None,
     goal_time_s: int | None = None,
+    sketch: bool = False,
 ) -> tuple[int, int]:
     """Creates a new plan, status='draft', plus its empty first (draft)
     version. Any number of draft plans may coexist with each other and with
-    committed ones; commit_plan is where overlap is rejected. Returns
+    committed ones; commit_plan is where overlap is rejected. A sketch expires
+    SKETCH_TTL after its last write unless committed. Returns
     (plan_id, version_id)."""
     if not title.strip():
         raise PlanValidationError("plan title must not be empty")
@@ -840,7 +869,8 @@ def start_plan_draft(
 
     created_at = datetime.now(timezone.utc).isoformat()
     cur = conn.execute(
-        "INSERT INTO plans (title, status, created_at) VALUES (?, 'draft', ?)", (title, created_at)
+        "INSERT INTO plans (title, status, created_at, sketch_expires_at) VALUES (?, 'draft', ?, ?)",
+        (title, created_at, _sketch_expiry() if sketch else None),
     )
     assert cur.lastrowid is not None
     plan_id = int(cur.lastrowid)
@@ -1380,7 +1410,7 @@ def commit_plan(conn: sqlite3.Connection, plan_id: int, *, note: str) -> int:
         (datetime.now(timezone.utc).isoformat(), note, version_id),
     )
     if plan["status"] != "active":
-        conn.execute("UPDATE plans SET status = 'active' WHERE plan_id = ?", [plan_id])
+        conn.execute("UPDATE plans SET status = 'active', sketch_expires_at = NULL WHERE plan_id = ?", [plan_id])
     conn.commit()
     return version_id
 

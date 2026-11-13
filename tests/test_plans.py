@@ -278,3 +278,36 @@ def test_invalid_steps_are_rejected_naming_the_day_and_step(target, message):
     with pytest.raises(plan.PlanValidationError, match=message) as e:
         plan.upsert_draft_days(conn, version_id, [day])
     assert "Reps" in str(e.value)
+
+
+def test_sketches_expire_unless_written_or_committed_and_drafts_have_a_view(monkeypatch):
+    conn = memory_db()
+    monkeypatch.setattr(mcp_server, "_conn", lambda: conn)
+    monkeypatch.setattr(plan_api, "_conn", lambda: conn)
+    tool = lambda name, **args: call_tool(mcp_server.mcp, name, args)  # noqa: E731
+
+    sketch = tool("start_plan_draft", title="Sketch", sketch=True)
+    plain = tool("start_plan_draft", title="Candidate")
+    sid, pid = sketch["plan"]["plan_id"], plain["plan"]["plan_id"]
+    assert sketch["url"].endswith(f"/plan.html?plan={sid}&draft=1#plan")
+    assert sketch["expires_at"] and plain["expires_at"] is None
+    assert {p["plan_id"]: p["role"] for p in tool("list_plans")} == {sid: "sketch", pid: "candidate"}
+
+    stale = "2000-01-01T00:00:00+00:00"
+    conn.execute("UPDATE plans SET sketch_expires_at = ? WHERE plan_id = ?", [stale, sid])
+    assert tool("set_draft_weeks", weeks=_weeks(0, 0), plan_id=sid)["expires_at"] > stale
+    conn.execute("UPDATE plans SET sketch_expires_at = ? WHERE plan_id = ?", [stale, sid])
+    assert [p["plan_id"] for p in tool("list_plans")] == [pid]
+
+    kept = tool("start_plan_draft", title="Kept", sketch=True)["plan"]["plan_id"]
+    tool("set_draft_weeks", weeks=_weeks(0, 0), plan_id=kept)
+    tool("commit_plan", note="ok", plan_id=kept)
+    conn.execute("UPDATE plans SET sketch_expires_at = ? WHERE plan_id = ?", [stale, kept])
+    assert {p["plan_id"]: p["role"] for p in tool("list_plans")} == {pid: "candidate", kept: "current"}
+
+    tool("start_revision_draft", plan_id=kept)
+    assert plan_api.get_plan(plan_id=kept, draft=True)["version"]["committed_at"] is None
+    assert plan_api.get_plan(plan_id=kept)["version"]["committed_at"] is not None
+    tool("discard_draft", plan_id=kept)
+    with pytest.raises(HTTPException, match="no draft"):
+        plan_api.get_plan(plan_id=kept, draft=True)

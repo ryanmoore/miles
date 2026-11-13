@@ -83,6 +83,7 @@ class PlanRow(TypedDict):
     goal_time_s: int | None
     status: str
     created_at: str
+    sketch_expires_at: str | None  # non-NULL marks a short-lived sketch (adr/0010)
     first_week: str | None
     last_week: str | None
 
@@ -252,7 +253,7 @@ def connection(opener: Callable[[], sqlite3.Connection] | None = None) -> Iterat
         conn.close()
 
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 def add_missing_columns(conn: sqlite3.Connection, table: str, *columns: str) -> bool:
@@ -414,6 +415,7 @@ def init_db(conn: sqlite3.Connection) -> None:
             created_at      TEXT NOT NULL
         )
     """)
+    add_missing_columns(conn, "plans", "sketch_expires_at TEXT")
     # Versions are immutable, append-only snapshots once committed — there is
     # no UPDATE path for a committed version. A version with committed_at NULL
     # is the one mutable draft (see plan.py); committing it stamps

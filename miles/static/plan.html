@@ -418,6 +418,11 @@
     .plan-view .plan-which { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.625rem; margin-bottom: 0.75rem; }
     .plan-view .plan-which-title { font-size: 1.125rem; font-weight: 650; color: var(--text); overflow-wrap: anywhere; }
     .plan-view .plan-which-race { font-size: 0.8125rem; color: var(--text-secondary); }
+    .plan-view .plan-which-link { font-size: 0.75rem; color: var(--accent); }
+    .plan-view .draft-banner {
+      font-size: 0.8125rem; margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; border-radius: 8px;
+      background: var(--pr-bg); border: 1px solid var(--series-3); color: var(--text);
+    }
 
     .plan-view .vs-chart-wrap { margin: 0.375rem 0; flex: 1 1 240px; max-width: 360px; }
     .plan-view .vs-chart-wrap svg { display: block; width: 100%; height: auto; }
@@ -2858,15 +2863,17 @@
 
   // The plan shown on the Plan tab (?plan=<id>); Today and Trends always use
   // the server's default, the current plan by date.
-  const SELECTED_PLAN = new URLSearchParams(location.search).get('plan');
+  const QUERY = new URLSearchParams(location.search);
+  const SELECTED_PLAN = QUERY.get('plan');
+  const DRAFT_VIEW = QUERY.get('draft') === '1';
 
-  async function loadPlanApi(path, planId) {
-    const res = await fetch(planId ? `${path}?plan_id=${planId}` : path);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  async function loadPlanApi(path, planId, extra = '') {
+    const res = await fetch(planId ? `${path}?plan_id=${planId}${extra}` : path);
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `HTTP ${res.status}`);
     return res.json();
   }
 
-  const loadPlan = planId => loadPlanApi('/api/plan', planId);
+  const loadPlan = (planId, draft) => loadPlanApi('/api/plan', planId, draft ? '&draft=1' : '');
   const loadVersions = () => loadPlanApi('/api/plan-versions', SELECTED_PLAN);
   const loadAdherence = () => loadPlanApi('/api/plan-adherence', SELECTED_PLAN);
   const loadPlans = () => loadPlanApi('/api/plans');
@@ -2909,7 +2916,11 @@
   // its rows link to ?plan=<id>, so the URL always says which plan the tab shows.
   // -----------------------------------------------------------------------
 
-  const ROLE_TAG = { past: 'past', next: 'next', candidate: 'draft' };
+  const ROLE_TAG = { past: 'past', next: 'next', candidate: 'draft', sketch: 'sketch' };
+
+  // The uncommitted version a header shows: a never-committed plan, or the
+  // draft view of a committed one.
+  const isUncommitted = data => data.version?.committed_at == null;
 
   function plansTableHTML(plans) {
     const mi = v => v != null ? v.toFixed(1) : '—';
@@ -2949,16 +2960,27 @@
       </section>`);
   }
 
-  function renderPlanHead(data) {
+  function draftBannerHTML(data) {
+    const expires = data.plan.sketch_expires_at;
+    return `<div class="draft-banner">${expires ? 'Sketch' : 'Draft'}: not committed, so not part of the plan.${expires ? ` Expires ${shortDate(expires.slice(0, 10))} unless committed.` : ''}</div>`;
+  }
+
+  function renderPlanHead(data, versions) {
     if (!data) return;
-    const { plan, role } = data;
-    const race = plan.race_date ? `${distLabel(plan.distance_bucket)} · ${shortDate(plan.race_date)}` : '';
+    const { plan, role, version } = data;
+    const race = version?.race_date ? `${distLabel(version.distance_bucket)} · ${shortDate(version.race_date)}` : '';
+    const draftLink = DRAFT_VIEW && plan.status !== 'draft'
+      ? `<a class="plan-which-link" href="?plan=${plan.plan_id}#plan">View committed plan</a>`
+      : !isUncommitted(data) && versions.some(v => v.committed_at == null)
+        ? `<a class="plan-which-link" href="?plan=${plan.plan_id}&draft=1#plan">View open draft</a>` : '';
     slotEl('plans').insertAdjacentHTML('beforeend', `
       <div class="plan-which">
         <span class="plan-which-title">${esc(plan.title)}</span>
         ${race ? `<span class="plan-which-race">${esc(race)}</span>` : ''}
         ${ROLE_TAG[role] ? `<span class="plan-which-role">${ROLE_TAG[role]}</span>` : ''}
-      </div>`);
+        ${draftLink}
+      </div>
+      ${isUncommitted(data) ? draftBannerHTML(data) : ''}`);
   }
 
   // Newest first by start week; plans with no weeks last.
@@ -2973,8 +2995,9 @@
   // default (current) plan; planP the one the Plan tab shows.
   function startSecondaryPanels(currentP, planP) {
     const get = (promise, fallback) => promise.catch(() => fallback);
-    const adherenceP = loadAdherence();
-    const goalsP = loadGoals();
+    // Adherence and goals describe the committed plan, so a draft view skips them.
+    const adherenceP = DRAFT_VIEW ? Promise.resolve(null) : loadAdherence();
+    const goalsP = DRAFT_VIEW ? Promise.resolve(null) : loadGoals();
 
     // The target-band chart needs a current plan; otherwise the plain rolling window.
     const progressionP = currentP.then(d => (d && d.role === 'current' ? loadProgression() : loadProgressionFallback()));
@@ -2985,18 +3008,19 @@
     fillPanel('fitness', [progressionP], renderFitnessStrip);
 
     const headExtraP = planP.then(d => {
-      if (!d) return null;
+      if (!d || isUncommitted(d)) return null;
       if (d.plan.status === 'completed') return loadRetrospective();
       return d.plan.status === 'active' ? loadReadiness() : null;
     });
     const plansP = loadPlans();
-    fillPanel('plans', [get(planP, null)], renderPlanHead);
+    const versionsP = loadVersions();
+    fillPanel('plans', [planP, versionsP], renderPlanHead);
     fillPanel('all', [plansP], renderAllPlans);
     const bandsP = get(adherenceP.then(a => new Map((a.weeks ?? []).map(w => [w.week_start, w.band]))), new Map());
     fillPanel('head', [planP, headExtraP, get(adherenceP, null), echartsReady, get(goalsP, null)],
       (data, extra, adherence, _echarts, goals) => {
         if (!data) return renderPlanEmptyCard();
-        if (data.role === 'candidate') return;
+        if (isUncommitted(data)) return;
         if (data.plan.status === 'completed') renderRetrospective(data, extra, goals);
         else renderReadiness(data, adherence, extra);
       });
@@ -3006,12 +3030,12 @@
     fillPanel('calendar', [planP, bandsP, get(goalsP, null)], (data, bands, goals) => { if (data) renderCalendar(data, bands, goals); });
     fillPanel('docs', [planP], renderDocs);
     fillPanel('flags', [adherenceP], renderFlags);
-    fillPanel('versions', [loadVersions()], renderVersions);
+    fillPanel('versions', [versionsP], renderVersions);
     planP.then(d => { PLAN_TAB_DATA = planData(d); }, () => {});
   }
 
   const currentP = loadPlan();
-  const planP = SELECTED_PLAN ? loadPlan(SELECTED_PLAN) : currentP;
+  const planP = SELECTED_PLAN ? loadPlan(SELECTED_PLAN, DRAFT_VIEW) : currentP;
   const todayP = loadToday().catch(() => null);
 
   renderTabs();

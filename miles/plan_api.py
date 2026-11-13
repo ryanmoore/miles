@@ -162,7 +162,7 @@ class VsLastWeekOut(TypedDict):
 
 class PlanResponse(TypedDict):
     plan: PlanRow
-    role: str  # plan.plan_role: current | next | past | candidate | abandoned
+    role: str  # plan.plan_role: current | next | past | candidate | sketch | abandoned
     version: PlanVersionRow | None
     weeks: list[PlanWeekOut]
     days: list[PlanDayOut]
@@ -467,7 +467,7 @@ def _selected_plan(conn: sqlite3.Connection, plan_id: int | None) -> PlanRow | N
 
 
 @router.get("/api/plan")
-def get_plan(plan_id: int | None = None) -> PlanResponse | None:
+def get_plan(plan_id: int | None = None, draft: bool = False) -> PlanResponse | None:
     """
     A plan's latest committed version (its draft when never committed) —
     weeks and days — with actual weekly miles/workout counts and per-day
@@ -477,14 +477,17 @@ def get_plan(plan_id: int | None = None) -> PlanResponse | None:
 
     plan_id defaults to the current plan (plan.default_plan). Returns null
     only when there are no plans. `today`/`week_so_far`/`vs_last_week` are
-    filled only when the plan is current.
+    filled only when the plan is current. draft=true serves the plan's
+    uncommitted draft instead (404 when it has none).
     """
     conn = _conn()
     active = _selected_plan(conn, plan_id)
     if active is None:
         return None
 
-    bundle = plan.view_bundle(conn, active["plan_id"])
+    bundle = plan.view_bundle(conn, active["plan_id"], draft=draft)
+    if draft and bundle is None:
+        raise HTTPException(status_code=404, detail=f"plan {active['plan_id']} has no draft in progress")
 
     weeks_in = bundle["weeks"] if bundle is not None else []
     days_in = bundle["days"] if bundle is not None else []
@@ -554,7 +557,7 @@ def get_plan(plan_id: int | None = None) -> PlanResponse | None:
     synced_through = cutoff_date.isoformat() if cutoff_date < today else None
     role = plan.plan_role(active, today)
     today_out, week_so_far, vs_last_week = (
-        _today_blocks(conn, active, weeks_in, days_in, today, cutoff_date) if role == "current" else (None, None, None)
+        _today_blocks(conn, active, weeks_in, days_in, today, cutoff_date) if role == "current" and not draft else (None, None, None)
     )
 
     return PlanResponse(
@@ -1214,8 +1217,9 @@ class PlanRaceOut(TypedDict):
 class PlanSummary(TypedDict):
     plan_id: int
     title: str
-    role: str  # plan.plan_role: current | next | past | candidate | abandoned
+    role: str  # plan.plan_role: current | next | past | candidate | sketch | abandoned
     status: str
+    expires_at: str | None  # a sketch's expiry
     first_week: str | None
     last_week: str | None
     race: PlanRaceOut | None
@@ -1241,7 +1245,7 @@ def plan_summaries(conn: sqlite3.Connection, today: date) -> list[PlanSummary]:
         match = plan.find_completing_race(conn, p) if p["status"] == "completed" else None
         out.append(PlanSummary(
             plan_id=p["plan_id"], title=p["title"], role=plan.plan_role(p, today), status=p["status"],
-            first_week=p["first_week"], last_week=p["last_week"],
+            expires_at=p["sketch_expires_at"], first_week=p["first_week"], last_week=p["last_week"],
             race=PlanRaceOut(date=p["race_date"], distance_bucket=p["distance_bucket"], goal_time_s=p["goal_time_s"])
             if p["race_date"] else None,
             versions=version_counts.get(p["plan_id"], 0),

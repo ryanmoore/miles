@@ -17,7 +17,7 @@ from .build_stats import run_type_stats, window_total_miles
 from . import goals as goals_service
 from .errors import describe_error, reporting
 from .fitness import WINDOW_DAYS, estimate_fitness
-from .format import fmt_pace, fmt_time
+from .format import app_url, fmt_pace, fmt_time
 from .offload import threaded
 from .periods import GAP_WEEKS_TO_SPLIT, Period, WeekAgg, is_active, monday_of, sunday_of, detect_periods
 from .plan_api import plan_summaries
@@ -1794,12 +1794,17 @@ def list_plans() -> str:
     role is derived from dates, never stored: current (committed, its weeks
     contain this week), next (committed, starts later), past (its weeks have
     ended), candidate (a draft never committed — alternatives for a coming
-    cycle), abandoned. In a gap week between cycles there is no current plan.
-    Pass a plan_id from here to the other plan tools.
+    cycle), sketch (a never-committed draft that expires at expires_at),
+    abandoned. In a gap week between cycles there is no current plan.
+    Pass a plan_id from here to the other plan tools. Each row's url opens
+    that plan in the web app.
     """
     conn = _conn()
     try:
-        return json.dumps(plan_summaries(conn, date.today()))
+        return json.dumps([
+            {**s, "url": app_url(f"/plan.html?plan={s['plan_id']}#plan")}
+            for s in plan_summaries(conn, date.today())
+        ])
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
@@ -1813,7 +1818,8 @@ def _draft_state(conn: sqlite3.Connection, plan_id: int) -> dict[str, object]:
     empty or partially-unspecified week list — program-computed per-week
     mileage consistency (see compute_week_mileage; its per-week messages are
     also folded into warnings, advisory here — commit_plan is where an
-    inconsistent week is hard-rejected), and sync freshness."""
+    inconsistent week is hard-rejected), sync freshness, and the web app url
+    that shows this draft (plus expires_at for a sketch)."""
     bundle = _plan_get_draft(conn, plan_id)
     last_sync_at = db.get_last_sync_at(conn)
     week_mileage = compute_week_mileage(bundle["weeks"], bundle["days"])
@@ -1830,6 +1836,8 @@ def _draft_state(conn: sqlite3.Connection, plan_id: int) -> dict[str, object]:
         "warnings": warnings,
         "last_sync_at": last_sync_at,
         "days_stale": db.days_stale(last_sync_at),
+        "url": app_url(f"/plan.html?plan={plan_id}&draft=1#plan"),
+        "expires_at": bundle["plan"]["sketch_expires_at"],
     }
 
 
@@ -1839,6 +1847,7 @@ def start_plan_draft(
     race_date: str | None = None,
     distance_bucket: str | None = None,
     goal_time_s: int | None = None,
+    sketch: bool = False,
 ) -> str:
     """
     Starts a brand-new plan's mutable draft: a plans row (status='draft') plus
@@ -1846,6 +1855,13 @@ def start_plan_draft(
     scratch — follow with set_draft_weeks / set_draft_days in batches as the
     athlete approves each block, get_draft to narrate what's missing, and
     commit_plan once they've seen the whole thing and said go.
+
+    Drafts are for showing work: every draft tool returns a `url` that opens
+    the draft in the web app, and only commit_plan makes a plan real.
+    sketch=true marks a throwaway draft (example weeks, a rough block) shown
+    to the athlete rather than offered as a candidate: it is deleted 14 days
+    after its last write (expires_at) unless committed. Other drafts never
+    expire.
 
     The race is optional: omit race_date and distance_bucket when the target
     race isn't chosen yet and set it later with set_draft_race. goal_time_s
@@ -1866,7 +1882,7 @@ def start_plan_draft(
         try:
             plan_id, _version_id = _plan_start_plan_draft(
                 conn, title=title, race_date=race_date, distance_bucket=distance_bucket,
-                goal_time_s=goal_time_s,
+                goal_time_s=goal_time_s, sketch=sketch,
             )
         except PlanValidationError as e:
             return json.dumps({"error": str(e)})

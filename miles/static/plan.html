@@ -424,23 +424,28 @@
        weekday's cells sit one above the other; below 784px .cal-cards takes
        over with both sides' lines under each weekday. */
     .plan-view .cmp-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 0.375rem; vertical-align: baseline; }
-    .plan-view .cmp-sum-side { margin-bottom: 0.75rem; }
+    .plan-view .cmp-sum { font-size: 0.75rem; white-space: normal; }
+    .plan-view .cmp-sum th, .plan-view .cmp-sum td { padding: 0.375rem 0.25rem; }
+    .plan-view .cmp-sum th { letter-spacing: 0; font-size: 0.625rem; }
+    .plan-view .cmp-sum th.r, .plan-view .cmp-sum td.r { text-align: right; font-variant-numeric: tabular-nums; }
+    .plan-view .cmp-sum-name { max-width: 5.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 600; }
     .plan-view .cmp-week { margin-bottom: 1rem; }
     .plan-view .cmp-week-head { display: flex; align-items: center; gap: 0.625rem; font-size: 0.8125rem; font-weight: 650; margin-bottom: 0.375rem; }
-    .plan-view .cmp-delta { font-size: 0.6875rem; font-weight: 600; color: var(--text-secondary); background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 0.0625rem 0.5rem; font-variant-numeric: tabular-nums; }
     .plan-view .cmp-line { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); min-width: 760px; }
     .plan-view .cmp-line .cal-header, .plan-view .cmp-line .cal-row { min-width: 0; }
     .plan-view .cmp-line-label { font-size: 0.75rem; font-weight: 600; padding: 0.375rem 0.5rem; border-top: 1px solid var(--gridline); background: var(--bg); }
-    .plan-view .cmp-line-label .tile-sub { display: block; font-weight: 400; }
+    .plan-view .cmp-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .plan-view .cmp-mi { font-size: 1rem; font-weight: 750; color: var(--text); margin-right: 0.375rem; font-variant-numeric: tabular-nums; }
+    .plan-view .cmp-sub { font-size: 0.6875rem; font-weight: 400; color: var(--muted); }
     .plan-view .cmp-line:first-child .cmp-line-label { border-top: none; }
     .plan-view .cmp-empty { font-size: 0.75rem; color: var(--muted); border-top: 1px dashed var(--gridline); padding: 0.375rem 0.5rem; }
     .plan-view .cmp-mlines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.25rem; }
     .plan-view .cmp-mline { display: flex; align-items: baseline; gap: 0.375rem; padding: 0.125rem 0.25rem; border-radius: 4px; }
     .plan-view .cmp-mdate { font-size: 0.625rem; color: var(--muted); min-width: 2.75rem; }
-    .plan-view .cal-day.cmp-d1, .plan-view .cmp-mline.cmp-d1 { background: color-mix(in srgb, var(--series-8) 8%, var(--surface)); }
-    .plan-view .cal-day.cmp-d2, .plan-view .cmp-mline.cmp-d2 { background: color-mix(in srgb, var(--series-8) 16%, var(--surface)); }
-    .plan-view .cal-day.cmp-d3, .plan-view .cmp-mline.cmp-d3 { background: color-mix(in srgb, var(--series-8) 28%, var(--surface)); }
-    .plan-view .cal-day.cmp-d4, .plan-view .cmp-mline.cmp-d4 { background: color-mix(in srgb, var(--series-8) 42%, var(--surface)); }
+    .plan-view .cal-day.cmp-d1, .plan-view .cmp-mline.cmp-d1 { background: color-mix(in srgb, var(--series-7) 8%, var(--surface)); }
+    .plan-view .cal-day.cmp-d2, .plan-view .cmp-mline.cmp-d2 { background: color-mix(in srgb, var(--series-7) 14%, var(--surface)); }
+    .plan-view .cal-day.cmp-d3, .plan-view .cmp-mline.cmp-d3 { background: color-mix(in srgb, var(--series-7) 22%, var(--surface)); }
+    .plan-view .cal-day.cmp-d4, .plan-view .cmp-mline.cmp-d4 { background: color-mix(in srgb, var(--series-7) 32%, var(--surface)); }
     .plan-view .draft-banner {
       font-size: 0.8125rem; margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; border-radius: 8px;
       background: var(--pr-bg); border: 1px solid var(--series-3); color: var(--text);
@@ -941,14 +946,14 @@
       <div id="tab-today" class="tab-panel"><div class="skeleton" style="height:240px"></div></div>
       <div id="tab-trends" class="tab-panel" hidden>${TAB_SLOTS.trends.map(slotHTML).join('')}</div>
       <div id="tab-plan" class="tab-panel" hidden>
-        ${(COMPARE ? CMP_SLOTS : TAB_SLOTS.plan).map(slotHTML).join('')}
+        ${(COMPARE.length ? CMP_SLOTS : TAB_SLOTS.plan).map(slotHTML).join('')}
       </div>
       <div id="tab-all" class="tab-panel" hidden>${TAB_SLOTS.all.map(slotHTML).join('')}</div>`);
     document.querySelectorAll('#plan-tabs .mode-tab').forEach(btn => {
       btn.addEventListener('click', () => {
         // The tab button means the current plan; ?plan= is only for links that carry it.
         // A compare page fills only the Plan tab, so every tab leaves it.
-        if (COMPARE || (btn.dataset.tab === 'plan' && SELECTED_PLAN)) location.href = `${location.pathname}#${btn.dataset.tab}`;
+        if (COMPARE.length || (btn.dataset.tab === 'plan' && SELECTED_PLAN)) location.href = `${location.pathname}#${btn.dataset.tab}`;
         else activatePlanTab(btn.dataset.tab);
       });
     });
@@ -2895,9 +2900,9 @@
   const QUERY = new URLSearchParams(location.search);
   const SELECTED_PLAN = QUERY.get('plan');
   const DRAFT_VIEW = QUERY.get('draft') === '1';
-  // Compare mode (adr/0010): ?plan=A&vs=B|actual, each side optionally draft=1 / weeks=FROM..TO
-  // (vs_draft, vs_weeks for B). Replaces the Plan tab's panels.
-  const COMPARE = SELECTED_PLAN && QUERY.get('vs');
+  // Compare mode (adr/0010): ?plan=A[&draft=1][&weeks=FROM..TO] plus up to three repeated
+  // vs=<plan id|actual>[:draft][:FROM..TO]. Replaces the Plan tab's panels.
+  const COMPARE = SELECTED_PLAN ? QUERY.getAll('vs').slice(0, 3) : [];
 
   async function loadPlanApi(path, planId, extra = '') {
     const res = await fetch(planId ? `${path}?plan_id=${planId}${extra}` : path);
@@ -3023,21 +3028,26 @@
   }
 
   // -----------------------------------------------------------------------
-  // Compare mode (adr/0010) — two sides on one page, reusing the calendar
-  // renderers. A side is a plan version, a plan's draft, or (B only) the
+  // Compare mode (adr/0010) — two to four sides on one page, reusing the
+  // calendar renderers. A side is a plan version, a plan's draft, or the
   // athlete's synced runs; each is normalized to weeks + per-date sessions.
-  // Weeks pair by date when the sides' ranges overlap, else by position.
+  // The first side is the baseline: the others are shaded against it, never
+  // against each other. Weeks pair by date when every other side overlaps the
+  // baseline's weeks, else all sides pair by position.
   // -----------------------------------------------------------------------
 
   const CMP_SLOTS = [['cmphead', 70], ['cmpsum', 110], ['cmpchart', 260], ['cmpweeks', 400]];
-  const CMP_SIDES = COMPARE ? {
-    a: { plan: SELECTED_PLAN, draft: DRAFT_VIEW, range: parseWeekRange(QUERY.get('weeks')) },
-    b: COMPARE === 'actual'
-      ? { actual: true, range: parseWeekRange(QUERY.get('vs_weeks')) }
-      : { plan: COMPARE, draft: QUERY.get('vs_draft') === '1', range: parseWeekRange(QUERY.get('vs_weeks')) },
-  } : {};
-  const COMPARE_DATA = {}; // side key -> day popover data
-  const cmpColor = key => chartTheme().series[key === 'a' ? 0 : 1];
+  // A `vs` value is `<plan id>|actual[:draft][:FROM..TO]` (plan_compare._vs_spec).
+  function parseVs(v) {
+    const [id, ...opts] = v.split(':');
+    return { actual: id === 'actual', plan: id, draft: opts.includes('draft'), range: parseWeekRange(opts.find(o => o.includes('..'))) };
+  }
+  const CMP_SIDES = COMPARE.length
+    ? [{ plan: SELECTED_PLAN, draft: DRAFT_VIEW, range: parseWeekRange(QUERY.get('weeks')) }, ...COMPARE.map(parseVs)]
+    : [];
+  const COMPARE_DATA = []; // side index -> day popover data
+  // Blue, aqua, yellow, violet: the palette's most distinct four, skipping the green that run/slot colours use and the magenta tint.
+  const cmpColor = i => chartTheme().series[[0, 1, 2, 4][i]];
 
   function parseWeekRange(v) {
     const m = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(v ?? '');
@@ -3048,7 +3058,7 @@
     const s = CMP_SIDES[key];
     const inRange = d => !s.range || (s.range[0] <= d && d <= s.range[1]);
     if (s.actual) {
-      if (!s.range) throw new Error('vs=actual needs vs_weeks=YYYY-MM-DD..YYYY-MM-DD');
+      if (!s.range) throw new Error('an actual side needs a range: vs=actual:YYYY-MM-DD..YYYY-MM-DD');
       const data = await loadPlanApi(`/api/actual-weeks?from_week=${s.range[0]}&to_week=${s.range[1]}`);
       const runs = new Map(Object.entries(data.actual));
       return {
@@ -3072,12 +3082,13 @@
     };
   }
 
-  function alignWeeks(a, b) {
-    const ma = new Map(a.weeks.map(w => [w.week_start, w])), mb = new Map(b.weeks.map(w => [w.week_start, w]));
-    if ([...ma.keys()].some(d => mb.has(d))) {
-      return [...new Set([...ma.keys(), ...mb.keys()])].sort().map(d => ({ label: weekRangeLabel(d), a: ma.get(d), b: mb.get(d) }));
-    }
-    return Array.from({ length: Math.max(a.weeks.length, b.weeks.length) }, (_, i) => ({ label: `Week ${i + 1}`, a: a.weeks[i], b: b.weeks[i] }));
+  function alignWeeks(sides) {
+    const maps = sides.map(s => new Map(s.weeks.map(w => [w.week_start, w])));
+    const byDate = maps.slice(1).every(m => [...m.keys()].some(d => maps[0].has(d)));
+    const rows = byDate
+      ? [...new Set(maps.flatMap(m => [...m.keys()]))].sort().map(d => ({ label: weekRangeLabel(d), weeks: maps.map(m => m.get(d)) }))
+      : Array.from({ length: Math.max(...sides.map(s => s.weeks.length)) }, (_, i) => ({ label: `Week ${i + 1}`, weeks: sides.map(s => s.weeks[i]) }));
+    return { byDate, rows };
   }
 
   const sideRange = s => `${shortDate(s.weeks[0].week_start)} – ${shortDate(addDays(s.weeks[s.weeks.length - 1].week_start, 6))}`;
@@ -3096,32 +3107,30 @@
     </div>`;
   }
 
+  const CMP_SUM_COLS = ['Side', 'Weeks', 'Total', 'Avg', 'Peak', 'Wkts/wk', 'Long run']; // average and peak week, workouts per week, longest long run
+
   function sideSummaryHTML(s) {
     const nums = k => s.weeks.map(w => w[k]).filter(v => v != null);
     const miles = nums('miles'), workouts = nums('workouts'), longs = nums('long');
     const sum = miles.reduce((x, y) => x + y, 0);
-    const stat = (label, value) => `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>`;
     const mi = v => v == null ? '—' : v.toFixed(1);
-    return `<div class="cmp-sum-side"><div class="subchart-label"><span class="cmp-dot" style="background:${cmpColor(s.key)}"></span>${esc(s.title)}</div>
-      <div class="stat-strip">
-        ${stat('Weeks', s.weeks.length)}
-        ${stat('Total miles', mi(miles.length ? sum : null))}
-        ${stat('Avg week', mi(miles.length ? sum / miles.length : null))}
-        ${stat('Peak week', mi(miles.length ? Math.max(...miles) : null))}
-        ${stat('Workouts / wk', workouts.length ? (workouts.reduce((x, y) => x + y, 0) / workouts.length).toFixed(1) : '—')}
-        ${stat('Longest long run', mi(longs.length ? Math.max(...longs) : null))}
-      </div></div>`;
+    const cells = [
+      s.weeks.length, mi(miles.length ? sum : null), mi(miles.length ? sum / miles.length : null), mi(miles.length ? Math.max(...miles) : null),
+      workouts.length ? (workouts.reduce((x, y) => x + y, 0) / workouts.length).toFixed(1) : '—', mi(longs.length ? Math.max(...longs) : null),
+    ];
+    return `<td class="cmp-sum-name" title="${esc(s.title)}"><span class="cmp-dot" style="background:${cmpColor(s.key)}"></span>${esc(s.title)}</td>${cells.map(c => `<td class="r">${c}</td>`).join('')}`;
   }
 
-  function renderCmpChart(a, b) {
-    const rows = alignWeeks(a, b);
+  function renderCmpChart(...loaded) {
+    const sides = loaded.slice(0, CMP_SIDES.length); // the last input is echartsReady
+    const { rows } = alignWeeks(sides);
     const seriesName = s => s.actual ? `${s.title} (actual miles)` : `${s.title} (planned target)`;
     slotEl('cmpchart').insertAdjacentHTML('beforeend', `
       <section>
         <h2>Weekly mileage</h2>
         <p class="desc">Planned target per week (a range week at its midpoint) · actual synced miles for runs</p>
         <div class="chart-wrap"><div id="chart-compare" style="width:100%;height:100%"></div></div>
-        <div class="chart-legend">${[a, b].map(s => `<span class="legend-swatch"><span class="legend-box" style="background:${cmpColor(s.key)}"></span>${esc(seriesName(s))}</span>`).join('')}</div>
+        <div class="chart-legend">${sides.map(s => `<span class="legend-swatch"><span class="legend-box" style="background:${cmpColor(s.key)}"></span>${esc(seriesName(s))}</span>`).join('')}</div>
       </section>`);
     const theme = chartTheme();
     const chart = echarts.init(document.getElementById('chart-compare'));
@@ -3132,16 +3141,16 @@
       tooltip: { trigger: 'axis', backgroundColor: theme.surface, borderColor: theme.gridline, textStyle: { fontSize: 12, color: theme.text } },
       xAxis: { type: 'category', data: rows.map(r => r.label), axisLine: { lineStyle: { color: theme.gridline } }, axisTick: { show: false }, axisLabel: { fontSize: 11, color: theme.muted, ...(theme.compact ? { interval: 'auto' } : {}) } },
       yAxis: { type: 'value', name: 'Miles', nameLocation: 'middle', nameGap: 34, nameTextStyle: { fontSize: 11, color: theme.muted }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { lineStyle: { color: theme.gridline } }, axisLabel: { fontSize: 11, color: theme.muted } },
-      series: [a, b].map((s, i) => ({
+      series: sides.map((s, i) => ({
         name: seriesName(s), type: 'line', step: 'end', symbolSize: 6, lineStyle: { color: cmpColor(s.key), width: 2 }, itemStyle: { color: cmpColor(s.key) },
-        data: rows.map(r => r[i ? 'b' : 'a']?.miles ?? null),
+        data: rows.map(r => r.weeks[i]?.miles ?? null),
       })),
     });
     window.addEventListener('resize', () => chart.resize());
   }
 
-  // Total miles closer than this are the same day; plan_compare.NEGLIGIBLE_MILES matches.
-  const CMP_NEGLIGIBLE_MI = 0.5;
+  // Total miles within max(CMP_NEGLIGIBLE_MI, CMP_NEGLIGIBLE_FRAC of the larger day) are the same.
+  const CMP_NEGLIGIBLE_MI = 1, CMP_NEGLIGIBLE_FRAC = 0.15;
 
   function cmpSessions(s, date) {
     return s.actual
@@ -3149,96 +3158,98 @@
       : (s.cells.get(date) ?? []).filter(x => !isRestSlot(x)).map(x => ({ slot: x.slot, miles: x.target_miles ?? 0, title: x.title ?? '' }));
   }
 
-  // How much a day differs, 0-4: 1 title only, 2 a half-mile-plus gap, 3 a gap
-  // of 2+ mi or a different set of session types (including a session on one
-  // side only), 4 a gap of 5+ mi.
-  function cmpLevel(sa, sb, withTitles) {
+  // How far a day differs from the baseline's, 0-4: 1 title only, 2 a mileage
+  // gap past the negligible one, 3 a gap over 3 mi or a different set of
+  // session types (including a session on one side only), 4 a gap over 6 mi.
+  function cmpLevel(base, other, withTitles) {
     const sum = l => l.reduce((t, x) => t + x.miles, 0);
     const key = (l, f) => [...new Set(l.map(f))].sort().join('|');
-    const gap = Math.abs(sum(sa) - sum(sb));
-    const level = gap >= 5 ? 4 : gap >= 2 ? 3 : gap >= CMP_NEGLIGIBLE_MI ? 2 : 0;
-    if (key(sa, x => x.slot) !== key(sb, x => x.slot)) return Math.max(level, 3);
-    return level || (withTitles && key(sa, x => x.title) !== key(sb, x => x.title) ? 1 : 0);
+    const a = sum(base), b = sum(other), gap = Math.abs(a - b);
+    const level = gap <= Math.max(CMP_NEGLIGIBLE_MI, CMP_NEGLIGIBLE_FRAC * Math.max(a, b)) ? 0 : gap <= 3 ? 2 : gap <= 6 ? 3 : 4;
+    if (key(base, x => x.slot) !== key(other, x => x.slot)) return Math.max(level, 3);
+    return level || (withTitles && key(base, x => x.title) !== key(other, x => x.title) ? 1 : 0);
   }
 
-  function renderCmpWeeks(a, b) {
-    const withTitles = !a.actual && !b.actual;
+  function renderCmpWeeks(...sides) {
+    const { byDate, rows } = alignWeeks(sides);
     const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const none = new Map();
-    const signed = (n, unit) => `${n > 0 ? '+' : n < 0 ? '−' : '±'}${Math.abs(unit === 'mi' ? n.toFixed(1) : n)} ${unit}`;
     const dot = s => `<span class="cmp-dot" style="background:${cmpColor(s.key)}"></span>`;
     const runOpts = { showType: true };
-    const rowLabel = (s, w) => `${dot(s)}${esc(weekRangeLabel(w.week_start))}
-      <span class="tile-sub">${[w.miles != null ? `${trimMiles(w.miles)} mi` : null, w.workouts != null ? `${w.workouts} workout${w.workouts === 1 ? '' : 's'}` : null, w.long != null ? `long ${trimMiles(w.long)}` : null].filter(Boolean).join(' · ')}</span>`;
+    const rowLabel = (s, w) => `<div class="cmp-id" title="${esc(s.title)}">${dot(s)}${esc(s.title)}</div>
+      ${byDate ? '' : `<div class="cmp-sub">${esc(weekRangeLabel(w.week_start))}</div>`}
+      <div>${w.miles != null ? `<span class="cmp-mi">${trimMiles(w.miles)} mi</span>` : ''}<span class="cmp-sub">${[w.workouts != null ? `${w.workouts} workout${w.workouts === 1 ? '' : 's'}` : null, w.long != null ? `long ${trimMiles(w.long)}` : null].filter(Boolean).join(' · ')}</span></div>`;
     const line = (s, w) => w
       ? `<div class="cmp-line" data-side="${s.key}"><div class="cmp-line-label">${rowLabel(s, w)}</div>${weekRow(w, s.cells, s.runs, none, runOpts)}</div>`
-      : `<div class="cmp-line"><div class="cmp-line-label">${dot(s)}</div><div class="cmp-empty">No week on this side</div></div>`;
+      : `<div class="cmp-line"><div class="cmp-line-label"><div class="cmp-id" title="${esc(s.title)}">${dot(s)}${esc(s.title)}</div></div><div class="cmp-empty">No week on this side</div></div>`;
     // One side's session line for a weekday in the phone layout.
     const mobileLine = (s, w, date) => {
       const planned = (s.cells.get(date) ?? []).filter(x => !isRestSlot(x));
       const body = s.actual
         ? (s.runs.get(date) ?? []).map(r => runLine(r, runOpts)).join('')
         : planned.length ? planned.map(mobileSessionHTML).join('') : '<div class="mcal-rest">Rest</div>';
-      return `<div class="cmp-mline" data-side="${s.key}" data-plan-date="${date}">${dot(s)}<span class="cmp-mdate">${esc(shortDate(date))}</span><div class="mcal-day-body">${body}</div></div>`;
+      return `<div class="cmp-mline" data-side="${s.key}" data-plan-date="${date}">${dot(s)}${byDate ? '' : `<span class="cmp-mdate">${esc(shortDate(date))}</span>`}<div class="mcal-day-body">${body}</div></div>`;
     };
-    const mobileWeek = (row) => labels.map((name, k) => {
-      const sides = [[a, row.a], [b, row.b]].filter(([, w]) => w);
-      return `<div class="mcal-day-row"><div class="mcal-day-wd">${name}</div><div class="cmp-mlines">${sides.map(([s, w]) => mobileLine(s, w, addDays(w.week_start, k))).join('')}</div></div>`;
+    const mobileWeek = row => labels.map((name, k) => {
+      const present = sides.filter((s, i) => row.weeks[i]);
+      return `<div class="mcal-day-row"><div class="mcal-day-wd">${name}</div><div class="cmp-mlines">${present.map(s => mobileLine(s, row.weeks[s.key], addDays(row.weeks[s.key].week_start, k))).join('')}</div></div>`;
     }).join('');
     const levels = [];
     // A day of synced runs that has not ended and has no run yet is not a difference.
     const today = new Date().toLocaleDateString('en-CA');
     const pending = (s, d) => s.actual && d >= today && !cmpSessions(s, d).length;
-    const html = alignWeeks(a, b).map((row, i) => {
-      const lv = { a: new Map(), b: new Map() };
-      for (let k = 0; k < 7 && row.a && row.b; k++) {
-        const da = addDays(row.a.week_start, k), db = addDays(row.b.week_start, k);
-        const level = pending(a, da) || pending(b, db) ? 0 : cmpLevel(cmpSessions(a, da), cmpSessions(b, db), withTitles);
-        lv.a.set(da, level);
-        lv.b.set(db, level);
+    const base = sides[0];
+    const html = rows.map((row, i) => {
+      levels[i] = sides.map(() => new Map());
+      for (let j = 1; j < sides.length && row.weeks[0] && row.weeks[j]; j++) {
+        for (let k = 0; k < 7; k++) {
+          const db = addDays(row.weeks[0].week_start, k), dj = addDays(row.weeks[j].week_start, k);
+          levels[i][j].set(dj, pending(base, db) || pending(sides[j], dj) ? 0 : cmpLevel(cmpSessions(base, db), cmpSessions(sides[j], dj), !base.actual && !sides[j].actual));
+        }
       }
-      levels[i] = lv;
-      const dMiles = (row.b?.miles ?? 0) - (row.a?.miles ?? 0), dWork = (row.b?.workouts ?? 0) - (row.a?.workouts ?? 0);
+      const missing = sides.filter((s, j) => !row.weeks[j]);
       return `<div class="cmp-week" data-row="${i}">
-        <div class="cmp-week-head"><span>${esc(row.label)}</span>
-          <span class="cmp-delta" title="second side minus first">${signed(dMiles, 'mi')} · ${signed(dWork, dWork === 1 || dWork === -1 ? 'workout' : 'workouts')}</span></div>
+        <div class="cmp-week-head"><span>${esc(row.label)}</span></div>
         <div class="cal">
           <div class="cmp-line"><div></div><div class="cal-header">${labels.map(d => `<div class="cal-hcell">${d}</div>`).join('')}</div></div>
-          ${line(a, row.a)}${line(b, row.b)}
+          ${sides.map((s, j) => line(s, row.weeks[j])).join('')}
         </div>
-        <div class="cal-cards">${!row.a || !row.b ? `<div class="cmp-empty">No week on the ${row.a ? 'second' : 'first'} side</div>` : ''}<div class="mcal-week">${mobileWeek(row)}</div></div>
+        <div class="cal-cards">${missing.length ? `<div class="cmp-empty">No week for ${missing.map(s => esc(s.title)).join(', ')}</div>` : ''}<div class="mcal-week">${mobileWeek(row)}</div></div>
       </div>`;
     }).join('');
     slotEl('cmpweeks').insertAdjacentHTML('beforeend', `
       <section>
         <h2>Weeks</h2>
-        <p class="desc">Shading grows with how far a day differs: faint for a title only${withTitles ? '' : ' (not compared against runs)'}, stronger for a bigger mileage gap, a different session type or a session on one side only; gaps under ${CMP_NEGLIGIBLE_MI} mi are not shaded · the chip is the second side minus the first · tap a day for detail</p>
+        <p class="desc">Every side after the first is shaded by how far each day differs from the first side's same weekday: faint for a title only (plan against plan), stronger for a bigger mileage gap, a different session type or a session on one side only; gaps within ${CMP_NEGLIGIBLE_MI} mi or ${CMP_NEGLIGIBLE_FRAC * 100}% of the larger day are not shaded · tap a day for detail</p>
         ${html}
       </section>`);
     document.querySelectorAll('.cmp-week').forEach(el => {
       const lv = levels[Number(el.dataset.row)];
       el.querySelectorAll('[data-side] [data-plan-date], .cmp-mline').forEach(c => {
-        const level = lv[c.closest('[data-side]').dataset.side].get(c.dataset.planDate);
+        const level = lv[Number(c.closest('[data-side]').dataset.side)].get(c.dataset.planDate);
         if (level) c.classList.add(`cmp-d${level}`);
       });
     });
   }
 
-  // Each side's header/summary fills its own sub-slot, so one side failing leaves the other.
-  function fillSides(id, height, sides, render) {
-    slotEl(id).innerHTML = ['a', 'b'].map(k => `<div id="${id}-${k}"><div class="skeleton" style="height:${height}px;margin-bottom:1rem"></div></div>`).join('');
+  // Each side's header and summary row fills its own element, so one side failing leaves the others.
+  function fillSides(id, sides, render, fail = msg => msg) {
     sides.forEach((p, i) => {
-      const target = document.getElementById(`${id}-${'ab'[i]}`);
+      const target = document.getElementById(`${id}-${i}`);
       p.then(s => { target.innerHTML = render(s); })
-        .catch(err => { target.innerHTML = `<p class="desc">Couldn't load this side: ${esc(err.message)}</p>`; });
+        .catch(err => { target.innerHTML = fail(`<p class="desc">Couldn't load this side: ${esc(err.message)}</p>`); });
     });
   }
 
   function startCompare() {
-    const sideP = [loadSide('a'), loadSide('b')];
-    sideP.forEach((p, i) => p.then(s => { COMPARE_DATA['ab'[i]] = s.popover; }, () => {}));
-    fillSides('cmphead', 40, sideP, sideHeadHTML);
-    fillSides('cmpsum', 80, sideP, sideSummaryHTML);
+    const sideP = CMP_SIDES.map((_, i) => loadSide(i));
+    sideP.forEach((p, i) => p.then(s => { COMPARE_DATA[i] = s.popover; }, () => {}));
+    const skeleton = height => `<div class="skeleton" style="height:${height}px;margin-bottom:1rem"></div>`;
+    slotEl('cmphead').innerHTML = sideP.map((_, i) => `<div id="cmphead-${i}">${skeleton(40)}</div>`).join('');
+    slotEl('cmpsum').innerHTML = `<div class="scroll"><table class="cmp-sum"><thead><tr>${CMP_SUM_COLS.map((c, i) => `<th${i ? ' class="r"' : ''}>${c}</th>`).join('')}</tr></thead>
+      <tbody>${sideP.map((_, i) => `<tr id="cmpsum-${i}"><td colspan="${CMP_SUM_COLS.length}">${skeleton(20)}</td></tr>`).join('')}</tbody></table></div>`;
+    fillSides('cmphead', sideP, sideHeadHTML);
+    fillSides('cmpsum', sideP, sideSummaryHTML, msg => `<td colspan="${CMP_SUM_COLS.length}">${msg}</td>`);
     fillPanel('cmpchart', [...sideP, echartsReady], renderCmpChart);
     fillPanel('cmpweeks', sideP, renderCmpWeeks);
     document.title = 'Miles · Compare plans';
@@ -3289,7 +3300,7 @@
   }
 
   renderTabs();
-  if (COMPARE) {
+  if (COMPARE.length) {
     activatePlanTab('plan');
     startCompare();
   } else {

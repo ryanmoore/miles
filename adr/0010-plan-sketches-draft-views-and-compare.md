@@ -23,12 +23,21 @@ but a revision draft had no page, and throwaway drafts piled up as candidates.
   when it expires). Every draft tool returns that URL. Adherence, readiness,
   goals and the retrospective describe the committed plan, so a draft view
   omits them.
-- **Compare puts two sides on one page.** A side is a plan version, a plan's
-  draft, or the athlete's synced runs over a block of weeks; each may be
-  limited to a Monday range. `plan.html?plan=A&vs=B|actual` (with `draft`,
-  `weeks`, `vs_draft`, `vs_weeks`) reuses the calendar renderers, and the
-  `compare_plans` tool returns the same comparison as data.
-- **Alignment.** If the sides' week ranges overlap, weeks pair by date and a
-  week only one side has pairs with nothing. Otherwise they pair by position
-  (Week 1 beside Week 1), each side keeping its own dates. A week's mileage is
-  its target (a range at its midpoint), or the synced miles for runs.
+- **Compare puts two to four sides on one page.** A side is a plan version, a
+  plan's draft, or the athlete's synced runs over a block of weeks; each may be
+  limited to a Monday range. The first side is the baseline and must be a
+  plan: every other side is compared to it, never to each other.
+  `plan.html?plan=A[&draft=1][&weeks=FROM..TO]` is the baseline; each further
+  side is one repeated `vs=<plan id|actual>[:draft][:FROM..TO]` (`actual` needs a range). The page reuses the calendar renderers, and the `compare_plans`
+  tool takes the same sides as a list and returns the same comparison as data.
+- **Alignment.** If every other side has a week in common with the baseline,
+  weeks pair by date and a week only some sides have pairs with nothing for
+  the rest. Otherwise all sides pair by position (Week 1 beside Week 1), each
+  keeping its own dates. A week's mileage is its target (a range at its
+  midpoint), or the synced miles for runs.
+- **Shading is relative to the baseline.** Each non-baseline day is tinted by
+  how far it differs from the baseline's same weekday; the baseline row is
+  never shaded. A mileage gap of at most max(1 mi, 15% of the larger day) with
+  matching session types is the same day; bigger gaps and changed or
+  one-sided sessions step up through light, medium and strong. The tint is
+  `--series-7`, which no slot or run-type colour uses.

@@ -1811,30 +1811,31 @@ def list_plans() -> str:
 
 
 @mcp.tool()
-def compare_plans(a: dict[str, object], b: dict[str, object]) -> str:
+def compare_plans(sides: list[dict[str, object]]) -> str:
     """
-    Compares two plans (or a plan and what the athlete actually ran) week by
-    week, and returns a `url` that shows them side by side in the web app.
+    Compares 2 to 4 plans (and what the athlete actually ran) week by week, and
+    returns a `url` that shows them together in the web app. The first side is
+    the baseline: every other side is compared to it, never to each other.
 
     Each side is {"plan_id": N, "draft": true?, "from_week": "YYYY-MM-DD"?,
     "to_week": "YYYY-MM-DD"?}: a plan's latest committed version, or with
     draft=true its uncommitted draft; from_week/to_week (Mondays, inclusive)
-    restrict it to a block. Side b may instead be {"actual": true, "from_week":
-    ..., "to_week": ...}: the synced runs over those weeks.
+    restrict it to a block. A side after the first may instead be {"actual":
+    true, "from_week": ..., "to_week": ...}: the synced runs over those
+    weeks. The baseline must be a plan.
 
-    If the sides' weeks overlap they are paired by date (a week only one side
-    has pairs with null); otherwise side a's first week pairs with side b's
-    first, labelled Week 1, 2, ... Returns a (per-side summary: weeks, total,
-    average and peak week miles, workouts per week, longest long run) and b,
-    plus weeks: per pairing each side's miles (a range week counts at its
-    midpoint), workouts and long run, and day_differences, the weekdays
-    whose slot, total miles (by half a mile or more) or (between two plans)
-    title differ. Or {"error": ...}.
+    If every other side has a week in common with the baseline's they are
+    paired by date (a week some sides lack pairs with null); otherwise all
+    sides pair by position, labelled Week 1, 2, ... Returns per-side summaries
+    and, per pairing, each side's week numbers plus, for every side after the
+    first, day_differences: the weekdays whose session types, total miles (by
+    more than max(1 mi, 15% of the larger day)) or (between two plans) titles
+    differ from the baseline's. Or {"error": ...}.
     """
     conn = _conn()
     try:
         try:
-            return json.dumps(plan_compare.compare(conn, a, b))
+            return json.dumps(plan_compare.compare(conn, sides))
         except PlanValidationError as e:
             return json.dumps({"error": str(e)})
     except Exception as e:

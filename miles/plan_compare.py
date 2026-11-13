@@ -1,11 +1,12 @@
-"""Plan compare (adr/0010): two sides, each a plan version, a plan's draft or
-the athlete's synced runs over a block of weeks, aligned week by week. Backs
-the `compare_plans` MCP tool and `/api/actual-weeks`; plan.html aligns the
-same way client-side over `/api/plan`."""
+"""Plan compare (adr/0010): two to four sides, each a plan version, a plan's
+draft or the athlete's synced runs over a block of weeks, aligned week by week
+against the first (the baseline). Backs the `compare_plans` MCP tool and
+`/api/actual-weeks`; plan.html aligns the same way client-side over
+`/api/plan`."""
 
 import sqlite3
 from datetime import date, timedelta
-from typing import Mapping, cast
+from typing import Mapping, Sequence, cast
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException
@@ -21,7 +22,9 @@ from .plan_api import PlanActivity, _activities_by_date, _actual_by_week
 router = APIRouter()
 
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-NEGLIGIBLE_MILES = 0.5  # a day's miles closer than this are the same; plan.html's CMP_NEGLIGIBLE_MI matches
+# A day's miles within max(NEGLIGIBLE_MILES, NEGLIGIBLE_FRACTION of the larger day) are the same; plan.html's CMP_NEGLIGIBLE_* match.
+NEGLIGIBLE_MILES = 1.0
+NEGLIGIBLE_FRACTION = 0.15
 RUN_TYPE_SLOT = {"long_run": "long", "workout": "workout", "race": "race"}
 
 
@@ -171,18 +174,15 @@ def load_side(conn: sqlite3.Connection, spec: Mapping[str, object]) -> Side:
     return _actual_side(conn, spec) if spec.get("actual") else _plan_side(conn, spec)
 
 
-def align(a: Side, b: Side) -> list[tuple[str, SideWeek | None, SideWeek | None]]:
-    """Weeks paired by date when the sides' ranges overlap (a week only one side
-    has pairs with None); otherwise ordinally, labelled Week 1, 2, ..."""
-    wa = {w["week_start"]: w for w in a["weeks"]}
-    wb = {w["week_start"]: w for w in b["weeks"]}
-    if wa.keys() & wb.keys():
-        return [(d, wa.get(d), wb.get(d)) for d in sorted(wa.keys() | wb.keys())]
-    n = max(len(a["weeks"]), len(b["weeks"]))
-    return [
-        (f"Week {i + 1}", a["weeks"][i] if i < len(a["weeks"]) else None, b["weeks"][i] if i < len(b["weeks"]) else None)
-        for i in range(n)
-    ]
+def align(sides: list[Side]) -> list[tuple[str, list[SideWeek | None]]]:
+    """Weeks paired by date when every other side shares a week with the
+    baseline (sides[0]); a week only some sides have pairs with None for the
+    rest. Otherwise all sides pair by position, labelled Week 1, 2, ..."""
+    by_date = [{w["week_start"]: w for w in s["weeks"]} for s in sides]
+    if all(m.keys() & by_date[0].keys() for m in by_date[1:]):
+        return [(d, [m.get(d) for m in by_date]) for d in sorted(set().union(*by_date))]
+    n = max(len(s["weeks"]) for s in sides)
+    return [(f"Week {i + 1}", [s["weeks"][i] if i < len(s["weeks"]) else None for s in sides]) for i in range(n)]
 
 
 def _fmt_sessions(sessions: list[Session]) -> str:
@@ -192,20 +192,23 @@ def _fmt_sessions(sessions: list[Session]) -> str:
     ) or "rest"
 
 
-def _differs(sa: list[Session], sb: list[Session], with_titles: bool) -> bool:
-    if {s[0] for s in sa} != {s[0] for s in sb} or (with_titles and {s[2] or "" for s in sa} != {s[2] or "" for s in sb}):
+def _differs(base: list[Session], other: list[Session], with_titles: bool) -> bool:
+    """Session types (or, with_titles, titles) differ, or total miles differ by
+    more than the negligible gap; plan.html's cmpLevel applies the same rule."""
+    if {s[0] for s in base} != {s[0] for s in other} or (with_titles and {s[2] or "" for s in base} != {s[2] or "" for s in other}):
         return True
-    return abs(sum(s[1] or 0 for s in sa) - sum(s[1] or 0 for s in sb)) >= NEGLIGIBLE_MILES
+    a, b = sum(s[1] or 0 for s in base), sum(s[1] or 0 for s in other)
+    return abs(a - b) > max(NEGLIGIBLE_MILES, NEGLIGIBLE_FRACTION * max(a, b))
 
 
-def _day_diffs(a: SideWeek | None, b: SideWeek | None, with_titles: bool) -> list[dict[str, str]]:
-    """Weekdays whose sessions differ (see _differs)."""
+def _day_diffs(base: SideWeek | None, other: SideWeek | None, with_titles: bool) -> list[dict[str, str]]:
+    """Weekdays whose sessions differ from the baseline's (see _differs)."""
     out: list[dict[str, str]] = []
     for name in WEEKDAYS:
-        sa = a["days"].get(name, []) if a else []
-        sb = b["days"].get(name, []) if b else []
-        if _differs(sa, sb, with_titles):
-            out.append({"day": name, "a": _fmt_sessions(sa), "b": _fmt_sessions(sb)})
+        sb = base["days"].get(name, []) if base else []
+        so = other["days"].get(name, []) if other else []
+        if _differs(sb, so, with_titles):
+            out.append({"day": name, "baseline": _fmt_sessions(sb), "side": _fmt_sessions(so)})
     return out
 
 
@@ -222,40 +225,47 @@ def _summary(side: Side) -> dict[str, object]:
     }
 
 
-def _side_params(spec: Mapping[str, object], prefix: str) -> dict[str, str]:
-    out: dict[str, str] = {}
+def _vs_spec(spec: Mapping[str, object]) -> str:
+    """A side's `vs=` token: `<plan id>|actual[:draft][:FROM..TO]`."""
+    parts = ["actual" if spec.get("actual") else str(spec["plan_id"])]
     if spec.get("draft"):
-        out[f"{prefix}draft"] = "1"
+        parts.append("draft")
     if spec.get("from_week") and spec.get("to_week"):
-        out[f"{prefix}weeks"] = f"{spec['from_week']}..{spec['to_week']}"
-    return out
+        parts.append(f"{spec['from_week']}..{spec['to_week']}")
+    return ":".join(parts)
 
 
-def compare_url(a: Mapping[str, object], b: Mapping[str, object]) -> str:
-    query = {"plan": str(a["plan_id"]), **_side_params(a, ""), "vs": "actual" if b.get("actual") else str(b["plan_id"]),
-             **_side_params(b, "vs_")}
-    return app_url(f"/plan.html?{urlencode(query)}#plan")
+def compare_url(sides: Sequence[Mapping[str, object]]) -> str:
+    base = sides[0]
+    query = [("plan", str(base["plan_id"]))]
+    if base.get("draft"):
+        query.append(("draft", "1"))
+    if base.get("from_week") and base.get("to_week"):
+        query.append(("weeks", f"{base['from_week']}..{base['to_week']}"))
+    query += [("vs", _vs_spec(s)) for s in sides[1:]]
+    return app_url(f"/plan.html?{urlencode(query, safe=':')}#plan")
 
 
-def compare(conn: sqlite3.Connection, a: Mapping[str, object], b: Mapping[str, object]) -> dict[str, object]:
-    """Both sides loaded, aligned, and compared. Side a must be a plan; b may be the athlete's actual runs."""
-    if a.get("actual") or "plan_id" not in a:
-        raise PlanValidationError("side a must be a plan (give plan_id); actual runs go in side b")
-    if not b.get("actual") and "plan_id" not in b:
-        raise PlanValidationError("side b needs plan_id, or actual=true with from_week and to_week")
-    sa, sb = load_side(conn, a), load_side(conn, b)
-    rows = align(sa, sb)
-    with_titles = not sb["is_actual"]
-    return {
-        "url": compare_url(a, b),
-        "a": _summary(sa), "b": _summary(sb),
-        "weeks": [
-            {
-                "week": label,
-                "a": {"week_start": wa["week_start"], "miles": wa["miles"], "workouts": wa["workouts"], "long_run_miles": wa["long_run_miles"]} if wa else None,
-                "b": {"week_start": wb["week_start"], "miles": wb["miles"], "workouts": wb["workouts"], "long_run_miles": wb["long_run_miles"]} if wb else None,
-                "day_differences": _day_diffs(wa, wb, with_titles),
-            }
-            for label, wa, wb in rows
-        ],
-    }
+def compare(conn: sqlite3.Connection, specs: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    """2-4 sides loaded, aligned, and compared; every side after the first is
+    compared to the first (the baseline), never to each other."""
+    if not 2 <= len(specs) <= 4:
+        raise PlanValidationError("give 2 to 4 sides")
+    if specs[0].get("actual") or "plan_id" not in specs[0]:
+        raise PlanValidationError("the first side is the baseline and must be a plan (give plan_id)")
+    if any(not s.get("actual") and "plan_id" not in s for s in specs):
+        raise PlanValidationError("each side needs plan_id, or actual=true with from_week and to_week")
+    sides = [load_side(conn, s) for s in specs]
+    weeks: list[dict[str, object]] = []
+    for label, cells in align(sides):
+        entries: list[dict[str, object] | None] = []
+        for i, w in enumerate(cells):
+            if w is None:
+                entries.append(None)
+                continue
+            entry: dict[str, object] = {k: w[k] for k in ("week_start", "miles", "workouts", "long_run_miles")}
+            if i:
+                entry["day_differences"] = _day_diffs(cells[0], w, not sides[i]["is_actual"])
+            entries.append(entry)
+        weeks.append({"week": label, "sides": entries})
+    return {"url": compare_url(specs), "sides": [_summary(s) for s in sides], "weeks": weeks}

@@ -23,3 +23,12 @@ but a revision draft had no page, and throwaway drafts piled up as candidates.
   when it expires). Every draft tool returns that URL. Adherence, readiness,
   goals and the retrospective describe the committed plan, so a draft view
   omits them.
+- **Compare puts two sides on one page.** A side is a plan version, a plan's
+  draft, or the athlete's synced runs over a block of weeks; each may be
+  limited to a Monday range. `plan.html?plan=A&vs=B|actual` (with `draft`,
+  `weeks`, `vs_draft`, `vs_weeks`) reuses the calendar renderers, and the
+  `compare_plans` tool returns the same comparison as data.
+- **Alignment.** If the sides' week ranges overlap, weeks pair by date and a
+  week only one side has pairs with nothing. Otherwise they pair by position
+  (Week 1 beside Week 1), each side keeping its own dates. A week's mileage is
+  its target (a range at its midpoint), or the synced miles for runs.

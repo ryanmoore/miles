@@ -43,6 +43,7 @@ from .health_api import router as health_api_router
 from .load_api import router as load_api_router
 from .notes_api import router as notes_api_router
 from .plan_api import router as plan_api_router
+from .plan_compare import router as plan_compare_router
 from .routes_api import router as routes_api_router
 from .searches_api import router as searches_api_router
 from .terrain_api import router as terrain_api_router
@@ -1691,6 +1692,7 @@ app.include_router(easy_efficiency_router)
 app.include_router(load_api_router)
 app.include_router(notes_api_router)
 app.include_router(plan_api_router)
+app.include_router(plan_compare_router)
 app.include_router(routes_api_router)
 app.include_router(searches_api_router)
 app.include_router(terrain_api_router)

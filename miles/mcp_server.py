@@ -20,6 +20,7 @@ from .fitness import WINDOW_DAYS, estimate_fitness
 from .format import app_url, fmt_pace, fmt_time
 from .offload import threaded
 from .periods import GAP_WEEKS_TO_SPLIT, Period, WeekAgg, is_active, monday_of, sunday_of, detect_periods
+from . import plan_compare
 from .plan_api import plan_summaries
 from .plan import (
     DayInput,
@@ -1805,6 +1806,36 @@ def list_plans() -> str:
             {**s, "url": app_url(f"/plan.html?plan={s['plan_id']}#plan")}
             for s in plan_summaries(conn, date.today())
         ])
+    except Exception as e:
+        return json.dumps({"error": describe_error(e, None)})
+
+
+@mcp.tool()
+def compare_plans(a: dict[str, object], b: dict[str, object]) -> str:
+    """
+    Compares two plans (or a plan and what the athlete actually ran) week by
+    week, and returns a `url` that shows them side by side in the web app.
+
+    Each side is {"plan_id": N, "draft": true?, "from_week": "YYYY-MM-DD"?,
+    "to_week": "YYYY-MM-DD"?}: a plan's latest committed version, or with
+    draft=true its uncommitted draft; from_week/to_week (Mondays, inclusive)
+    restrict it to a block. Side b may instead be {"actual": true, "from_week":
+    ..., "to_week": ...}: the synced runs over those weeks.
+
+    If the sides' weeks overlap they are paired by date (a week only one side
+    has pairs with null); otherwise side a's first week pairs with side b's
+    first, labelled Week 1, 2, ... Returns a (per-side summary: weeks, total,
+    average and peak week miles, workouts per week, longest long run) and b,
+    plus weeks: per pairing each side's miles (a range week counts at its
+    midpoint), workouts and long run, and day_differences, the weekdays
+    whose slot, miles or (between two plans) title differ. Or {"error": ...}.
+    """
+    conn = _conn()
+    try:
+        try:
+            return json.dumps(plan_compare.compare(conn, a, b))
+        except PlanValidationError as e:
+            return json.dumps({"error": str(e)})
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 

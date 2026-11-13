@@ -945,6 +945,15 @@
     const paceLabel = toggleState.gap ? 'GAP' : 'Pace';
     const paceColor = toggleState.gap ? GAP_COLOR : PACE_COLOR;
     const paceSeries = rollingMeanByTime(t, rawPaceSeries, 30);
+    // Pace axis: fastest smoothed pace to the slower of the 98th percentile
+    // and 1.5x the median, on half-minute bounds, so stops and walk breaks
+    // run off the chart rather than flatten it.
+    const sortedPace = paceSeries.filter(v => v != null).sort((a, b) => a - b);
+    const paceAt = (q) => sortedPace[Math.floor((sortedPace.length - 1) * q)];
+    const paceAxisMin = sortedPace.length ? Math.max(3, Math.floor(sortedPace[0] * 2) / 2) : 4;
+    const paceAxisMax = sortedPace.length
+      ? Math.min(25, Math.ceil(Math.min(paceAt(0.98), paceAt(0.5) * 1.5) * 2) / 2)
+      : 25;
 
     const series = [];
 
@@ -1092,8 +1101,8 @@
         {
           type: 'value',
           inverse: true,
-          min: 4,
-          max: 25,
+          min: paceAxisMin,
+          max: paceAxisMax,
           name: 'min/mi',
           nameTextStyle: { color: theme.muted, fontSize: 10 },
           axisLabel: { formatter: (v) => fmt.pace(v), color: PACE_COLOR, fontSize: 10 },
@@ -1101,6 +1110,7 @@
         },
         {
           type: 'value',
+          scale: true,
           name: 'bpm',
           nameTextStyle: { color: theme.muted, fontSize: 10 },
           axisLabel: { color: HR_COLOR, fontSize: 10 },
@@ -1138,6 +1148,9 @@
       },
       yAxis: {
         type: 'value',
+        // At least 100 ft of range, so a flat run reads flat rather than as GPS noise.
+        min: ({ min }) => Math.floor(min / 50) * 50,
+        max: ({ min, max }) => Math.ceil(Math.max(max, min + 100) / 50) * 50,
         name: 'ft',
         nameTextStyle: { color: theme.muted, fontSize: 10 },
         axisLabel: { color: theme.muted, fontSize: 10 },

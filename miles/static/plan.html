@@ -3186,11 +3186,14 @@
       return `<div class="mcal-day-row"><div class="mcal-day-wd">${name}</div><div class="cmp-mlines">${sides.map(([s, w]) => mobileLine(s, w, addDays(w.week_start, k))).join('')}</div></div>`;
     }).join('');
     const levels = [];
+    // A day of synced runs that has not ended and has no run yet is not a difference.
+    const today = new Date().toLocaleDateString('en-CA');
+    const pending = (s, d) => s.actual && d >= today && !cmpSessions(s, d).length;
     const html = alignWeeks(a, b).map((row, i) => {
       const lv = { a: new Map(), b: new Map() };
       for (let k = 0; k < 7 && row.a && row.b; k++) {
         const da = addDays(row.a.week_start, k), db = addDays(row.b.week_start, k);
-        const level = cmpLevel(cmpSessions(a, da), cmpSessions(b, db), withTitles);
+        const level = pending(a, da) || pending(b, db) ? 0 : cmpLevel(cmpSessions(a, da), cmpSessions(b, db), withTitles);
         lv.a.set(da, level);
         lv.b.set(db, level);
       }

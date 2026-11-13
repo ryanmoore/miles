@@ -93,7 +93,8 @@ def _project(time_s: float, from_m: float) -> dict[str, float]:
 
 def _tier1_races(conn: sqlite3.Connection, as_of: date, *, exclude_casual: bool = False) -> _Candidate | None:
     """Races in-window with a known distance category and finish time, combined
-    by recency-weighted average in pace space."""
+    by recency-weighted average in pace space. A race climbing more than
+    ELEV_GAIN_PER_M_MAX is left out: Riegel reads its finish time as a flat one."""
     sport_clause, params = run_sport_filter()
     effective = effective_run_type_sql()
     window_start = (as_of - timedelta(days=WINDOW_DAYS)).isoformat()
@@ -103,9 +104,10 @@ def _tier1_races(conn: sqlite3.Connection, as_of: date, *, exclude_casual: bool 
         FROM activities
         WHERE {sport_clause} AND {effective} = 'race'
           AND DATE(start_date) >= ? AND DATE(start_date) <= ?
+          AND COALESCE(total_elevation_gain_m, 0) <= ? * distance_m
           {casual_clause}
         ORDER BY date
-    """, params + [window_start, as_of.isoformat()]).fetchall()
+    """, params + [window_start, as_of.isoformat(), ELEV_GAIN_PER_M_MAX]).fetchall()
 
     weighted: list[tuple[float, dict[str, float]]] = []
     sources: list[Source] = []

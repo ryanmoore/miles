@@ -46,7 +46,7 @@ _CONFIDENCE_VALUES = get_args(Confidence)
 
 # Bump whenever any classifier or threshold feeding a derived value changes, so
 # ensure_derived() knows stale rows need a full recompute.
-DERIVE_VERSION = "13"
+DERIVE_VERSION = "14"
 
 _FINAL_CHECKPOINTS = "fitness_checkpoints"
 _SEED_CHECKPOINTS = "fitness_checkpoints_seed"

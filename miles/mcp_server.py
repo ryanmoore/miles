@@ -29,6 +29,7 @@ from .plan import (
     add_log_entry,
     commit_plan as _plan_commit_plan,
     compute_week_mileage,
+    copy_weeks as _plan_copy_weeks,
     current_version_for_week,
     delete_draft_days as _plan_delete_draft_days,
     delete_draft_weeks as _plan_delete_draft_weeks,
@@ -39,6 +40,7 @@ from .plan import (
     get_draft as _plan_get_draft,
     get_plan,
     get_version,
+    plan_role,
     plan_start_monday,
     set_draft_race as _plan_set_draft_race,
     start_plan_draft as _plan_start_plan_draft,
@@ -1830,7 +1832,13 @@ def compare_plans(sides: list[dict[str, object]]) -> str:
     and, per pairing, each side's week numbers plus, for every side after the
     first, day_differences: the weekdays whose session types, total miles (by
     more than max(1 mi, 15% of the larger day)) or (between two plans) titles
-    differ from the baseline's. Or {"error": ...}.
+    differ from the baseline's; a strength session on one side only is listed
+    (its slot reads "strength") though the page shades it faintest. Summaries
+    cover only the weeks every plan side has (by position, the first N weeks
+    of the shortest plan); a runs side is summarised over its own weeks within
+    that set, and each side's `weeks` is still its full count. When that is
+    fewer than some plan has, `shared_weeks_note` says so (else null). Or
+    {"error": ...}.
     """
     conn = _conn()
     try:
@@ -1842,35 +1850,50 @@ def compare_plans(sides: list[dict[str, object]]) -> str:
         return json.dumps({"error": describe_error(e, None)})
 
 
-def _draft_state(conn: sqlite3.Connection, plan_id: int) -> dict[str, object]:
-    """Full draft-read payload shared by every draft tool's response: current
-    weeks/days, the gap report (plan._draft_gap_report, via get_draft — what
-    commit_plan's global validation would reject right now), sanity warnings
-    (see _sanity_warnings) computed over whatever weeks exist so far —
-    tolerant of a partial draft, since _sanity_warnings already no-ops on an
-    empty or partially-unspecified week list — program-computed per-week
-    mileage consistency (see compute_week_mileage; its per-week messages are
-    also folded into warnings, advisory here — commit_plan is where an
-    inconsistent week is hard-rejected), sync freshness, and the web app url
-    that shows this draft (plus expires_at for a sketch)."""
+def _in_weeks(monday: str, from_week: str | None, to_week: str | None) -> bool:
+    return (from_week is None or monday >= from_week) and (to_week is None or monday <= to_week)
+
+
+def _day_week(d: db.PlanDayRow) -> str:
+    return monday_of(date.fromisoformat(d["date"])).isoformat()
+
+
+def _draft_state(
+    conn: sqlite3.Connection, plan_id: int, touched: Sequence[str] | None = None,
+    from_week: str | None = None, to_week: str | None = None,
+) -> dict[str, object]:
+    """Draft payload for every draft tool: the full read (get_draft) without
+    `touched`, else the compact acknowledgement for a write that changed
+    those Mondays (week_mileage for them only). Gaps and warnings (which
+    fold in week_mileage's inconsistency messages, advisory here) always
+    cover the whole draft."""
     bundle = _plan_get_draft(conn, plan_id)
     last_sync_at = db.get_last_sync_at(conn)
     week_mileage = compute_week_mileage(bundle["weeks"], bundle["days"])
     warnings = _sanity_warnings(conn, bundle["weeks"], date.today())
     warnings.extend(cast(str, c["message"]) for c in week_mileage if not c["consistent"])
-    return {
-        "plan": bundle["plan"],
-        "version": bundle["version"],
-        "weeks": bundle["weeks"],
-        "days": [_day_with_target(d) for d in bundle["days"]],
-        "goals": bundle["goals"],
+    out: dict[str, object] = {
         "gaps": bundle["gaps"],
-        "week_mileage": week_mileage,
         "warnings": warnings,
         "last_sync_at": last_sync_at,
         "days_stale": db.days_stale(last_sync_at),
         "url": app_url(f"/plan.html?plan={plan_id}&draft=1#plan"),
         "expires_at": bundle["plan"]["sketch_expires_at"],
+    }
+    if touched is not None:
+        starts = sorted(w["week_start"] for w in bundle["weeks"])
+        return out | {
+            "plan": {"plan_id": plan_id, "title": bundle["plan"]["title"], "role": plan_role(bundle["plan"], date.today())},
+            "draft_weeks": {"count": len(starts), "first": starts[0] if starts else None, "last": starts[-1] if starts else None},
+            "week_mileage": [c for c in week_mileage if c["week_start"] in touched],
+        }
+    return out | {
+        "plan": bundle["plan"],
+        "version": bundle["version"],
+        "weeks": [w for w in bundle["weeks"] if _in_weeks(w["week_start"], from_week, to_week)],
+        "days": [_day_with_target(d) for d in bundle["days"] if _in_weeks(_day_week(d), from_week, to_week)],
+        "goals": bundle["goals"],
+        "week_mileage": [c for c in week_mileage if _in_weeks(c["week_start"], from_week, to_week)],
     }
 
 
@@ -1906,7 +1929,7 @@ def start_plan_draft(
     one draft is open. Overlap with a committed plan is rejected at commit
     time, not here.
 
-    Returns the new draft's state (see get_draft's return shape) on success,
+    Returns the compact acknowledgement (see get_draft) on success,
     or {"error": "..."} naming the offending field (empty title, invalid
     race_date, negative goal_time_s) — never a traceback.
     """
@@ -1919,7 +1942,7 @@ def start_plan_draft(
             )
         except PlanValidationError as e:
             return json.dumps({"error": str(e)})
-        return json.dumps(_fmt_paces(_draft_state(conn, plan_id)))
+        return json.dumps(_draft_state(conn, plan_id, []))
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
@@ -1940,8 +1963,9 @@ def start_revision_draft(plan_id: int | None = None) -> str:
     off the current numbers — a stale sync means the athlete's recent
     training isn't reflected yet, not that it didn't happen.
 
-    Returns the new draft's state (see get_draft's return shape) on success,
-    or {"error": "..."}: no current plan, or a draft already in progress.
+    Returns the compact acknowledgement (see get_draft) on success, with no
+    week_mileage; get_draft reads the copied weeks. Or {"error": "..."}: no
+    current plan, or a draft already in progress.
     """
     conn = _conn()
     try:
@@ -1954,13 +1978,13 @@ def start_revision_draft(plan_id: int | None = None) -> str:
             _plan_start_revision_draft(conn, plan_id)
         except PlanValidationError as e:
             return json.dumps({"error": str(e)})
-        return json.dumps(_fmt_paces(_draft_state(conn, plan_id)))
+        return json.dumps(_draft_state(conn, plan_id, []))
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
 
 @mcp.tool()
-def get_draft(plan_id: int | None = None) -> str:
+def get_draft(plan_id: int | None = None, from_week: str | None = None, to_week: str | None = None) -> str:
     """
     Current state of an in-progress draft (started via start_plan_draft or
     start_revision_draft; plan_id picks one when several are open, as with
@@ -1988,6 +2012,14 @@ def get_draft(plan_id: int | None = None) -> str:
       yet — missing data, not missing training — check this before
       narrating "how's this week going" mid-draft.
 
+    This is the only draft tool that returns the whole draft. A full plan is
+    tens of KB, so from_week/to_week (Mondays, inclusive, either optional)
+    limit the weeks, days and week_mileage returned; gaps and warnings always
+    cover the whole draft. Every draft write tool instead returns a compact
+    acknowledgement: plan {plan_id, title, role}, draft_weeks {count, first,
+    last}, gaps, warnings, week_mileage for only the weeks that call touched,
+    last_sync_at/days_stale, url and expires_at.
+
     Returns {"error": "no draft in progress"} if none exists (or a named
     ambiguity error in the rare case more than one plan has an open draft).
     """
@@ -1997,7 +2029,7 @@ def get_draft(plan_id: int | None = None) -> str:
         if isinstance(resolved, dict):
             return json.dumps(resolved)
         plan_id, _version_id = resolved
-        return json.dumps(_fmt_paces(_draft_state(conn, plan_id)))
+        return json.dumps(_fmt_paces(_draft_state(conn, plan_id, None, from_week, to_week)))
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
@@ -2017,7 +2049,7 @@ def set_draft_race(
     race date or drop the race. The race decides which week commit_plan
     requires the plan to include, and which synced race completes the plan.
 
-    Returns the full draft state (see get_draft), or {"error": "..."}.
+    Returns the compact acknowledgement (see get_draft), or {"error": "..."}.
     """
     conn = _conn()
     try:
@@ -2029,7 +2061,7 @@ def set_draft_race(
             _plan_set_draft_race(conn, version_id, race_date, distance_bucket, goal_time_s)
         except PlanValidationError as e:
             return json.dumps({"error": str(e)})
-        return json.dumps(_fmt_paces(_draft_state(conn, plan_id)))
+        return json.dumps(_draft_state(conn, plan_id, []))
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
@@ -2054,10 +2086,10 @@ def set_draft_weeks(weeks: list[WeekInput], plan_id: int | None = None) -> str:
     the edit immediately (see derive_all) — matters most for a revision that
     touches an already-elapsed week.
 
-    Returns the full draft state (see get_draft, including week_mileage —
-    the program-computed day-mileage sum per week checked against this
-    week's band) plus `written: {"weeks": [...week_starts...]}` on success,
-    or {"error": "..."} naming the offending week/field — never a traceback.
+    Returns the compact acknowledgement (see get_draft; week_mileage covers
+    the written weeks) plus `written: {"weeks": [...week_starts...]}` on
+    success, or {"error": "..."} naming the offending week/field — never a
+    traceback.
     """
     conn = _conn()
     try:
@@ -2070,9 +2102,8 @@ def set_draft_weeks(weeks: list[WeekInput], plan_id: int | None = None) -> str:
         except PlanValidationError as e:
             return json.dumps({"error": str(e)})
         derive_all(conn)
-        result = _draft_state(conn, plan_id)
-        result["written"] = {"weeks": sorted({w["week_start"] for w in weeks})}
-        return json.dumps(_fmt_paces(result))
+        written = sorted({w["week_start"] for w in weeks})
+        return json.dumps(_draft_state(conn, plan_id, written) | {"written": {"weeks": written}})
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
@@ -2106,11 +2137,10 @@ def set_draft_days(days: list[DayInput], plan_id: int | None = None) -> str:
 
     Finishes by re-running the incremental derive pass (see derive_all).
 
-    Returns the full draft state (see get_draft, including week_mileage —
-    the program-computed day-mileage sum per week checked against this
-    week's band, since editing days shifts that sum) plus `written:
-    {"days": [[date, seq], ...]}` on success, or {"error": "..."} naming the
-    offending day/field — never a traceback.
+    Returns the compact acknowledgement (see get_draft; week_mileage covers
+    the weeks the days fall in, since editing days shifts that sum) plus
+    `written: {"days": [[date, seq], ...]}` on success, or {"error": "..."}
+    naming the offending day/field — never a traceback.
     """
     conn = _conn()
     try:
@@ -2123,9 +2153,9 @@ def set_draft_days(days: list[DayInput], plan_id: int | None = None) -> str:
         except PlanValidationError as e:
             return json.dumps({"error": str(e)})
         derive_all(conn)
-        result = _draft_state(conn, plan_id)
-        result["written"] = {"days": [[d["date"], d.get("seq", 1)] for d in days]}
-        return json.dumps(_fmt_paces(result))
+        touched = sorted({monday_of(date.fromisoformat(d["date"])).isoformat() for d in days})
+        written = {"days": [[d["date"], d.get("seq", 1)] for d in days]}
+        return json.dumps(_draft_state(conn, plan_id, touched) | {"written": written})
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
@@ -2163,8 +2193,8 @@ def set_draft_goals(goals: list[dict[str, object]], plan_id: int | None = None) 
         of those Strava sport types (strength: ["WeightTraining", "Workout"]).
     Weeks the sync has not fully covered have no value (absent, not zero).
 
-    Returns the full draft state (see get_draft, which includes `goals`), or
-    {"error": "..."} naming the goal and field.
+    Returns the compact acknowledgement (see get_draft, which returns `goals`),
+    or {"error": "..."} naming the goal and field.
     """
     conn = _conn()
     try:
@@ -2176,7 +2206,7 @@ def set_draft_goals(goals: list[dict[str, object]], plan_id: int | None = None) 
             goals_service.set_draft_goals(conn, version_id, goals)
         except PlanValidationError as e:
             return json.dumps({"error": str(e)})
-        return json.dumps(_fmt_paces(_draft_state(conn, plan_id)))
+        return json.dumps(_draft_state(conn, plan_id, []))
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
@@ -2190,8 +2220,8 @@ def delete_draft_weeks(week_starts: list[str], plan_id: int | None = None) -> st
 
     Finishes by re-running the incremental derive pass (see derive_all).
 
-    Returns the full draft state (see get_draft) plus `deleted_weeks: N` on
-    success, or {"error": "..."} — no draft in progress.
+    Returns the compact acknowledgement (see get_draft) plus `deleted_weeks:
+    N` on success, or {"error": "..."} — no draft in progress.
     """
     conn = _conn()
     try:
@@ -2204,9 +2234,7 @@ def delete_draft_weeks(week_starts: list[str], plan_id: int | None = None) -> st
         except PlanValidationError as e:
             return json.dumps({"error": str(e)})
         derive_all(conn)
-        result = _draft_state(conn, plan_id)
-        result["deleted_weeks"] = deleted
-        return json.dumps(_fmt_paces(result))
+        return json.dumps(_draft_state(conn, plan_id, []) | {"deleted_weeks": deleted})
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
@@ -2220,8 +2248,9 @@ def delete_draft_days(dates: list[str], plan_id: int | None = None) -> str:
 
     Finishes by re-running the incremental derive pass (see derive_all).
 
-    Returns the full draft state (see get_draft) plus `deleted_days: N` on
-    success, or {"error": "..."} — no draft in progress.
+    Returns the compact acknowledgement (see get_draft; week_mileage covers
+    the weeks the dates fall in) plus `deleted_days: N` on success, or
+    {"error": "..."} — no draft in progress.
     """
     conn = _conn()
     try:
@@ -2234,9 +2263,51 @@ def delete_draft_days(dates: list[str], plan_id: int | None = None) -> str:
         except PlanValidationError as e:
             return json.dumps({"error": str(e)})
         derive_all(conn)
-        result = _draft_state(conn, plan_id)
-        result["deleted_days"] = deleted
-        return json.dumps(_fmt_paces(result))
+        touched = sorted({monday_of(date.fromisoformat(d)).isoformat() for d in dates})
+        return json.dumps(_draft_state(conn, plan_id, touched) | {"deleted_days": deleted})
+    except Exception as e:
+        return json.dumps({"error": describe_error(e, None)})
+
+
+@mcp.tool()
+def copy_weeks_to_draft(
+    from_plan_id: int,
+    from_draft: bool = False,
+    from_week: str | None = None,
+    to_week: str | None = None,
+    plan_id: int | None = None,
+) -> str:
+    """
+    Copies weeks and their days from another plan into the in-progress draft,
+    so a sketch can start as an exact copy of the plan it will be compared
+    with, and an agreed sketch can be written into a revision draft without
+    re-typing it. The source is from_plan_id's latest committed version (its
+    draft with from_draft=true), limited to from_week..to_week (Mondays,
+    inclusive) when given.
+
+    Each copied week replaces that week and all its days in the draft, on the
+    same dates (nothing shifts); other weeks are untouched. Days keep their
+    frozen targets as stored. Goals and the race are not copied.
+
+    Returns the compact acknowledgement (see get_draft; week_mileage covers
+    the copied weeks) plus `copied: {"weeks": [...week_starts...]}`, or
+    {"error": "..."}: unknown plan, no draft to write to or read from, no
+    weeks in the range, or the source is the draft being written to.
+    """
+    conn = _conn()
+    try:
+        resolved = _resolve_draft(conn, plan_id)
+        if isinstance(resolved, dict):
+            return json.dumps(resolved)
+        plan_id, version_id = resolved
+        try:
+            copied = _plan_copy_weeks(
+                conn, version_id, from_plan_id, from_draft=from_draft, from_week=from_week, to_week=to_week,
+            )
+        except PlanValidationError as e:
+            return json.dumps({"error": str(e)})
+        derive_all(conn)
+        return json.dumps(_draft_state(conn, plan_id, copied) | {"copied": {"weeks": copied}})
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 
@@ -2378,7 +2449,10 @@ def discard_draft(plan_id: int | None = None) -> str:
 
 
 @mcp.tool()
-def get_training_plan(version_n: int | None = None, compare_to: int | None = None, plan_id: int | None = None) -> str:
+def get_training_plan(
+    version_n: int | None = None, compare_to: int | None = None, plan_id: int | None = None,
+    from_week: str | None = None, to_week: str | None = None,
+) -> str:
     """
     Reads a plan's committed history (plan_id, default the current plan —
     see list_plans for the others): a specific version_n, or the
@@ -2388,6 +2462,9 @@ def get_training_plan(version_n: int | None = None, compare_to: int | None = Non
     version) and `governing_version_n` — the version_n that currently
     governs this week: the latest version committed by this week's Sunday,
     so a mid-week revision governs the week it was committed in.
+
+    from_week / to_week: optional Mondays (inclusive, either may be omitted)
+    limiting the weeks and days returned; a full plan is tens of KB.
 
     compare_to: optional version_n to diff against the returned version —
     added/removed/changed weeks, days and goals and any race change, via
@@ -2470,8 +2547,8 @@ def get_training_plan(version_n: int | None = None, compare_to: int | None = Non
         result: dict[str, object] = {
             "plan": p,
             "version": bundle["version"],
-            "weeks": bundle["weeks"],
-            "days": [_day_with_target(d) for d in bundle["days"]],
+            "weeks": [w for w in bundle["weeks"] if _in_weeks(w["week_start"], from_week, to_week)],
+            "days": [_day_with_target(d) for d in bundle["days"] if _in_weeks(_day_week(d), from_week, to_week)],
             "goals": bundle["goals"],
             "versions": [
                 {

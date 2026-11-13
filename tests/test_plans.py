@@ -352,7 +352,8 @@ def test_compare_plans_aligns_by_date_when_weeks_overlap_else_by_position(monkey
         {"day": "Wed", "baseline": "rest", "side": "easy 8 mi"},
     ]
     assert week0[2]["day_differences"][0] == {"day": "Mon", "baseline": "rest", "side": "long 10 mi"}
-    assert by_date["sides"][2]["longest_long_run"] == 10.0
+    assert by_date["shared_weeks_note"] == f"Figures cover the 2 weeks all plans share, {mon(1)} to {mon(2)}"
+    assert [(s["weeks"], s["total_miles"]) for s in by_date["sides"]] == [(3, 63.0), (2, 63.0), (1, 0.0)]
 
     # Pairing is by position unless every other side overlaps the baseline.
     ordinal = tool("compare_plans", sides=[
@@ -369,3 +370,91 @@ def test_compare_plans_aligns_by_date_when_weeks_overlap_else_by_position(monkey
 
     tuesday = (THIS_MONDAY + timedelta(days=1)).isoformat()
     assert "not a Monday" in tool("compare_plans", sides=[{"plan_id": base, "from_week": tuesday, "to_week": tuesday}, {"plan_id": other}])["error"]
+
+
+def _plan_with_days(conn, title: str, first: int, last: int, *, commit: bool = True) -> int:
+    """A plan whose weeks each hold one easy day filling the target and a Wednesday strength day."""
+    plan_id, version_id = plan.start_plan_draft(conn, title=title, sketch=not commit)
+    plan.upsert_draft_weeks(conn, version_id, _weeks(first, last))
+    plan.upsert_draft_days(conn, version_id, [
+        d for w in range(first, last + 1) for d in (
+            {"date": (THIS_MONDAY + timedelta(weeks=w)).isoformat(), "slot": "easy", "target_miles": 30.0 + w},
+            {"date": (THIS_MONDAY + timedelta(weeks=w, days=2)).isoformat(), "slot": "strength", "title": "Lift"},
+        )
+    ])
+    if commit:
+        plan.commit_plan(conn, plan_id, note="ok")
+    return plan_id
+
+
+def test_copy_weeks_between_plans_and_compact_write_responses(monkeypatch):
+    conn = memory_db()
+    monkeypatch.setattr(mcp_server, "_conn", lambda: conn)
+    tool = lambda name, **args: call_tool(mcp_server.mcp, name, args)  # noqa: E731
+    mon = lambda w: (THIS_MONDAY + timedelta(weeks=w)).isoformat()  # noqa: E731
+
+    base = _plan_with_days(conn, "Base", 10, 14)
+    sketch = tool("start_plan_draft", title="Sketch", sketch=True)["plan"]["plan_id"]
+
+    # A copy is exact, strength sessions included, and acknowledges only the weeks it touched.
+    ack = tool("copy_weeks_to_draft", from_plan_id=base, plan_id=sketch)
+    assert ack["copied"]["weeks"] == [mon(w) for w in range(10, 15)]
+    assert ack["plan"] == {"plan_id": sketch, "title": "Sketch", "role": "sketch"}
+    assert ack["draft_weeks"] == {"count": 5, "first": mon(10), "last": mon(14)}
+    assert len(ack["week_mileage"]) == 5 and not {"weeks", "days", "goals"} & ack.keys()
+    assert tool("compare_plans", sides=[{"plan_id": base}, {"plan_id": sketch, "draft": True}])["weeks"][0]["sides"][1]["day_differences"] == []
+
+    # Compact acknowledgements name only the touched weeks; get_draft has everything, or a range of it.
+    tool("set_draft_days", days=[{"date": mon(11), "slot": "easy", "target_miles": 41.0}], plan_id=sketch)
+    ack = tool("set_draft_weeks", weeks=[{**_weeks(12, 12)[0], "target_miles": 7.0}], plan_id=sketch)
+    assert [c["week_start"] for c in ack["week_mileage"]] == [mon(12)] and ack["written"] == {"weeks": [mon(12)]}
+    full = tool("get_draft", plan_id=sketch)
+    assert len(full["weeks"]) == 5 and len(full["days"]) == 10 and len(full["week_mileage"]) == 5
+    part = tool("get_draft", plan_id=sketch, from_week=mon(11), to_week=mon(12))
+    assert [w["week_start"] for w in part["weeks"]] == [mon(11), mon(12)] and len(part["days"]) == 4
+    assert [c["week_start"] for c in part["week_mileage"]] == [mon(11), mon(12)]
+    assert [w["week_start"] for w in tool("get_training_plan", plan_id=base, from_week=mon(13))["weeks"]] == [mon(13), mon(14)]
+
+    # An agreed sketch goes into a revision draft; only the copied range changes.
+    tool("start_revision_draft", plan_id=base)
+    tool("copy_weeks_to_draft", from_plan_id=sketch, from_draft=True, from_week=mon(11), to_week=mon(12), plan_id=base)
+    revised = {w["week_start"]: w["target_miles"] for w in tool("get_draft", plan_id=base)["weeks"]}
+    assert revised == {mon(10): 40.0, mon(11): 41.0, mon(12): 7.0, mon(13): 43.0, mon(14): 44.0}
+
+    errors = {
+        "unknown plan": tool("copy_weeks_to_draft", from_plan_id=999, plan_id=sketch),
+        "no draft to write to": tool("copy_weeks_to_draft", from_plan_id=sketch, from_draft=True, plan_id=999),
+        "empty range": tool("copy_weeks_to_draft", from_plan_id=base, from_week=mon(20), to_week=mon(21), plan_id=sketch),
+        "into itself": tool("copy_weeks_to_draft", from_plan_id=sketch, from_draft=True, plan_id=sketch),
+    }
+    assert {k: v["error"] for k, v in errors.items()} == {
+        "unknown plan": "plan 999 does not exist",
+        "no draft to write to": "no draft in progress; call start_plan_draft or start_revision_draft first",
+        "empty range": f"plan {base} has no weeks in that range",
+        "into itself": "the source is the draft being written to",
+    }
+
+
+def test_compare_summaries_cover_the_shared_weeks_and_strength_only_days_are_listed(monkeypatch):
+    conn = memory_db()
+    monkeypatch.setattr(mcp_server, "_conn", lambda: conn)
+    tool = lambda name, **args: call_tool(mcp_server.mcp, name, args)  # noqa: E731
+    mon = lambda w: (THIS_MONDAY + timedelta(weeks=w)).isoformat()  # noqa: E731
+
+    long_plan = _plan_with_days(conn, "Ten weeks", 0, 9)
+    short = _plan_with_days(conn, "Nine weeks", 20, 28, commit=False)
+    conn.execute("DELETE FROM plan_days WHERE version_id IN (SELECT version_id FROM plan_versions WHERE plan_id = ?) AND slot = 'strength'", [short])
+
+    # Paired by position the shorter plan sets the count, so the totals compare like with like.
+    by_position = tool("compare_plans", sides=[{"plan_id": long_plan}, {"plan_id": short, "draft": True}])
+    assert by_position["shared_weeks_note"] == "Figures cover the 9 weeks all plans share"
+    assert [(s["weeks"], s["total_miles"]) for s in by_position["sides"]] == [(10, 306.0), (9, 486.0)]
+    assert len(by_position["weeks"]) == 10
+    # The strength session on the baseline's Wednesday is listed and reads as strength.
+    wednesday = [d for d in by_position["weeks"][0]["sides"][1]["day_differences"] if d["day"] == "Wed"]
+    assert wednesday == [{"day": "Wed", "baseline": "strength Lift", "side": "rest"}]
+
+    # Paired by date the shared range is named, and equal coverage shows no note.
+    by_date = tool("compare_plans", sides=[{"plan_id": long_plan}, {"plan_id": long_plan, "from_week": mon(1), "to_week": mon(9)}])
+    assert by_date["shared_weeks_note"] == f"Figures cover the 9 weeks all plans share, {mon(1)} to {mon(9)}"
+    assert tool("compare_plans", sides=[{"plan_id": long_plan}, {"plan_id": long_plan}])["shared_weeks_note"] is None

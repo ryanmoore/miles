@@ -179,10 +179,34 @@ def align(sides: list[Side]) -> list[tuple[str, list[SideWeek | None]]]:
     baseline (sides[0]); a week only some sides have pairs with None for the
     rest. Otherwise all sides pair by position, labelled Week 1, 2, ..."""
     by_date = [{w["week_start"]: w for w in s["weeks"]} for s in sides]
-    if all(m.keys() & by_date[0].keys() for m in by_date[1:]):
+    if _pairs_by_date(sides):
         return [(d, [m.get(d) for m in by_date]) for d in sorted(set().union(*by_date))]
     n = max(len(s["weeks"]) for s in sides)
     return [(f"Week {i + 1}", [s["weeks"][i] if i < len(s["weeks"]) else None for s in sides]) for i in range(n)]
+
+
+def _pairs_by_date(sides: list[Side]) -> bool:
+    base = {w["week_start"] for w in sides[0]["weeks"]}
+    return all(base & {w["week_start"] for w in s["weeks"]} for s in sides[1:])
+
+
+def shared_weeks(sides: list[Side]) -> tuple[list[list[SideWeek]], str | None]:
+    """Each side's weeks to summarise, and a note saying so when that is fewer
+    than some plan side has. Paired by date, the weeks every plan side has;
+    paired by position, the first N where N is the shortest plan side. A runs
+    side keeps its own weeks within that set and never shrinks it. plan.html's
+    sharedWeeks applies the same rule."""
+    plans = [s for s in sides if not s["is_actual"]]
+    if _pairs_by_date(sides):
+        keep = set.intersection(*({w["week_start"] for w in s["weeks"]} for s in plans))
+        size, span = len(keep), f", {min(keep, default='')} to {max(keep, default='')}"
+        pick = lambda s: [w for w in s["weeks"] if w["week_start"] in keep]  # noqa: E731
+    else:
+        size, span = min(len(s["weeks"]) for s in plans), ""
+        pick = lambda s: s["weeks"][:size]  # noqa: E731
+    if not size or all(len(s["weeks"]) == size for s in plans):
+        return [s["weeks"] for s in sides], None
+    return [pick(s) for s in sides], f"Figures cover the {size} weeks all plans share{span}"
 
 
 def _fmt_sessions(sessions: list[Session]) -> str:
@@ -212,10 +236,11 @@ def _day_diffs(base: SideWeek | None, other: SideWeek | None, with_titles: bool)
     return out
 
 
-def _summary(side: Side) -> dict[str, object]:
-    miles = [w["miles"] for w in side["weeks"] if w["miles"] is not None]
-    longs = [w["long_run_miles"] for w in side["weeks"] if w["long_run_miles"] is not None]
-    workouts = [w["workouts"] for w in side["weeks"] if w["workouts"] is not None]
+def _summary(side: Side, weeks: list[SideWeek]) -> dict[str, object]:
+    """The side's figures over `weeks`; `weeks` in the result is its full count."""
+    miles = [w["miles"] for w in weeks if w["miles"] is not None]
+    longs = [w["long_run_miles"] for w in weeks if w["long_run_miles"] is not None]
+    workouts = [w["workouts"] for w in weeks if w["workouts"] is not None]
     return {
         "label": side["label"], "weeks": len(side["weeks"]),
         "total_miles": round(sum(miles), 1), "avg_week_miles": round(sum(miles) / len(miles), 1) if miles else None,
@@ -268,4 +293,8 @@ def compare(conn: sqlite3.Connection, specs: Sequence[Mapping[str, object]]) -> 
                 entry["day_differences"] = _day_diffs(cells[0], w, not sides[i]["is_actual"])
             entries.append(entry)
         weeks.append({"week": label, "sides": entries})
-    return {"url": compare_url(specs), "sides": [_summary(s) for s in sides], "weeks": weeks}
+    summarised, note = shared_weeks(sides)
+    return {
+        "url": compare_url(specs), "shared_weeks_note": note,
+        "sides": [_summary(s, w) for s, w in zip(sides, summarised)], "weeks": weeks,
+    }

@@ -38,6 +38,22 @@ but a revision draft had no page, and throwaway drafts piled up as candidates.
 - **Shading is relative to the baseline.** Each non-baseline day is tinted by
   how far it differs from the baseline's same weekday; the baseline row is
   never shaded. A mileage gap of at most max(1 mi, 15% of the larger day) with
-  matching session types is the same day; bigger gaps and changed or
-  one-sided sessions step up through light, medium and strong. The tint is
-  `--series-7`, which no slot or run-type colour uses.
+  matching run types is the same day; bigger gaps and changed or one-sided
+  run sessions step up through light, medium and strong. A day that differs
+  only in strength sessions (or titles) is the faintest level; the tool still
+  lists it. The tint is `--series-7`, which no slot or run-type colour uses.
+- **Summaries cover the shared weeks.** Per-side totals over different week
+  counts mislead, so the table and the tool's summaries cover the weeks every
+  plan side has (by date), or the first N weeks of the shortest plan (by
+  position). A runs side is summarised over its own weeks within that set;
+  the Weeks column keeps each side's full count. When the set is smaller than
+  some plan side, a line above the table and `shared_weeks_note` say so.
+- **`copy_weeks_to_draft` writes one plan's weeks into a draft.** It copies
+  weeks and days (frozen targets as stored, same dates) from another plan's
+  latest committed version or draft, replacing each copied week in the target,
+  so a sketch can start as an exact copy of the plan it is compared with and an
+  agreed sketch can go into a revision draft without re-typing. Goals and the
+  race are not copied.
+- **Draft write tools return a compact acknowledgement**, not the draft;
+  `get_draft` and `get_training_plan` return it all, optionally limited by
+  `from_week`/`to_week`.

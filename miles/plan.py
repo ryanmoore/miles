@@ -928,6 +928,18 @@ def start_revision_draft(conn: sqlite3.Connection, plan_id: int) -> int:
     assert vcur.lastrowid is not None
     version_id = int(vcur.lastrowid)
 
+    _insert_rows(conn, version_id, source["weeks"], source["days"])
+    conn.execute(
+        f"INSERT INTO plan_goals (version_id, {GOAL_COLS}) "
+        f"SELECT ?, {GOAL_COLS} FROM plan_goals WHERE version_id = ? ORDER BY rowid",
+        [version_id, source["version"]["version_id"]],
+    )
+    conn.commit()
+    return version_id
+
+
+def _insert_rows(conn: sqlite3.Connection, version_id: int, weeks: list[PlanWeekRow], days: list[PlanDayRow]) -> None:
+    """Copies week and day rows into a version as stored (frozen targets are not re-resolved)."""
     conn.executemany(
         "INSERT INTO plan_weeks (version_id, week_start, target_miles, target_miles_hi, "
         "target_workouts, target_long_run_miles, target_long_run_minutes, "
@@ -936,7 +948,7 @@ def start_revision_draft(conn: sqlite3.Connection, plan_id: int) -> int:
             (version_id, w["week_start"], w["target_miles"], w["target_miles_hi"], w["target_workouts"],
              w["target_long_run_miles"], w["target_long_run_minutes"],
              w["phase"], w["note"])
-            for w in source["weeks"]
+            for w in weeks
         ],
     )
     conn.executemany(
@@ -945,16 +957,39 @@ def start_revision_draft(conn: sqlite3.Connection, plan_id: int) -> int:
         [
             (version_id, d["date"], d["seq"], d["slot"], d["title"], d["target_miles"], d["target_json"],
              d["terrain"], d["note"], d["target_minutes"], d["rationale"])
-            for d in source["days"]
+            for d in days
         ],
     )
-    conn.execute(
-        f"INSERT INTO plan_goals (version_id, {GOAL_COLS}) "
-        f"SELECT ?, {GOAL_COLS} FROM plan_goals WHERE version_id = ? ORDER BY rowid",
-        [version_id, source["version"]["version_id"]],
-    )
+
+
+def copy_weeks(
+    conn: sqlite3.Connection, version_id: int, from_plan_id: int, *,
+    from_draft: bool = False, from_week: str | None = None, to_week: str | None = None,
+) -> list[str]:
+    """Copies weeks and their days from from_plan_id's latest committed version
+    (its draft with from_draft) into the draft version_id, over the Monday
+    range from_week..to_week when given. Each copied week replaces that week
+    and its days in the draft; other weeks, goals and the race are untouched.
+    Returns the copied week_starts."""
+    require_draft_version(conn, version_id)
+    if get_plan(conn, from_plan_id) is None:
+        raise PlanValidationError(f"plan {from_plan_id} does not exist")
+    source = view_bundle(conn, from_plan_id, draft=from_draft)
+    if source is None:
+        raise PlanValidationError(f"plan {from_plan_id} has no draft in progress")
+    if source["version"]["version_id"] == version_id:
+        raise PlanValidationError("the source is the draft being written to")
+    weeks = [
+        w for w in source["weeks"]
+        if (from_week is None or w["week_start"] >= from_week) and (to_week is None or w["week_start"] <= to_week)
+    ]
+    if not weeks:
+        raise PlanValidationError(f"plan {from_plan_id} has no weeks in that range")
+    starts = {w["week_start"] for w in weeks}
+    delete_draft_weeks(conn, version_id, sorted(starts))
+    _insert_rows(conn, version_id, weeks, [d for d in source["days"] if monday_of(date.fromisoformat(d["date"])).isoformat() in starts])
     conn.commit()
-    return version_id
+    return sorted(starts)
 
 
 def upsert_draft_weeks(conn: sqlite3.Connection, version_id: int, weeks: list[WeekInput]) -> None:

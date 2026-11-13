@@ -3083,9 +3083,11 @@
     };
   }
 
+  const pairsByDate = sides => sides.slice(1).every(s => s.weeks.some(w => sides[0].weeks.some(b => b.week_start === w.week_start)));
+
   function alignWeeks(sides) {
     const maps = sides.map(s => new Map(s.weeks.map(w => [w.week_start, w])));
-    const byDate = maps.slice(1).every(m => [...m.keys()].some(d => maps[0].has(d)));
+    const byDate = pairsByDate(sides);
     const rows = byDate
       ? [...new Set(maps.flatMap(m => [...m.keys()]))].sort().map(d => ({ label: weekRangeLabel(d), weeks: maps.map(m => m.get(d)) }))
       : Array.from({ length: Math.max(...sides.map(s => s.weeks.length)) }, (_, i) => ({ label: `Week ${i + 1}`, weeks: sides.map(s => s.weeks[i]) }));
@@ -3110,8 +3112,32 @@
 
   const CMP_SUM_COLS = ['Side', 'Weeks', 'Total', 'Avg', 'Peak', 'Wkts/wk', 'Long run']; // average and peak week, workouts per week, longest long run
 
-  function sideSummaryHTML(s) {
-    const nums = k => s.weeks.map(w => w[k]).filter(v => v != null);
+  // The weeks each side's summary covers, and a note when that is fewer than
+  // some plan side has. By date, the weeks every plan side has; by position,
+  // the first N where N is the shortest plan side. A runs side keeps its own
+  // weeks within that set and never shrinks it. plan_compare.shared_weeks
+  // applies the same rule.
+  function sharedWeeks(sides) {
+    const plans = sides.filter(s => !s.actual);
+    const all = { weeks: sides.map(s => s.weeks), note: null };
+    if (plans.length < 2) return all;
+    let size, span = '', pick;
+    if (pairsByDate(sides)) {
+      const dates = plans.map(s => new Set(s.weeks.map(w => w.week_start)));
+      const keep = [...dates[0]].filter(d => dates.every(x => x.has(d))).sort();
+      size = keep.length;
+      if (size) span = `, ${shortDate(keep[0])} – ${shortDate(keep[size - 1])}`;
+      pick = s => s.weeks.filter(w => keep.includes(w.week_start));
+    } else {
+      size = Math.min(...plans.map(s => s.weeks.length));
+      pick = s => s.weeks.slice(0, size);
+    }
+    if (!size || plans.every(s => s.weeks.length === size)) return all;
+    return { weeks: sides.map(pick), note: `Figures cover the ${size} weeks all plans share${span}.` };
+  }
+
+  function sideSummaryHTML(s, weeks) {
+    const nums = k => weeks.map(w => w[k]).filter(v => v != null);
     const miles = nums('miles'), workouts = nums('workouts'), longs = nums('long');
     const sum = miles.reduce((x, y) => x + y, 0);
     const mi = v => v == null ? '—' : v.toFixed(1);
@@ -3199,16 +3225,18 @@
       : (s.cells.get(date) ?? []).filter(x => !isRestSlot(x)).map(x => ({ slot: x.slot, miles: x.target_miles ?? 0, title: x.title ?? '' }));
   }
 
-  // How far a day differs from the baseline's, 0-4: 1 title only, 2 a mileage
-  // gap past the negligible one, 3 a gap over 3 mi or a different set of
-  // session types (including a session on one side only), 4 a gap over 6 mi.
+  // How far a day differs from the baseline's, 0-4: 1 title only or a
+  // strength session only, 2 a mileage gap past the negligible one, 3 a gap
+  // over 3 mi or a different set of run session types (including a run on one
+  // side only), 4 a gap over 6 mi. plan_compare.py lists the same days.
   function cmpLevel(base, other, withTitles) {
     const sum = l => l.reduce((t, x) => t + x.miles, 0);
     const key = (l, f) => [...new Set(l.map(f))].sort().join('|');
-    const a = sum(base), b = sum(other), gap = Math.abs(a - b);
+    const runs = l => l.filter(x => x.slot !== 'strength');
+    const a = sum(runs(base)), b = sum(runs(other)), gap = Math.abs(a - b);
     const level = gap <= Math.max(CMP_NEGLIGIBLE_MI, CMP_NEGLIGIBLE_FRAC * Math.max(a, b)) ? 0 : gap <= 3 ? 2 : gap <= 6 ? 3 : 4;
-    if (key(base, x => x.slot) !== key(other, x => x.slot)) return Math.max(level, 3);
-    return level || (withTitles && key(base, x => x.title) !== key(other, x => x.title) ? 1 : 0);
+    if (key(runs(base), x => x.slot) !== key(runs(other), x => x.slot)) return Math.max(level, 3);
+    return level || (key(base, x => x.slot) !== key(other, x => x.slot) || (withTitles && key(base, x => x.title) !== key(other, x => x.title)) ? 1 : 0);
   }
 
   function renderCmpWeeks(...sides) {
@@ -3261,7 +3289,7 @@
     slotEl('cmpweeks').insertAdjacentHTML('beforeend', `
       <section>
         <h2>Weeks</h2>
-        <p class="desc">Every side after the first is shaded by how far each day differs from the first side's same weekday: faint for a title only (plan against plan), stronger for a bigger mileage gap, a different session type or a session on one side only; gaps within ${CMP_NEGLIGIBLE_MI} mi or ${CMP_NEGLIGIBLE_FRAC * 100}% of the larger day are not shaded · tap a day for detail</p>
+        <p class="desc">Every side after the first is shaded by how far each day differs from the first side's same weekday: faint for a title only (plan against plan) or a strength session only, stronger for a bigger mileage gap, a different run type or a run on one side only; gaps within ${CMP_NEGLIGIBLE_MI} mi or ${CMP_NEGLIGIBLE_FRAC * 100}% of the larger day are not shaded · tap a day for detail</p>
         ${html}
       </section>`);
     document.querySelectorAll('.cmp-week').forEach(el => {
@@ -3273,12 +3301,12 @@
     });
   }
 
-  // Each side's header and summary row fills its own element, so one side failing leaves the others.
-  function fillSides(id, sides, render, fail = msg => msg) {
+  // Each side's header fills its own element, so one side failing leaves the others.
+  function fillSides(id, sides, render) {
     sides.forEach((p, i) => {
       const target = document.getElementById(`${id}-${i}`);
       p.then(s => { target.innerHTML = render(s); })
-        .catch(err => { target.innerHTML = fail(`<p class="desc">Couldn't load this side: ${esc(err.message)}</p>`); });
+        .catch(err => { target.innerHTML = `<p class="desc">Couldn't load this side: ${esc(err.message)}</p>`; });
     });
   }
 
@@ -3287,10 +3315,20 @@
     sideP.forEach((p, i) => p.then(s => { COMPARE_DATA[i] = s.popover; }, () => {}));
     const skeleton = height => `<div class="skeleton" style="height:${height}px;margin-bottom:1rem"></div>`;
     slotEl('cmphead').innerHTML = sideP.map((_, i) => `<div id="cmphead-${i}">${skeleton(40)}</div>`).join('');
-    slotEl('cmpsum').innerHTML = `<div class="scroll"><table class="cmp-sum"><thead><tr>${CMP_SUM_COLS.map((c, i) => `<th${i ? ' class="r"' : ''}>${c}</th>`).join('')}</tr></thead>
+    slotEl('cmpsum').innerHTML = `<p class="desc" id="cmpsum-note" hidden></p><div class="scroll"><table class="cmp-sum"><thead><tr>${CMP_SUM_COLS.map((c, i) => `<th${i ? ' class="r"' : ''}>${c}</th>`).join('')}</tr></thead>
       <tbody>${sideP.map((_, i) => `<tr id="cmpsum-${i}"><td colspan="${CMP_SUM_COLS.length}">${skeleton(20)}</td></tr>`).join('')}</tbody></table></div>`;
     fillSides('cmphead', sideP, sideHeadHTML);
-    fillSides('cmpsum', sideP, sideSummaryHTML, msg => `<td colspan="${CMP_SUM_COLS.length}">${msg}</td>`);
+    // The summaries wait for every side, since each covers the weeks all plans share.
+    Promise.allSettled(sideP).then(results => {
+      const loaded = results.flatMap(r => r.status === 'fulfilled' ? [r.value] : []);
+      const { weeks, note } = sharedWeeks(loaded);
+      if (note) Object.assign(document.getElementById('cmpsum-note'), { textContent: note, hidden: false });
+      results.forEach((r, i) => {
+        document.getElementById(`cmpsum-${i}`).innerHTML = r.status === 'fulfilled'
+          ? sideSummaryHTML(r.value, weeks[loaded.indexOf(r.value)])
+          : `<td colspan="${CMP_SUM_COLS.length}"><p class="desc">Couldn't load this side: ${esc(r.reason.message)}</p></td>`;
+      });
+    });
     fillPanel('cmpchart', [...sideP, echartsReady], renderCmpChart);
     fillPanel('cmpweeks', sideP, renderCmpWeeks);
     document.title = 'Miles · Compare plans';

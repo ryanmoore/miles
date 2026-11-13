@@ -210,11 +210,11 @@ def test_goals_are_set_and_read_over_mcp_and_http(conn, monkeypatch):
 
     bad = tool("set_draft_goals", goals=[_goal(type="nope")])
     assert "type must be one of" in bad["error"]
-    draft = tool("set_draft_goals", goals=[
+    tool("set_draft_goals", goals=[
         _goal("weekly", flag=True),
         _goal("cycle", horizon="cycle", aggregate="weeks_at_least", threshold=60, target=3),
     ])
-    assert [g["key"] for g in draft["goals"]] == ["weekly", "cycle"]
+    assert [g["key"] for g in tool("get_draft")["goals"]] == ["weekly", "cycle"]
     tool("commit_plan", note="ok")
 
     read = tool("get_plan_goals", plan_id=plan_id)

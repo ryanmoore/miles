@@ -1883,9 +1883,9 @@ def start_plan_draft(
     """
     Starts a brand-new plan's mutable draft: a plans row (status='draft') plus
     an empty first (draft) version. The only write path for a plan from
-    scratch — follow with set_draft_weeks / set_draft_days in batches as the
-    athlete approves each block, get_draft to narrate what's missing, and
-    commit_plan once they've seen the whole thing and said go.
+    scratch — follow with set_draft_weeks / set_draft_days until the whole
+    draft is written, get_draft to check what's missing, and commit_plan once
+    the athlete has seen the whole thing and said go.
 
     Drafts are for showing work: every draft tool returns a `url` that opens
     the draft in the web app, and only commit_plan makes a plan real.
@@ -2035,10 +2035,9 @@ def set_draft_race(
 @mcp.tool()
 def set_draft_weeks(weeks: list[WeekInput], plan_id: int | None = None) -> str:
     """
-    Upserts any subset of the in-progress draft's weeks, by week_start — call
-    it in batches as the athlete approves each block ("here's the first 5
-    weeks, look good?"); a partial batch that leaves gaps mid-plan is
-    expected, not an error. Only local field validation runs here (Monday-
+    Upserts any subset of the in-progress draft's weeks, by week_start. Several
+    calls may build one draft; gaps between calls are expected, not an error,
+    and need no check-in with the athlete. Only local field validation runs here (Monday-
     aligned, non-negative targets, known phase, target_miles_hi >=
     target_miles); contiguity and covering the race week are commit_plan's
     job, since a partial draft legitimately doesn't satisfy those yet.

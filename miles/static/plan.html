@@ -3122,31 +3122,71 @@
     return `<td class="cmp-sum-name" title="${esc(s.title)}"><span class="cmp-dot" style="background:${cmpColor(s.key)}"></span>${esc(s.title)}</td>${cells.map(c => `<td class="r">${c}</td>`).join('')}`;
   }
 
+  // Lines draw the baseline as a wide pale band and every other side thin on
+  // top with its own dash and marker, so sides with equal weekly miles stay
+  // distinguishable; Bars group one bar per side per week.
+  const CMP_LINE_STYLES = [
+    { dash: null, symbol: 'none', glyph: 'wide band' },
+    { dash: [8, 5], symbol: 'circle', glyph: 'long dash ●' },
+    { dash: [2, 4], symbol: 'triangle', glyph: 'dots ▲' },
+    { dash: 'solid', symbol: 'diamond', glyph: 'solid ◆' },
+  ];
+  const CMP_VIEW_KEY = 'miles.compareChart';
+  const CMP_VIEWS = { lines: 'Lines', bars: 'Bars' };
+
   function renderCmpChart(...loaded) {
     const sides = loaded.slice(0, CMP_SIDES.length); // the last input is echartsReady
     const { rows } = alignWeeks(sides);
     const seriesName = s => s.actual ? `${s.title} (actual miles)` : `${s.title} (planned target)`;
+    let view = 'lines';
+    try { if (localStorage.getItem(CMP_VIEW_KEY) === 'bars') view = 'bars'; } catch { /* storage unavailable */ }
     slotEl('cmpchart').insertAdjacentHTML('beforeend', `
       <section>
-        <h2>Weekly mileage</h2>
-        <p class="desc">Planned target per week (a range week at its midpoint) · actual synced miles for runs</p>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem">
+          <h2>Weekly mileage</h2>
+          <div class="mode-tabs" id="cmp-chart-views" style="margin-bottom:0">${Object.entries(CMP_VIEWS).map(([k, label]) => `<button class="mode-tab" data-view="${k}">${label}</button>`).join('')}</div>
+        </div>
+        <p class="desc" id="cmp-chart-desc"></p>
         <div class="chart-wrap"><div id="chart-compare" style="width:100%;height:100%"></div></div>
-        <div class="chart-legend">${sides.map(s => `<span class="legend-swatch"><span class="legend-box" style="background:${cmpColor(s.key)}"></span>${esc(seriesName(s))}</span>`).join('')}</div>
+        <div class="chart-legend" id="cmp-chart-legend"></div>
       </section>`);
     const theme = chartTheme();
     const chart = echarts.init(document.getElementById('chart-compare'));
     TAB_CHARTS.plan.push(chart);
-    chart.setOption({
-      animation: false,
-      grid: { top: 24, right: 24, bottom: 32, left: 48 },
-      tooltip: { trigger: 'axis', backgroundColor: theme.surface, borderColor: theme.gridline, textStyle: { fontSize: 12, color: theme.text } },
-      xAxis: { type: 'category', data: rows.map(r => r.label), axisLine: { lineStyle: { color: theme.gridline } }, axisTick: { show: false }, axisLabel: { fontSize: 11, color: theme.muted, ...(theme.compact ? { interval: 'auto' } : {}) } },
-      yAxis: { type: 'value', name: 'Miles', nameLocation: 'middle', nameGap: 34, nameTextStyle: { fontSize: 11, color: theme.muted }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { lineStyle: { color: theme.gridline } }, axisLabel: { fontSize: 11, color: theme.muted } },
-      series: sides.map((s, i) => ({
-        name: seriesName(s), type: 'line', step: 'end', symbolSize: 6, lineStyle: { color: cmpColor(s.key), width: 2 }, itemStyle: { color: cmpColor(s.key) },
-        data: rows.map(r => r.weeks[i]?.miles ?? null),
-      })),
-    });
+    const seriesFor = (s, i) => ({ name: seriesName(s), data: rows.map(r => r.weeks[i]?.miles ?? null) });
+    const lineSeries = (s, i) => {
+      const st = CMP_LINE_STYLES[i];
+      const color = cmpColor(s.key);
+      return {
+        ...seriesFor(s, i), type: 'line', step: 'end', symbol: st.symbol, symbolSize: 8, itemStyle: { color },
+        ...(i === 0 ? { lineStyle: { color, width: 12, opacity: 0.22 }, z: 1 } : { lineStyle: { color, width: 2, type: st.dash }, z: 2 + i }),
+      };
+    };
+    const barSeries = (s, i) => ({ ...seriesFor(s, i), type: 'bar', itemStyle: { color: cmpColor(s.key) }, barGap: theme.compact ? '0%' : '10%', barCategoryGap: theme.compact ? '15%' : '30%' });
+    const desc = {
+      lines: 'Planned target per week (a range week at its midpoint) · actual synced miles for runs · the first side is the wide band, the others run on top of it',
+      bars: 'Planned target per week (a range week at its midpoint) · actual synced miles for runs · one bar per side per week',
+    };
+    const legendNote = i => view === 'lines' ? ` <span style="color:var(--muted)">· ${CMP_LINE_STYLES[i].glyph}</span>` : '';
+    function draw() {
+      document.querySelectorAll('#cmp-chart-views .mode-tab').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+      document.getElementById('cmp-chart-desc').textContent = desc[view];
+      document.getElementById('cmp-chart-legend').innerHTML = sides.map((s, i) => `<span class="legend-swatch"><span class="legend-box" style="background:${cmpColor(s.key)}"></span>${esc(seriesName(s))}${legendNote(i)}</span>`).join('');
+      chart.setOption({
+        animation: false,
+        grid: { top: 24, right: 24, bottom: 32, left: 48 },
+        tooltip: { trigger: 'axis', backgroundColor: theme.surface, borderColor: theme.gridline, textStyle: { fontSize: 12, color: theme.text } },
+        xAxis: { type: 'category', data: rows.map(r => r.label), axisLine: { lineStyle: { color: theme.gridline } }, axisTick: { show: false }, axisLabel: { fontSize: 11, color: theme.muted, ...(theme.compact ? { interval: 'auto' } : {}) } },
+        yAxis: { type: 'value', name: 'Miles', nameLocation: 'middle', nameGap: 34, nameTextStyle: { fontSize: 11, color: theme.muted }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { lineStyle: { color: theme.gridline } }, axisLabel: { fontSize: 11, color: theme.muted } },
+        series: sides.map(view === 'lines' ? lineSeries : barSeries),
+      }, true);
+    }
+    document.querySelectorAll('#cmp-chart-views .mode-tab').forEach(b => b.addEventListener('click', () => {
+      view = b.dataset.view;
+      try { localStorage.setItem(CMP_VIEW_KEY, view); } catch { /* storage unavailable */ }
+      draw();
+    }));
+    draw();
     window.addEventListener('resize', () => chart.resize());
   }
 

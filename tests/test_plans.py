@@ -323,20 +323,29 @@ def test_compare_plans_aligns_by_date_when_weeks_overlap_else_by_position(monkey
     base = _plan(conn, "Base", 0, 2)
     plan.upsert_draft_days(conn, plan.start_revision_draft(conn, base), [
         {"date": mon(1), "slot": "workout", "target_miles": 8.0, "title": "Hills"},
+        {"date": (THIS_MONDAY + timedelta(weeks=1, days=1)).isoformat(), "slot": "easy", "target_miles": 5.0},
     ])
     other = _plan(conn, "Later", 10, 11, commit=False)
+    (other_draft,) = conn.execute("SELECT version_id FROM plan_versions WHERE plan_id = ?", [other]).fetchone()
+    plan.upsert_draft_days(conn, other_draft, [
+        {"date": (THIS_MONDAY + timedelta(weeks=10, days=1)).isoformat(), "slot": "easy", "target_miles": 5.2},
+    ])
     insert_activity(conn, 1, start_date=f"{mon(0)}T07:00:00", run_type="long_run", distance_m=16093.4)
 
     by_date = tool("compare_plans", a={"plan_id": base}, b={"plan_id": base, "draft": True, "from_week": mon(1), "to_week": mon(3)})
     assert "plan=%d&vs=%d&vs_draft=1&vs_weeks=" % (base, base) in by_date["url"]
     assert [w["week"] for w in by_date["weeks"]] == [mon(0), mon(1), mon(2)]
     assert by_date["weeks"][0]["b"] is None and by_date["weeks"][1]["b"]["miles"] == 31.0
-    assert by_date["weeks"][1]["day_differences"] == [{"day": "Mon", "a": "rest", "b": "workout 8 mi Hills"}]
+    assert by_date["weeks"][1]["day_differences"] == [
+        {"day": "Mon", "a": "rest", "b": "workout 8 mi Hills"}, {"day": "Tue", "a": "rest", "b": "easy 5 mi"},
+    ]
 
-    ordinal = tool("compare_plans", a={"plan_id": base, "from_week": mon(1), "to_week": mon(2)}, b={"plan_id": other, "draft": True})
+    ordinal = tool("compare_plans", a={"plan_id": base, "draft": True, "from_week": mon(1), "to_week": mon(2)}, b={"plan_id": other, "draft": True})
     assert [(w["week"], w["a"]["week_start"], w["b"]["week_start"]) for w in ordinal["weeks"]] == [
         ("Week 1", mon(1), mon(10)), ("Week 2", mon(2), mon(11)),
     ]
+    # Tuesday's 5 vs 5.2 mi is under the negligible threshold; Monday's session is on one side only.
+    assert [d["day"] for d in ordinal["weeks"][0]["day_differences"]] == ["Mon"]
 
     actual = tool("compare_plans", a={"plan_id": base}, b={"actual": True, "from_week": mon(0), "to_week": mon(0)})
     assert (actual["b"]["longest_long_run"], actual["weeks"][0]["b"]["miles"]) == (10.0, 10.0)

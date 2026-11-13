@@ -420,22 +420,27 @@
     .plan-view .plan-which-race { font-size: 0.8125rem; color: var(--text-secondary); }
     .plan-view .plan-which-link { font-size: 0.75rem; color: var(--accent); }
 
-    /* Compare mode: two calendar columns per week on wide screens (each grid
-       narrower than the single-plan 720px, scrolling if it must), stacked
-       A-then-B below 784px where .cal-cards takes over. */
+    /* Compare mode: one grid per week with the sides' rows adjacent, so each
+       weekday's cells sit one above the other; below 784px .cal-cards takes
+       over with both sides' lines under each weekday. */
     .plan-view .cmp-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 0.375rem; vertical-align: baseline; }
     .plan-view .cmp-sum-side { margin-bottom: 0.75rem; }
     .plan-view .cmp-week { margin-bottom: 1rem; }
     .plan-view .cmp-week-head { display: flex; align-items: center; gap: 0.625rem; font-size: 0.8125rem; font-weight: 650; margin-bottom: 0.375rem; }
     .plan-view .cmp-delta { font-size: 0.6875rem; font-weight: 600; color: var(--text-secondary); background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 0.0625rem 0.5rem; font-variant-numeric: tabular-nums; }
-    .plan-view .cmp-pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
-    @media (min-width: 784px) {
-      .plan-view .cmp-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-    .plan-view .cmp-side-head { font-size: 0.75rem; font-weight: 600; margin-bottom: 0.25rem; }
-    .plan-view .cmp-side .cal-header, .plan-view .cmp-side .cal-row { min-width: 460px; }
-    .plan-view .cmp-empty { font-size: 0.75rem; color: var(--muted); border: 1px dashed var(--gridline); border-radius: 8px; padding: 1rem; text-align: center; }
-    .plan-view .cal-day.cmp-diff, .plan-view .mcal-day-row.cmp-diff { background: color-mix(in srgb, var(--series-8) 16%, var(--surface)); }
+    .plan-view .cmp-line { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); min-width: 760px; }
+    .plan-view .cmp-line .cal-header, .plan-view .cmp-line .cal-row { min-width: 0; }
+    .plan-view .cmp-line-label { font-size: 0.75rem; font-weight: 600; padding: 0.375rem 0.5rem; border-top: 1px solid var(--gridline); background: var(--bg); }
+    .plan-view .cmp-line-label .tile-sub { display: block; font-weight: 400; }
+    .plan-view .cmp-line:first-child .cmp-line-label { border-top: none; }
+    .plan-view .cmp-empty { font-size: 0.75rem; color: var(--muted); border-top: 1px dashed var(--gridline); padding: 0.375rem 0.5rem; }
+    .plan-view .cmp-mlines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+    .plan-view .cmp-mline { display: flex; align-items: baseline; gap: 0.375rem; padding: 0.125rem 0.25rem; border-radius: 4px; }
+    .plan-view .cmp-mdate { font-size: 0.625rem; color: var(--muted); min-width: 2.75rem; }
+    .plan-view .cal-day.cmp-d1, .plan-view .cmp-mline.cmp-d1 { background: color-mix(in srgb, var(--series-8) 8%, var(--surface)); }
+    .plan-view .cal-day.cmp-d2, .plan-view .cmp-mline.cmp-d2 { background: color-mix(in srgb, var(--series-8) 16%, var(--surface)); }
+    .plan-view .cal-day.cmp-d3, .plan-view .cmp-mline.cmp-d3 { background: color-mix(in srgb, var(--series-8) 28%, var(--surface)); }
+    .plan-view .cal-day.cmp-d4, .plan-view .cmp-mline.cmp-d4 { background: color-mix(in srgb, var(--series-8) 42%, var(--surface)); }
     .plan-view .draft-banner {
       font-size: 0.8125rem; margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; border-radius: 8px;
       background: var(--pr-bg); border: 1px solid var(--series-3); color: var(--text);
@@ -1717,7 +1722,8 @@
     if (r.pace_min_per_mile != null) titleParts.push(`${fmt.pace(r.pace_min_per_mile)}/mi`);
     const title = titleParts.join(' · ');
     const paceInline = opts && opts.showPace && r.pace_min_per_mile != null ? ` · ${fmt.pace(r.pace_min_per_mile)}/mi` : '';
-    const main = `<span class="cal-dot" style="background:${color}"></span><span>${r.distance_mi.toFixed(1)} mi${paceInline}</span>`;
+    const typeInline = opts && opts.showType ? ` · ${SLOT_LABEL[runSlot(r.run_type)]}` : '';
+    const main = `<span class="cal-dot" style="background:${color}"></span><span>${r.distance_mi.toFixed(1)} mi${paceInline}${typeInline}</span>`;
     if (opts && opts.link) {
       return `<a class="cal-run day-popover-run" href="/activity.html?id=${r.activity_id}" title="${title}">
         <span class="day-popover-run-main">${main}</span>
@@ -1726,6 +1732,9 @@
     }
     return `<div class="cal-run" title="${title}">${main}</div>`;
   }
+
+  // A synced run's planned-slot equivalent.
+  const runSlot = t => t === 'long_run' ? 'long' : t === 'workout' || t === 'race' ? t : 'easy';
 
   // A rest day carries no number line regardless of whether target_miles is
   // NULL or an explicit 0 — either way there's nothing to lead with.
@@ -1763,7 +1772,7 @@
     return `<div class="cal-log-marker" title="${esc(title)}"></div>`;
   }
 
-  function dayCell(dateStr, dayByDate, actualByDate, logByDate) {
+  function dayCell(dateStr, dayByDate, actualByDate, logByDate, runOpts) {
     const sessions = dayByDate.get(dateStr) ?? [];
     const runs = actualByDate.get(dateStr) ?? [];
     const logs = logByDate.get(dateStr) ?? [];
@@ -1772,7 +1781,7 @@
       ${logMarker(logs)}
       <div class="cal-daynum">${dayNum}</div>
       ${sessions.length ? sessions.map(plannedSlot).join('') : plannedSlot(null)}
-      ${runs.map(r => runLine(r)).join('')}
+      ${runs.map(r => runLine(r, runOpts)).join('')}
     </div>`;
   }
 
@@ -1781,10 +1790,10 @@
     return `<div class="band-chip" style="background:${BAND_COLOR[band]}" title="${BAND_LABEL[band]}">${band}</div>`;
   }
 
-  function weekRow(week, dayByDate, actualByDate, logByDate) {
+  function weekRow(week, dayByDate, actualByDate, logByDate, runOpts) {
     const days = Array.from({ length: 7 }, (_, i) => addDays(week.week_start, i));
     return `<div class="${week.is_current ? 'cal-row current' : 'cal-row'}">
-      ${days.map(d => dayCell(d, dayByDate, actualByDate, logByDate)).join('')}
+      ${days.map(d => dayCell(d, dayByDate, actualByDate, logByDate, runOpts)).join('')}
     </div>`;
   }
 
@@ -3042,11 +3051,8 @@
       if (!s.range) throw new Error('vs=actual needs vs_weeks=YYYY-MM-DD..YYYY-MM-DD');
       const data = await loadPlanApi(`/api/actual-weeks?from_week=${s.range[0]}&to_week=${s.range[1]}`);
       const runs = new Map(Object.entries(data.actual));
-      const slotOf = t => t === 'long_run' ? 'long' : t === 'workout' || t === 'race' ? t : 'easy';
-      const cells = new Map([...runs].map(([date, rs]) =>
-        [date, rs.map(r => ({ date, slot: slotOf(r.run_type), target_miles: r.distance_mi, title: r.name }))]));
       return {
-        key, actual: true, title: 'Actual runs', cells,
+        key, actual: true, title: 'Actual runs', cells: new Map(), runs,
         popover: { dayByDate: new Map(), actualByDate: runs, logByDate: new Map(), docs: [] },
         weeks: data.weeks.map(w => ({
           week_start: w.week_start, miles: w.actual_miles, workouts: w.actual_workouts,
@@ -3060,7 +3066,7 @@
     const days = data.days.filter(d => inRange(mondayOf(d.date)));
     return {
       key, data, title: data.plan.title + (s.draft ? ' (draft)' : ''), uncommitted: isUncommitted(data), href: `?plan=${data.plan.plan_id}${s.draft ? '&draft=1' : ''}#plan`,
-      cells: groupSessionsByDate(days),
+      cells: groupSessionsByDate(days), runs: new Map(),
       popover: planData({ ...data, days, actual: {} }),
       weeks: weeks.map(w => ({ week_start: w.week_start, miles: repMiles(w), workouts: w.target_workouts, long: w.target_long_run_miles })),
     };
@@ -3134,9 +3140,25 @@
     window.addEventListener('resize', () => chart.resize());
   }
 
-  // One day's comparison key: slot and miles, plus title between two plans.
-  function sessionKey(s, date, withTitles) {
-    return (s.cells.get(date) ?? []).filter(x => !isRestSlot(x)).map(x => [x.slot, x.target_miles ?? '', withTitles ? x.title ?? '' : ''].join('|')).join(';');
+  // Total miles closer than this are the same day; plan_compare.NEGLIGIBLE_MILES matches.
+  const CMP_NEGLIGIBLE_MI = 0.5;
+
+  function cmpSessions(s, date) {
+    return s.actual
+      ? (s.runs.get(date) ?? []).map(r => ({ slot: runSlot(r.run_type), miles: r.distance_mi, title: '' }))
+      : (s.cells.get(date) ?? []).filter(x => !isRestSlot(x)).map(x => ({ slot: x.slot, miles: x.target_miles ?? 0, title: x.title ?? '' }));
+  }
+
+  // How much a day differs, 0-4: 1 title only, 2 a half-mile-plus gap, 3 a gap
+  // of 2+ mi or a different set of session types (including a session on one
+  // side only), 4 a gap of 5+ mi.
+  function cmpLevel(sa, sb, withTitles) {
+    const sum = l => l.reduce((t, x) => t + x.miles, 0);
+    const key = (l, f) => [...new Set(l.map(f))].sort().join('|');
+    const gap = Math.abs(sum(sa) - sum(sb));
+    const level = gap >= 5 ? 4 : gap >= 2 ? 3 : gap >= CMP_NEGLIGIBLE_MI ? 2 : 0;
+    if (key(sa, x => x.slot) !== key(sb, x => x.slot)) return Math.max(level, 3);
+    return level || (withTitles && key(sa, x => x.title) !== key(sb, x => x.title) ? 1 : 0);
   }
 
   function renderCmpWeeks(a, b) {
@@ -3144,44 +3166,57 @@
     const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const none = new Map();
     const signed = (n, unit) => `${n > 0 ? '+' : n < 0 ? '−' : '±'}${Math.abs(unit === 'mi' ? n.toFixed(1) : n)} ${unit}`;
-    const diffs = [];
-    const sideCol = (s, w) => w ? `
-      <div class="cmp-side" data-side="${s.key}">
-        <div class="cmp-side-head"><span class="cmp-dot" style="background:${cmpColor(s.key)}"></span>${esc(weekRangeLabel(w.week_start))}
-          <span class="tile-sub">${[w.miles != null ? `${trimMiles(w.miles)} mi` : null, w.workouts != null ? `${w.workouts} workout${w.workouts === 1 ? '' : 's'}` : null, w.long != null ? `long ${trimMiles(w.long)}` : null].filter(Boolean).join(' · ')}</span></div>
-        <div class="cal">
-          <div class="cal-header">${labels.map(d => `<div class="cal-hcell">${d}</div>`).join('')}</div>
-          ${weekRow(w, s.cells, none, none)}
-        </div>
-        <div class="cal-cards">${weekCardMobileHTML(w, s.cells, none, none)}</div>
-      </div>` : `<div class="cmp-side cmp-empty" data-side="${s.key}">No week on this side</div>`;
+    const dot = s => `<span class="cmp-dot" style="background:${cmpColor(s.key)}"></span>`;
+    const runOpts = { showType: true };
+    const rowLabel = (s, w) => `${dot(s)}${esc(weekRangeLabel(w.week_start))}
+      <span class="tile-sub">${[w.miles != null ? `${trimMiles(w.miles)} mi` : null, w.workouts != null ? `${w.workouts} workout${w.workouts === 1 ? '' : 's'}` : null, w.long != null ? `long ${trimMiles(w.long)}` : null].filter(Boolean).join(' · ')}</span>`;
+    const line = (s, w) => w
+      ? `<div class="cmp-line" data-side="${s.key}"><div class="cmp-line-label">${rowLabel(s, w)}</div>${weekRow(w, s.cells, s.runs, none, runOpts)}</div>`
+      : `<div class="cmp-line"><div class="cmp-line-label">${dot(s)}</div><div class="cmp-empty">No week on this side</div></div>`;
+    // One side's session line for a weekday in the phone layout.
+    const mobileLine = (s, w, date) => {
+      const planned = (s.cells.get(date) ?? []).filter(x => !isRestSlot(x));
+      const body = s.actual
+        ? (s.runs.get(date) ?? []).map(r => runLine(r, runOpts)).join('')
+        : planned.length ? planned.map(mobileSessionHTML).join('') : '<div class="mcal-rest">Rest</div>';
+      return `<div class="cmp-mline" data-side="${s.key}" data-plan-date="${date}">${dot(s)}<span class="cmp-mdate">${esc(shortDate(date))}</span><div class="mcal-day-body">${body}</div></div>`;
+    };
+    const mobileWeek = (row) => labels.map((name, k) => {
+      const sides = [[a, row.a], [b, row.b]].filter(([, w]) => w);
+      return `<div class="mcal-day-row"><div class="mcal-day-wd">${name}</div><div class="cmp-mlines">${sides.map(([s, w]) => mobileLine(s, w, addDays(w.week_start, k))).join('')}</div></div>`;
+    }).join('');
+    const levels = [];
     const html = alignWeeks(a, b).map((row, i) => {
-      const diff = { a: new Set(), b: new Set() };
-      for (let k = 0; k < 7; k++) {
-        const da = row.a ? addDays(row.a.week_start, k) : null, db = row.b ? addDays(row.b.week_start, k) : null;
-        if ((da ? sessionKey(a, da, withTitles) : '') !== (db ? sessionKey(b, db, withTitles) : '')) {
-          if (da) diff.a.add(da);
-          if (db) diff.b.add(db);
-        }
+      const lv = { a: new Map(), b: new Map() };
+      for (let k = 0; k < 7 && row.a && row.b; k++) {
+        const da = addDays(row.a.week_start, k), db = addDays(row.b.week_start, k);
+        const level = cmpLevel(cmpSessions(a, da), cmpSessions(b, db), withTitles);
+        lv.a.set(da, level);
+        lv.b.set(db, level);
       }
-      diffs[i] = diff;
+      levels[i] = lv;
       const dMiles = (row.b?.miles ?? 0) - (row.a?.miles ?? 0), dWork = (row.b?.workouts ?? 0) - (row.a?.workouts ?? 0);
       return `<div class="cmp-week" data-row="${i}">
         <div class="cmp-week-head"><span>${esc(row.label)}</span>
           <span class="cmp-delta" title="second side minus first">${signed(dMiles, 'mi')} · ${signed(dWork, dWork === 1 || dWork === -1 ? 'workout' : 'workouts')}</span></div>
-        <div class="cmp-pair">${sideCol(a, row.a)}${sideCol(b, row.b)}</div>
+        <div class="cal">
+          <div class="cmp-line"><div></div><div class="cal-header">${labels.map(d => `<div class="cal-hcell">${d}</div>`).join('')}</div></div>
+          ${line(a, row.a)}${line(b, row.b)}
+        </div>
+        <div class="cal-cards">${!row.a || !row.b ? `<div class="cmp-empty">No week on the ${row.a ? 'second' : 'first'} side</div>` : ''}<div class="mcal-week">${mobileWeek(row)}</div></div>
       </div>`;
     }).join('');
     slotEl('cmpweeks').insertAdjacentHTML('beforeend', `
       <section>
         <h2>Weeks</h2>
-        <p class="desc">Tinted days differ between the sides (slot, miles${withTitles ? ', title' : ''}) · the chip is the second side minus the first · tap a day for detail</p>
+        <p class="desc">Shading grows with how far a day differs: faint for a title only${withTitles ? '' : ' (not compared against runs)'}, stronger for a bigger mileage gap, a different session type or a session on one side only; gaps under ${CMP_NEGLIGIBLE_MI} mi are not shaded · the chip is the second side minus the first · tap a day for detail</p>
         ${html}
       </section>`);
     document.querySelectorAll('.cmp-week').forEach(el => {
-      const diff = diffs[Number(el.dataset.row)];
-      el.querySelectorAll('.cmp-side[data-side]').forEach(side => {
-        side.querySelectorAll('[data-plan-date]').forEach(c => c.classList.toggle('cmp-diff', diff[side.dataset.side].has(c.dataset.planDate)));
+      const lv = levels[Number(el.dataset.row)];
+      el.querySelectorAll('[data-side] [data-plan-date], .cmp-mline').forEach(c => {
+        const level = lv[c.closest('[data-side]').dataset.side].get(c.dataset.planDate);
+        if (level) c.classList.add(`cmp-d${level}`);
       });
     });
   }

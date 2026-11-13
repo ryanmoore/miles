@@ -1828,7 +1828,8 @@ def compare_plans(a: dict[str, object], b: dict[str, object]) -> str:
     average and peak week miles, workouts per week, longest long run) and b,
     plus weeks: per pairing each side's miles (a range week counts at its
     midpoint), workouts and long run, and day_differences, the weekdays
-    whose slot, miles or (between two plans) title differ. Or {"error": ...}.
+    whose slot, total miles (by half a mile or more) or (between two plans)
+    title differ. Or {"error": ...}.
     """
     conn = _conn()
     try:

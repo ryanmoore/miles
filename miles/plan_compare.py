@@ -21,6 +21,7 @@ from .plan_api import PlanActivity, _activities_by_date, _actual_by_week
 router = APIRouter()
 
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+NEGLIGIBLE_MILES = 0.5  # a day's miles closer than this are the same; plan.html's CMP_NEGLIGIBLE_MI matches
 RUN_TYPE_SLOT = {"long_run": "long", "workout": "workout", "race": "race"}
 
 
@@ -191,14 +192,19 @@ def _fmt_sessions(sessions: list[Session]) -> str:
     ) or "rest"
 
 
+def _differs(sa: list[Session], sb: list[Session], with_titles: bool) -> bool:
+    if {s[0] for s in sa} != {s[0] for s in sb} or (with_titles and {s[2] or "" for s in sa} != {s[2] or "" for s in sb}):
+        return True
+    return abs(sum(s[1] or 0 for s in sa) - sum(s[1] or 0 for s in sb)) >= NEGLIGIBLE_MILES
+
+
 def _day_diffs(a: SideWeek | None, b: SideWeek | None, with_titles: bool) -> list[dict[str, str]]:
-    """Weekdays whose sessions differ in slot, miles and (between two plans) title."""
-    key = (lambda s: s) if with_titles else (lambda s: (s[0], s[1]))
+    """Weekdays whose sessions differ (see _differs)."""
     out: list[dict[str, str]] = []
     for name in WEEKDAYS:
         sa = a["days"].get(name, []) if a else []
         sb = b["days"].get(name, []) if b else []
-        if [key(s) for s in sa] != [key(s) for s in sb]:
+        if _differs(sa, sb, with_titles):
             out.append({"day": name, "a": _fmt_sessions(sa), "b": _fmt_sessions(sb)})
     return out
 

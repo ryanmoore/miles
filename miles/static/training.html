@@ -1103,6 +1103,8 @@
     const yAxis = {
       type: 'value',
       scale: true,
+      min: null,
+      max: null,
       name: theme.compact ? '' : 'm / beat',
       nameTextStyle: { fontSize: 11, color: theme.muted },
       axisLabel: { fontSize: 11, color: theme.muted, formatter: v => v.toFixed(2) },
@@ -1115,6 +1117,13 @@
     };
 
     function renderTimeline(data) {
+      // Axis spans the 1st-99th percentile of runs, so a few runs with a bad
+      // heart-rate reading sit off the chart rather than squash the rest.
+      const sorted = data.map(r => r.value).sort((a, b) => a - b);
+      const at = q => sorted[Math.round((sorted.length - 1) * q)];
+      const bounds = sorted.length
+        ? { min: Math.floor(at(0.01) * 20) / 20, max: Math.ceil(at(0.99) * 20) / 20 }
+        : {};
       chart.setOption({
         animation: false,
         legend: { show: false },
@@ -1132,7 +1141,7 @@
           axisLine: { lineStyle: { color: theme.gridline } },
           splitLine: { show: false },
         },
-        yAxis,
+        yAxis: { ...yAxis, ...bounds },
         series: [
           {
             name: 'Runs',

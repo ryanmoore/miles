@@ -3202,8 +3202,8 @@
     };
     const barSeries = (s, i) => ({ ...seriesFor(s, i), type: 'bar', itemStyle: { color: cmpColor(s.key) }, barGap: theme.compact ? '0%' : '10%', barCategoryGap: theme.compact ? '15%' : '30%' });
     const desc = {
-      lines: 'Planned miles per week (days' sum, else the week target at its range midpoint) · actual synced miles for runs · the first side is the wide band, the others run on top of it',
-      bars: 'Planned miles per week (days' sum, else the week target at its range midpoint) · actual synced miles for runs · one bar per side per week',
+      lines: 'Planned miles per week (the sum of its days, else the week target at its range midpoint) · actual synced miles for runs · the first side is the wide band, the others run on top of it',
+      bars: 'Planned miles per week (the sum of its days, else the week target at its range midpoint) · actual synced miles for runs · one bar per side per week',
     };
     const legendNote = i => view === 'lines' ? ` <span style="color:var(--muted)">· ${CMP_LINE_STYLES[i].glyph}</span>` : '';
     function draw() {

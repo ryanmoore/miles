@@ -27,8 +27,10 @@ from .fitness import FT_PER_M, MILE_M
 
 # Bumped for DEM draping (elevation_source preference, ele_source,
 # elevation_pending) and roughness-based smoothing -- both change what
-# _apply_derived computes from the same raw GPX bytes.
-ROUTE_DERIVE_VERSION = 4
+# _apply_derived computes from the same raw GPX bytes. 5: a KML path whose
+# altitudes are partly 0 is read as having no elevation (gpx_parse
+# KML_ZERO_ALTITUDE_MAX_SHARE), so it drapes instead.
+ROUTE_DERIVE_VERSION = 5
 
 RouteLegKind = Literal["route", "connector"]
 
@@ -172,7 +174,8 @@ def upload_gpx(
     """Store data as a gpx_files row (deduped by sha256), create a routes
     row per trk/rte it contains, and derive all of them. Returns the
     route_ids created or refreshed by this call, in document order.
-    Raises gpx_parse.GpxParseError if the bytes aren't a usable GPX file.
+    Accepts KML as well (stored raw, parsed by gpx_parse.parse_kml_root).
+    Raises gpx_parse.GpxParseError if the bytes aren't a usable GPX/KML file.
     """
     if len(data) > gpx_parse.MAX_UPLOAD_BYTES:
         raise ValueError(f"GPX upload exceeds {gpx_parse.MAX_UPLOAD_BYTES} bytes")
@@ -624,7 +627,8 @@ def get_route(conn: sqlite3.Connection, route_id: int) -> RouteDetail:
 
 
 def get_route_gpx(conn: sqlite3.Connection, route_id: int) -> tuple[str, bytes]:
-    """(filename, raw bytes) of the file backing this route."""
+    """(filename, bytes) of the file backing this route: the raw upload, or
+    for a KML upload a GPX conversion of it."""
     row = conn.execute(
         """
         SELECT f.filename, f.data FROM routes r JOIN gpx_files f ON f.file_id = r.file_id
@@ -634,7 +638,12 @@ def get_route_gpx(conn: sqlite3.Connection, route_id: int) -> tuple[str, bytes]:
     ).fetchone()
     if row is None:
         raise RouteNotFoundError(f"No route {route_id}")
-    return row["filename"], bytes(row["data"])
+    filename, data = str(row["filename"]), bytes(row["data"])
+    if gpx_parse.is_kml(data):
+        # Stored as uploaded (raw bytes are ground truth); served as GPX.
+        stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+        return f"{stem}.gpx", gpx_parse.document_to_gpx(gpx_parse.parse_gpx_bytes(data))
+    return filename, data
 
 
 def get_route_profile(conn: sqlite3.Connection, route_id: int) -> list[RouteProfilePoint]:

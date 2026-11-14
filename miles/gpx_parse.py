@@ -8,6 +8,11 @@ URI) rather than a hardcoded namespace map.
 
 Elevation gain/loss is a centered moving average followed by a hysteresis
 threshold: raw point-to-point deltas count GPS/DEM jitter as climbing.
+
+KML files (Google Earth / My Maps / CalTopo exports) parse into the same
+GpxDocument: each Placemark's LineString / gx:Track becomes a track and each
+Point placemark a waypoint. The raw KML bytes are what gets stored; the GPX
+download converts on the fly (document_to_gpx).
 """
 
 import math
@@ -17,6 +22,8 @@ from typing_extensions import TypedDict
 import defusedxml.ElementTree as DefusedET
 from defusedxml.common import DefusedXmlException
 from xml.etree.ElementTree import Element, ParseError
+
+from xml.sax.saxutils import escape as xml_escape
 
 from .routes_spatial import equirect_distance_m
 
@@ -137,18 +144,34 @@ def _parse_point(elem: Element) -> GpxPoint | None:
     return (float(lat), float(lon), _parse_ele(elem))
 
 
-def parse_gpx_bytes(data: bytes) -> GpxDocument:
-    """Parse raw GPX bytes into every trk/rte (as one entry per track, in
-    document order) and every file-level wpt. Multiple trkseg within one trk
-    are flattened into a single point list -- segment breaks aren't tracked.
-    Tracks/routes with fewer than two points are dropped as unusable.
-    """
+def _parse_root(data: bytes) -> Element:
     try:
         root = DefusedET.fromstring(data)
     except (ParseError, DefusedXmlException) as exc:
-        raise GpxParseError(f"Not valid GPX/XML: {exc}") from exc
+        raise GpxParseError(f"Not valid GPX/KML/XML: {exc}") from exc
     if not isinstance(root, Element):
-        raise GpxParseError("Not valid GPX/XML: unexpected document root")
+        raise GpxParseError("Not valid GPX/KML/XML: unexpected document root")
+    return root
+
+
+def is_kml(data: bytes) -> bool:
+    """True when the bytes are a KML document (root element <kml>)."""
+    try:
+        return _local_tag(_parse_root(data)) == "kml"
+    except GpxParseError:
+        return False
+
+
+def parse_gpx_bytes(data: bytes) -> GpxDocument:
+    """Parse raw GPX (or KML, see parse_kml_root) bytes into every trk/rte (as
+    one entry per track, in document order) and every file-level wpt. Multiple
+    trkseg within one trk are flattened into a single point list -- segment
+    breaks aren't tracked. Tracks/routes with fewer than two points are
+    dropped as unusable.
+    """
+    root = _parse_root(data)
+    if _local_tag(root) == "kml":
+        return parse_kml_root(root)
 
     tracks: list[GpxTrack] = []
     for child in root:
@@ -210,6 +233,153 @@ def parse_gpx_bytes(data: bytes) -> GpxDocument:
         )
 
     return {"creator": root.get("creator"), "tracks": tracks, "waypoints": waypoints}
+
+
+def _kml_coordinates(text: str | None) -> list[GpxPoint]:
+    """KML <coordinates>: whitespace-separated "lon,lat[,alt]" tuples."""
+    points: list[GpxPoint] = []
+    for tup in (text or "").split():
+        parts = tup.split(",")
+        if len(parts) < 2:
+            continue
+        try:
+            lng, lat = float(parts[0]), float(parts[1])
+            alt = float(parts[2]) if len(parts) > 2 and parts[2] else None
+        except ValueError:
+            continue
+        points.append((lat, lng, alt))
+    return points
+
+
+def _kml_gx_coords(track: Element) -> list[GpxPoint]:
+    """gx:Track: one <gx:coord> per point, "lon lat [alt]" space-separated."""
+    points: list[GpxPoint] = []
+    for child in track:
+        if _local_tag(child) != "coord" or not child.text:
+            continue
+        parts = child.text.split()
+        if len(parts) < 2:
+            continue
+        try:
+            lng, lat = float(parts[0]), float(parts[1])
+            alt = float(parts[2]) if len(parts) > 2 else None
+        except ValueError:
+            continue
+        points.append((lat, lng, alt))
+    return points
+
+
+def _kml_line_points(geometry: Element) -> list[GpxPoint]:
+    """Every point of the line geometries under a Placemark, in document
+    order: LineString, gx:Track, and those nested in MultiGeometry /
+    gx:MultiTrack flattened into one list (like trksegs within a trk).
+    Polygons and Points are not lines and are skipped."""
+    points: list[GpxPoint] = []
+    for elem in geometry.iter():
+        tag = _local_tag(elem)
+        if tag == "LineString":
+            points.extend(_kml_coordinates(_child_text(elem, "coordinates")))
+        elif tag == "Track":
+            points.extend(_kml_gx_coords(elem))
+    return points
+
+
+def _kml_point(placemark: Element) -> GpxPoint | None:
+    for elem in placemark.iter():
+        if _local_tag(elem) == "Point":
+            coords = _kml_coordinates(_child_text(elem, "coordinates"))
+            return coords[0] if coords else None
+    return None
+
+
+# Share of a KML path's points at altitude exactly 0 above which the whole
+# path's file elevation is dropped. A drawn path (Google Earth, My Maps) is
+# clamped to the ground and writes 0 on every point it adds, and a path
+# stitched from a recorded stretch plus a drawn one is real elevation that
+# falls to 0 partway along. Real ground at exactly 0.0 m on a tenth of a
+# route is rare enough to ignore.
+KML_ZERO_ALTITUDE_MAX_SHARE = 0.10
+
+
+def _drop_zero_altitudes(points: list[GpxPoint]) -> list[GpxPoint]:
+    """A KML path's altitudes are no elevation at all (rather than a route
+    at sea level) when more than KML_ZERO_ALTITUDE_MAX_SHARE of its points
+    are 0 or missing; the route is then draped like any file without
+    elevation. Keeping the real stretch and dropping only the zeros would
+    leave a profile that stops partway."""
+    zero = sum(1 for p in points if p[2] is None or p[2] == 0.0)
+    if zero > KML_ZERO_ALTITUDE_MAX_SHARE * len(points):
+        return [(lat, lng, None) for lat, lng, _ in points]
+    return points
+
+
+def parse_kml_root(root: Element) -> GpxDocument:
+    """Every Placemark (at any Document/Folder depth, in document order) with
+    a line geometry becomes a "trk" track named by the Placemark's <name>;
+    every Placemark whose geometry is a lone Point becomes a waypoint."""
+    tracks: list[GpxTrack] = []
+    waypoints: list[GpxWaypoint] = []
+    for placemark in root.iter():
+        if _local_tag(placemark) != "Placemark":
+            continue
+        points = _kml_line_points(placemark)
+        if points:
+            if len(points) >= 2:
+                tracks.append(
+                    {
+                        "kind": "trk",
+                        "track_index": len(tracks),
+                        "gpx_name": _child_text(placemark, "name"),
+                        "points": _drop_zero_altitudes(points),
+                    }
+                )
+            continue
+        p = _kml_point(placemark)
+        if p is not None:
+            waypoints.append(
+                {
+                    "name": _child_text(placemark, "name"),
+                    "desc": _child_text(placemark, "description"),
+                    "lat": p[0],
+                    "lng": p[1],
+                }
+            )
+    if not tracks:
+        raise GpxParseError("No KML LineString or gx:Track with at least two points")
+    return {"creator": None, "tracks": tracks, "waypoints": waypoints}
+
+
+def document_to_gpx(doc: GpxDocument, creator: str = "miles") -> bytes:
+    """A GPX 1.1 file carrying every track (as trk or rte, per its kind) and
+    waypoint of a parsed document -- the download form of a stored KML."""
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        f'<gpx version="1.1" creator="{xml_escape(creator, {chr(34): "&quot;"})}" xmlns="{GPX_NAMESPACE}">',
+    ]
+
+    def pt(tag: str, lat: float, lng: float, ele: float | None, inner: str = "") -> str:
+        ele_xml = f"<ele>{ele:.2f}</ele>" if ele is not None else ""
+        return f'<{tag} lat="{lat:.7f}" lon="{lng:.7f}">{ele_xml}{inner}</{tag}>'
+
+    for w in doc["waypoints"]:
+        inner = ""
+        if w["name"]:
+            inner += f"<name>{xml_escape(w['name'])}</name>"
+        if w["desc"]:
+            inner += f"<desc>{xml_escape(w['desc'])}</desc>"
+        lines.append("  " + pt("wpt", w["lat"], w["lng"], None, inner))
+    for t in doc["tracks"]:
+        name_xml = f"<name>{xml_escape(t['gpx_name'])}</name>" if t["gpx_name"] else ""
+        if t["kind"] == "rte":
+            lines.append(f"  <rte>{name_xml}")
+            lines += ["    " + pt("rtept", lat, lng, ele) for lat, lng, ele in t["points"]]
+            lines.append("  </rte>")
+        else:
+            lines.append(f"  <trk>{name_xml}<trkseg>")
+            lines += ["    " + pt("trkpt", lat, lng, ele) for lat, lng, ele in t["points"]]
+            lines.append("  </trkseg></trk>")
+    lines.append("</gpx>")
+    return "\n".join(lines).encode("utf-8")
 
 
 def cumulative_distances_m(points: list[GpxPoint]) -> list[float]:

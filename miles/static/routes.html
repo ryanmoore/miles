@@ -17,6 +17,22 @@
     .routes-view .entity-link { color: inherit; text-decoration: none; }
     .routes-view .entity-link:hover { text-decoration: underline; }
     .routes-view .skeleton-row { height: 2.25rem; margin-bottom: 0.375rem; }
+    .upload-form { display: grid; gap: 0.625rem; }
+    .upload-form label { display: grid; gap: 0.25rem; font-size: 0.75rem; color: var(--muted); }
+    .upload-form input, .upload-form textarea {
+      font: inherit; font-size: 0.875rem; min-height: 2.75rem; padding: 0.375rem 0.5rem;
+      border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text);
+    }
+    .upload-form textarea { min-height: 4rem; resize: vertical; }
+    .upload-form input[type=file] { padding: 0.5rem; }
+    .upload-form .hint { font-size: 0.6875rem; color: var(--muted); }
+    .upload-results { list-style: none; margin: 0.75rem 0 0; padding: 0; font-size: 0.8125rem; }
+    .upload-results li { padding: 0.25rem 0; }
+    .upload-results .fail { color: var(--series-6); }
+    @media (min-width: 640px) {
+      .routes-view ~ .date-dialog { width: 26rem; }
+      .upload-form input, .upload-form textarea { min-height: 2rem; font-size: 0.8125rem; }
+    }
   </style>
 </head>
 <body>
@@ -31,6 +47,7 @@
     </div>
     <div class="head-links">
       <a class="manage-link" href="/areas.html">Areas</a>
+      <button class="filter-btn" id="upload-open" type="button">Upload</button>
       <a class="create-btn" href="/create-route.html">Create a route</a>
     </div>
   </div>
@@ -38,6 +55,28 @@
     <div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>
   </div>
 </main>
+
+<dialog class="date-dialog" id="upload-dialog" aria-labelledby="upload-title">
+  <form class="date-inner upload-form" id="upload-form" method="dialog">
+    <div class="date-title" id="upload-title">Upload routes</div>
+    <label>GPX or KML files
+      <input type="file" id="upload-files" accept=".gpx,.kml,application/gpx+xml,application/vnd.google-earth.kml+xml" multiple required>
+      <span class="hint">Each track (KML: each path) becomes its own route.</span>
+    </label>
+    <label>Name <input type="text" id="upload-name" placeholder="From the file if blank">
+      <span class="hint">Used as-is for a single-track file, a prefix for a multi-track one.</span>
+    </label>
+    <label>Source <input type="text" id="upload-source" placeholder="alltrails, caltopo, garmin, race…"></label>
+    <label>Tags <input type="text" id="upload-tags" placeholder="Comma-separated"></label>
+    <label>Notes <textarea id="upload-notes"></textarea></label>
+    <ul class="upload-results" id="upload-results"></ul>
+    <div class="date-foot">
+      <span class="spacer"></span>
+      <button class="link-btn" type="button" id="upload-cancel">Close</button>
+      <button class="primary-btn" type="submit" id="upload-submit">Upload</button>
+    </div>
+  </form>
+</dialog>
 
 <script>
   const root = document.getElementById('root');
@@ -67,7 +106,7 @@
     const routes = res.data;
     subtitle.textContent = `${routes.length} saved route${routes.length === 1 ? '' : 's'}, newest first`;
     if (!routes.length) {
-      root.innerHTML = '<div class="loading">No routes yet. Create one or upload a GPX file.</div>';
+      root.innerHTML = '<div class="loading">No routes yet. Create one or upload a GPX or KML file.</div>';
       return;
     }
     root.innerHTML = `
@@ -82,6 +121,68 @@
       </div>`;
     makeSortable(root.querySelector('table'));
   }
+
+  const uploadDialog = document.getElementById('upload-dialog');
+  const uploadForm = document.getElementById('upload-form');
+  const uploadFiles = document.getElementById('upload-files');
+  const uploadSubmit = document.getElementById('upload-submit');
+  const uploadResults = document.getElementById('upload-results');
+
+  document.getElementById('upload-open').addEventListener('click', () => {
+    uploadForm.reset();
+    uploadResults.innerHTML = '';
+    uploadDialog.showModal();
+  });
+  document.getElementById('upload-cancel').addEventListener('click', () => uploadDialog.close());
+
+  // One request per file, in order: the endpoint takes one file, and a bad
+  // file shouldn't stop the rest.
+  async function uploadOne(file) {
+    const body = new FormData();
+    body.append('file', file);
+    for (const key of ['name', 'source', 'tags', 'notes']) {
+      body.append(key, document.getElementById(`upload-${key}`).value.trim());
+    }
+    try {
+      const res = await fetch('/api/routes/upload', { method: 'POST', body });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) return { ok: false, msg: (json && json.detail) || `HTTP ${res.status}` };
+      return { ok: true, routes: json };
+    } catch (e) {
+      return { ok: false, msg: String(e) };
+    }
+  }
+
+  uploadForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const files = [...uploadFiles.files];
+    if (!files.length) return;
+    uploadSubmit.disabled = true;
+    uploadResults.innerHTML = '';
+    let added = 0;
+    let failed = 0;
+    for (const file of files) {
+      const li = document.createElement('li');
+      li.textContent = `${file.name}: uploading…`;
+      uploadResults.appendChild(li);
+      const r = await uploadOne(file);
+      if (!r.ok) {
+        failed += 1;
+        li.className = 'fail';
+        li.textContent = `${file.name}: ${r.msg}`;
+        continue;
+      }
+      added += r.routes.length;
+      li.innerHTML = `${esc(file.name)}: ` + r.routes.map(rt => {
+        const mi = rt.distance_m != null ? ` (${(rt.distance_m / MILE_METERS).toFixed(1)} mi)` : '';
+        return `<a class="entity-link" href="/route.html?id=${rt.route_id}">${esc(rt.name ?? rt.gpx_name ?? 'Untitled route')}</a>${mi}`;
+      }).join(', ');
+    }
+    uploadSubmit.disabled = false;
+    if (added) main();
+    // A failure keeps the dialog open so its error stays readable.
+    if (!failed) uploadDialog.close();
+  });
 
   main();
 </script>

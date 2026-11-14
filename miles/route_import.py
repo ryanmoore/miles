@@ -1,4 +1,4 @@
-"""`miles-route-import`: upload GPX files to a running miles-api instance.
+"""`miles-route-import`: upload GPX or KML files to a running miles-api instance.
 
 A plain HTTP client, not a direct DB writer: the files and the database
 (with its derive pipeline) are often on different machines, so this always
@@ -27,10 +27,11 @@ def main(files: tuple[Path, ...], name: str | None, source: str | None, notes: s
             "notes": notes or "",
             "tags": tags or "",
         }
+        mime = "application/vnd.google-earth.kml+xml" if path.suffix.lower() == ".kml" else "application/gpx+xml"
         with path.open("rb") as fh:
             resp = requests.post(
                 f"{url}/api/routes/upload",
-                files={"file": (path.name, fh, "application/gpx+xml")},
+                files={"file": (path.name, fh, mime)},
                 data=data,
                 timeout=60,
             )

@@ -208,8 +208,9 @@ explicit tags always win.
 
 ## Route database
 
-Upload GPX (AllTrails/Garmin/CalTopo exports, race courses) against a running
-`miles-api`:
+Upload GPX or KML (AllTrails/Garmin/CalTopo exports, Google Earth/My Maps
+paths, race courses) from the Routes page's Upload button, or from the CLI
+against a running `miles-api`:
 
 ```bash
 uv run miles-route-import ridge_loop.gpx --name "Ridge Loop" --source alltrails --tags trail,hilly
@@ -223,6 +224,14 @@ climb segments, a grade-band histogram, and snapped waypoints are all
 derived and rebuilt automatically if the parser changes. A file with no
 `<ele>` anywhere gets `has_elevation = false` and null gain/grade stats,
 never a fake zero.
+
+KML: each Placemark's `LineString`/`gx:Track` (a `MultiGeometry` flattened
+into one) becomes a route named by the Placemark, each `Point` placemark a
+waypoint; polygons are ignored. A path with more than 10% of its altitudes at 0
+(drawn and clamped to the ground, or a recorded stretch extended by a drawn
+one) counts as no elevation and is draped from elevation data instead. The raw KML is stored;
+`GET /api/routes/{id}/gpx` serves a GPX conversion of it. KMZ isn't read —
+unzip it to its `doc.kml` first.
 
 `POST /api/routes/upload` (multipart) is the endpoint behind the CLI above;
 `GET /api/routes`, `GET /api/routes/{id}`, `GET /api/routes/{id}/gpx` (raw

@@ -2888,7 +2888,6 @@
 
   function nextWeekCardHTML(week, todayStr) {
     const chips = Array.from({ length: 7 }, (_, i) => dayChip(addDays(week.week_start, i), todayStr)).join('');
-    const monday = (PLAN_DATA.dayByDate.get(week.week_start) ?? []).filter(d => d.slot !== 'rest');
     return `
       <div class="week-card">
         <div class="week-card-head">
@@ -2896,7 +2895,6 @@
           <span class="week-headline">${esc(targetMilesLabel(week))} mi</span>
         </div>
         <div class="day-chip-row">${chips}</div>
-        <p class="week-shape">Monday: ${esc(monday.length ? monday.map(sessionText).join(' · ') : 'rest')}</p>
         ${week.note ? `<p class="week-note-line">${esc(week.note)}</p>` : ''}
       </div>`;
   }

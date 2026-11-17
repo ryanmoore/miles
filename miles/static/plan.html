@@ -385,6 +385,8 @@
       color: var(--muted);
       line-height: 1.45;
     }
+    .plan-view .next-week { max-width: 66rem; margin-top: 1rem; }
+    .plan-view .next-week .week-card { max-width: 40rem; }
     .plan-view .week-shape { font-size: 0.75rem; color: var(--muted); }
     .plan-view .week-divider { border-top: 1px solid var(--gridline); margin: 0.25rem 0; }
     .plan-view .vs-row { display: flex; align-items: flex-end; gap: 1rem; flex-wrap: wrap; }
@@ -2643,6 +2645,13 @@
   const scheduledOn = dateStr => (PLAN_DATA.dayByDate.get(dateStr) ?? []).filter(d => d.slot !== 'rest');
   const plannedMilesOf = scheduled => scheduled.reduce((s, d) => s + (d.target_miles ?? 0), 0);
 
+  // "Tempo (6 mi)": a session's title or slot name with its mileage or duration.
+  function sessionText(d) {
+    const label = d.title ? d.title : (SLOT_LABEL[d.slot] ?? d.slot);
+    const amount = d.target_miles != null ? `${trimMiles(d.target_miles)} mi` : d.target_minutes != null ? fmtDuration(d.target_minutes) : null;
+    return amount ? `${label} (${amount})` : label;
+  }
+
   function dayChip(dateStr, todayStr) {
     const sessions = PLAN_DATA.dayByDate.get(dateStr) ?? [];
     const runs = PLAN_DATA.actualByDate.get(dateStr) ?? [];
@@ -2670,13 +2679,7 @@
       : dateStr < todayStr ? (slot === 'rest' ? '—' : '0')
       : plannedNum ?? (slot === 'rest' ? '—' : '·');
 
-    const titleParts = sessions.length
-      ? sessions.map(d => {
-          const dl = d.title ? d.title : (SLOT_LABEL[d.slot] ?? d.slot);
-          const dNum = d.target_miles != null ? `${trimMiles(d.target_miles)} mi` : d.target_minutes != null ? fmtDuration(d.target_minutes) : null;
-          return dNum ? `${dl} (${dNum})` : dl;
-        })
-      : ['Rest'];
+    const titleParts = sessions.length ? sessions.map(sessionText) : ['Rest'];
     if (runs.length) titleParts.push(`ran ${trimMiles(ranMi)} mi`);
     return `<div class="day-chip ${stateClass}" style="--chip-color:${color}" data-plan-date="${dateStr}" title="${esc(titleParts.join(' · '))}">
       <div class="day-chip-wd">${wd}</div>
@@ -2862,15 +2865,57 @@
       <p class="desc plan-tab-note">No current plan — see the <a href="#plan" data-tab-jump="plan">Plan tab</a>.</p>`;
   }
 
+  // On a Sunday (the server's date) the coming week's card follows the
+  // grid. Its days are merged into PLAN_DATA so the chips open the usual
+  // popover; a week of another plan comes from that plan's own fetch, which
+  // fills only this card.
+  async function nextWeekPlan(data) {
+    const monday = addDays(data.today.date, 1);
+    let source = data;
+    if (!data.weeks.some(w => w.week_start === monday)) {
+      const next = (await getPlans()).find(p => p.role === 'next' && p.first_week <= monday && monday <= p.last_week);
+      if (!next) return null;
+      source = await loadPlan(next.plan_id);
+    }
+    const week = source.weeks.find(w => w.week_start === monday);
+    if (!week) return null;
+    for (const [d, sessions] of groupSessionsByDate(source.days)) {
+      if (d >= monday && d <= addDays(monday, 6)) PLAN_DATA.dayByDate.set(d, sessions);
+    }
+    return week;
+  }
+
+  function nextWeekCardHTML(week, todayStr) {
+    const chips = Array.from({ length: 7 }, (_, i) => dayChip(addDays(week.week_start, i), todayStr)).join('');
+    const monday = (PLAN_DATA.dayByDate.get(week.week_start) ?? []).filter(d => d.slot !== 'rest');
+    return `
+      <div class="week-card">
+        <div class="week-card-head">
+          <span class="panel-label">Next week · ${esc(week.phase)}</span>
+          <span class="week-headline">${esc(targetMilesLabel(week))} mi</span>
+        </div>
+        <div class="day-chip-row">${chips}</div>
+        <p class="week-shape">Monday: ${esc(monday.length ? monday.map(sessionText).join(' · ') : 'rest')}</p>
+        ${week.note ? `<p class="week-note-line">${esc(week.note)}</p>` : ''}
+      </div>`;
+  }
+
   function renderToday(data) {
     const target = document.getElementById('tab-today');
     if (!target) return;
+    const sunday = new Date(data.today.date + 'T00:00:00').getDay() === 0;
     target.innerHTML = `
       ${todayKickerHTML(data)}
       <div class="today-grid">
         ${todaySessionHTML(data)}
         ${weekCardHTML(data)}
-      </div>`;
+      </div>
+      ${sunday ? `<div id="next-week" class="next-week"><div class="skeleton" style="height:140px"></div></div>` : ''}`;
+    if (!sunday) return;
+    const slot = document.getElementById('next-week');
+    nextWeekPlan(data).then(
+      week => { if (week) slot.innerHTML = nextWeekCardHTML(week, data.today.date); else slot.remove(); },
+      err => { console.error(err); slot.innerHTML = `<p class="desc">Couldn't load next week: ${esc(err.message)}</p>`; });
   }
 
   // -----------------------------------------------------------------------
@@ -2895,7 +2940,8 @@
   const loadPlan = (planId, draft) => loadPlanApi('/api/plan', planId, draft ? '&draft=1' : '');
   const loadVersions = () => loadPlanApi('/api/plan-versions', SELECTED_PLAN);
   const loadAdherence = () => loadPlanApi('/api/plan-adherence', SELECTED_PLAN);
-  const loadPlans = () => loadPlanApi('/api/plans');
+  let plansPromise;
+  const getPlans = () => plansPromise ??= loadPlanApi('/api/plans');
 
   // The active-plan-scoped chart (frozen target bands, plan-window x-axis)
   // vs the plan-independent rolling one (no bands, last RECENT_MILEAGE_WEEKS
@@ -3349,7 +3395,7 @@
       if (d.plan.status === 'completed') return loadRetrospective();
       return d.plan.status === 'active' ? loadReadiness() : null;
     });
-    const plansP = loadPlans();
+    const plansP = getPlans();
     const versionsP = loadVersions();
     fillPanel('plans', [planP, versionsP], renderPlanHead);
     fillPanel('all', [plansP], renderAllPlans);

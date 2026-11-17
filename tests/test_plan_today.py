@@ -35,14 +35,12 @@ def _synced_conn(run_today: bool):
 
 
 @pytest.mark.parametrize(
-    "run_today, expected, remaining, remaining_miles, cutoff_offset",
-    [(False, 8.0, ["2026-11-01"], 12.0, 5), (True, 20.0, [], None, 6)],
+    "run_today, expected, cutoff_offset",
+    [(False, 8.0, 5), (True, 20.0, 6)],
 )
-def test_todays_planned_run_counts_only_once_synced(run_today, expected, remaining, remaining_miles, cutoff_offset):
+def test_todays_planned_run_counts_only_once_synced(run_today, expected, cutoff_offset):
     wsf, vs = _blocks(_synced_conn(run_today))
     assert wsf["expected_miles_by_now"] == expected
-    assert [r["date"] for r in wsf["remaining_days"]] == remaining
-    assert wsf["remaining_planned_miles"] == remaining_miles
     assert vs is not None and vs["cutoff_offset"] == cutoff_offset
     assert len(vs["days"]) == 7
 

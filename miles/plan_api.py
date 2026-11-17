@@ -97,13 +97,6 @@ class GoalStat(TypedDict):
     confidence: str | None
 
 
-class RemainingDayOut(TypedDict):
-    date: str
-    slot: str
-    title: str | None
-    terrain: str | None
-
-
 class TodayOut(TypedDict):
     """Today's slice of the plan. Present for any active plan regardless of
     sync freshness (only week_so_far/vs_last_week depend on synced data).
@@ -132,8 +125,6 @@ class WeekSoFarOut(TypedDict):
     target_miles_hi: float | None
     target_workouts: int
     expected_miles_by_now: float | None  # None when the week has no mileage target, or no planned days
-    remaining_planned_miles: float | None  # sum of target_miles over remaining_days; None when none of them has target_miles
-    remaining_days: list[RemainingDayOut]  # non-rest days not yet counted (see _counted_through), in date order
     phase: str
     note: str | None
 
@@ -390,7 +381,6 @@ def _today_blocks(
 
     planned_days = [d for d in week_days if d["slot"] != "rest"]
     elapsed_planned = [d for d in planned_days if d["date"] <= through.isoformat()]
-    remaining_planned = [d for d in planned_days if d["date"] > through.isoformat()]
 
     # Mileage-weighted pro-rate: a day's share is its own target_miles (days
     # with target_miles = None weigh 0), so a heavy long-run day is not
@@ -414,16 +404,6 @@ def _today_blocks(
         if basis_target is not None and planned_fraction is not None and week_started
         else None
     )
-    remaining_days = [
-        RemainingDayOut(date=d["date"], slot=d["slot"], title=d["title"], terrain=d["terrain"])
-        for d in remaining_planned
-    ]
-    remaining_planned_miles = (
-        round(sum(d["target_miles"] or 0.0 for d in remaining_planned), 1)
-        if any(d["target_miles"] is not None for d in remaining_planned)
-        else None
-    )
-
     week_so_far = WeekSoFarOut(
         week_start=monday_iso,
         week_cutoff_date=week_cutoff_date.isoformat(),
@@ -434,8 +414,6 @@ def _today_blocks(
         target_miles_hi=week["target_miles_hi"],
         target_workouts=week["target_workouts"],
         expected_miles_by_now=expected_miles_by_now,
-        remaining_planned_miles=remaining_planned_miles,
-        remaining_days=remaining_days,
         phase=week["phase"],
         note=week["note"],
     )

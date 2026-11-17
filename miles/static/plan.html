@@ -384,10 +384,6 @@
       font-size: 0.75rem;
       color: var(--muted);
       line-height: 1.45;
-      display: -webkit-box;
-      -webkit-line-clamp: 1;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
     }
     .plan-view .week-shape { font-size: 0.75rem; color: var(--muted); }
     .plan-view .week-divider { border-top: 1px solid var(--gridline); margin: 0.25rem 0; }
@@ -846,19 +842,6 @@
     else if (t.hr_hi != null) lines.push(`keep HR under ${Math.round(t.hr_hi)}`);
     else if (t.hr_lo != null) lines.push(`HR ${Math.round(t.hr_lo)}+`);
     return lines;
-  }
-
-  const REMAINING_WORD = { long: 'long run', easy: 'easy', workout: 'workout', strength: 'strength', race: 'race' };
-
-  // "Left: 12 mi — Sun long run", or the week's-done line.
-  function leftLine(ws) {
-    if (!ws.remaining_days.length) return `Week's running is done`;
-    const sessions = ws.remaining_days.map(d => {
-      const wd = new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
-      return `${wd} ${REMAINING_WORD[d.slot] ?? d.slot}`;
-    }).join(', ');
-    const miles = ws.remaining_planned_miles != null ? `${trimMiles(ws.remaining_planned_miles)} mi — ` : '';
-    return `Left: ${miles}${sessions}`;
   }
 
   // Adherence bands — read straight off theme.css so light/dark both work,
@@ -2714,9 +2697,7 @@
     const headline = !started ? '' : ws.target_miles == null
       ? `${ws.actual_workouts_so_far} of ${ws.target_workouts} workouts`
       : `${ws.actual_miles_so_far.toFixed(1)} of ${targetMilesLabel(ws)} mi`;
-    const progress = !ws ? ''
-      : !started ? `<p class="week-shape">Sync hasn't reached this week yet.</p>`
-      : `<p class="week-shape">${esc(leftLine(ws))}</p>`;
+    const progress = ws && !started ? `<p class="week-shape">Sync hasn't reached this week yet.</p>` : '';
     return `
       <div class="week-card">
         <div class="week-card-head">
@@ -2724,7 +2705,7 @@
           ${headline ? `<span class="week-headline">${esc(headline)}</span>` : ''}
         </div>
         <div class="day-chip-row">${chips}</div>
-        ${ws && ws.note ? `<p class="week-note-line" title="${esc(ws.note)}">${esc(ws.note)}</p>` : ''}
+        ${ws && ws.note ? `<p class="week-note-line">${esc(ws.note)}</p>` : ''}
         ${progress}
         <div class="week-divider"></div>
         ${vsLastWeekHTML(data, true)}

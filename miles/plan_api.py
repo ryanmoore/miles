@@ -624,6 +624,22 @@ def get_plan_diff(a: int, b: int) -> VersionDiff:
         raise HTTPException(status_code=404, detail=str(e))
 
 
+class RenameBody(TypedDict):
+    title: str
+
+
+@router.patch("/api/plans/{plan_id}")
+def rename_plan(plan_id: int, body: RenameBody) -> PlanRow:
+    """Sets a plan's title (any status). 404 for an unknown plan, 400 for an empty title."""
+    conn = _conn()
+    if plan.get_plan(conn, plan_id) is None:
+        raise HTTPException(status_code=404, detail=f"plan {plan_id} does not exist")
+    try:
+        return plan.rename_plan(conn, plan_id, body["title"])
+    except PlanValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 class WeekAdherenceOut(TypedDict):
     week_start: str
     version_n_used: int | None

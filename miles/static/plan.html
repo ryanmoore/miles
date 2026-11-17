@@ -417,6 +417,7 @@
     .plan-view .plan-which-title { font-size: 1.125rem; font-weight: 650; color: var(--text); overflow-wrap: anywhere; }
     .plan-view .plan-which-race { font-size: 0.8125rem; color: var(--text-secondary); }
     .plan-view .plan-which-link { font-size: 0.75rem; color: var(--accent); }
+    .plan-view .plan-rename { background: none; border: 0; padding: 0; cursor: pointer; font-family: inherit; }
 
     /* Compare mode: one grid per week with the sides' rows adjacent, so each
        weekday's cells sit one above the other; below 784px .cal-cards takes
@@ -3041,11 +3042,35 @@
     slotEl('plans').insertAdjacentHTML('beforeend', `
       <div class="plan-which">
         <span class="plan-which-title">${esc(plan.title)}</span>
+        <button type="button" class="plan-which-link plan-rename" data-rename-plan="${plan.plan_id}">Rename</button>
         ${race ? `<span class="plan-which-race">${esc(race)}</span>` : ''}
         ${ROLE_TAG[role] ? `<span class="plan-which-role">${ROLE_TAG[role]}</span>` : ''}
         ${draftLink}
       </div>
       ${isUncommitted(data) ? draftBannerHTML(data) : ''}`);
+  }
+
+  // Prompts for a new title and updates the header, tab title and All-plans
+  // row in place.
+  async function renamePlan(planId) {
+    const titleEl = document.querySelector('.plan-which-title');
+    const title = prompt('Plan title', titleEl.textContent)?.trim();
+    if (!title || title === titleEl.textContent) return;
+    try {
+      const res = await fetch(`/api/plans/${planId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `HTTP ${res.status}`);
+    } catch (err) {
+      alert(`Couldn't rename: ${err.message}`);
+      return;
+    }
+    titleEl.textContent = title;
+    document.title = `Miles · ${title}`;
+    const link = document.querySelector(`#plans-table a[href="?plan=${planId}#plan"]`);
+    if (link) link.textContent = title;
   }
 
   // Newest first by start week; plans with no weeks last.
@@ -3450,6 +3475,8 @@
     const jumpTab = e.target.closest('[data-tab-jump]');
     if (jumpTab) { e.preventDefault(); activatePlanTab(jumpTab.dataset.tabJump); return; }
     if (e.target.closest('a.doc-link')) return;
+    const rename = e.target.closest('[data-rename-plan]');
+    if (rename) { renamePlan(rename.dataset.renamePlan); return; }
     const el = e.target.closest('[data-plan-date]');
     if (el) {
       const side = el.closest('[data-side]');

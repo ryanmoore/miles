@@ -849,6 +849,29 @@ def set_draft_race(
     conn.commit()
 
 
+def _validate_title(title: str) -> None:
+    if not title.strip():
+        raise PlanValidationError("plan title must not be empty")
+
+
+def rename_plan(conn: sqlite3.Connection, plan_id: int, title: str) -> PlanRow:
+    """Sets a plan's title, whatever its status. The title lives on the plans
+    row, so no version changes. Like any write to a sketch, it restarts the
+    sketch's expiry."""
+    _validate_title(title)
+    if get_plan(conn, plan_id) is None:
+        raise PlanValidationError(f"plan {plan_id} does not exist")
+    conn.execute(
+        "UPDATE plans SET title = ?, sketch_expires_at = CASE WHEN sketch_expires_at IS NULL THEN NULL ELSE ? END "
+        "WHERE plan_id = ?",
+        (title, _sketch_expiry(), plan_id),
+    )
+    conn.commit()
+    row = get_plan(conn, plan_id)
+    assert row is not None
+    return row
+
+
 def start_plan_draft(
     conn: sqlite3.Connection,
     *,
@@ -863,8 +886,7 @@ def start_plan_draft(
     committed ones; commit_plan is where overlap is rejected. A sketch expires
     SKETCH_TTL after its last write unless committed. Returns
     (plan_id, version_id)."""
-    if not title.strip():
-        raise PlanValidationError("plan title must not be empty")
+    _validate_title(title)
     _validate_race(race_date, distance_bucket, goal_time_s)
 
     created_at = datetime.now(timezone.utc).isoformat()

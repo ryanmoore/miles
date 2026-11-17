@@ -174,6 +174,9 @@ run, a workout moved to Thursday, "slept badly all week" — is `log_plan_adjust
 reason), not a version bump. Revise when the *weeks ahead* need different targets. `abandon_plan`
 only on the athlete's explicit say-so, in their words.
 
+A plan's title can be changed at any time with `rename_plan`, whatever the plan's status; it
+touches no version.
+
 ## Several plans, candidates, and the race
 
 `list_plans` shows every plan with a date-derived role (current, next, past, candidate); read

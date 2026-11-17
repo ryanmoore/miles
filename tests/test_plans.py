@@ -313,6 +313,23 @@ def test_sketches_expire_unless_written_or_committed_and_drafts_have_a_view(monk
         plan_api.get_plan(plan_id=kept, draft=True)
 
 
+def test_rename_plan_keeps_versions_and_extends_a_sketch(monkeypatch):
+    conn = memory_db()
+    monkeypatch.setattr(mcp_server, "_conn", lambda: conn)
+    tool = lambda name, **args: call_tool(mcp_server.mcp, name, args)  # noqa: E731
+    committed = _plan(conn, "Old name", 0, 1)
+    sketch = tool("start_plan_draft", title="Sketch", sketch=True)["plan"]["plan_id"]
+    version_before = conn.execute("SELECT * FROM plan_versions WHERE plan_id = ?", [committed]).fetchall()
+
+    assert tool("rename_plan", title="New name")["plan"]["title"] == "New name"
+    assert [tuple(r) for r in conn.execute("SELECT * FROM plan_versions WHERE plan_id = ?", [committed])] == [tuple(r) for r in version_before]
+    stale = "2000-01-01T00:00:00+00:00"
+    conn.execute("UPDATE plans SET sketch_expires_at = ? WHERE plan_id = ?", [stale, sketch])
+    assert tool("rename_plan", title="Sketch 2", plan_id=sketch)["plan"]["sketch_expires_at"] > stale
+    assert "empty" in tool("rename_plan", title="  ")["error"]
+    assert "does not exist" in tool("rename_plan", title="x", plan_id=999)["error"]
+
+
 def test_compare_plans_aligns_by_date_when_weeks_overlap_else_by_position(monkeypatch):
     conn = memory_db()
     monkeypatch.setattr(mcp_server, "_conn", lambda: conn)

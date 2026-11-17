@@ -42,6 +42,7 @@ from .plan import (
     get_version,
     plan_role,
     plan_start_monday,
+    rename_plan as _plan_rename_plan,
     set_draft_race as _plan_set_draft_race,
     start_plan_draft as _plan_start_plan_draft,
     start_revision_draft as _plan_start_revision_draft,
@@ -2651,6 +2652,30 @@ def abandon_plan(reason: str, plan_id: int | None = None) -> str:
             return json.dumps({"error": str(e)})
 
         return json.dumps({"plan": get_plan(conn, plan_id)})
+    except Exception as e:
+        return json.dumps({"error": describe_error(e, None)})
+
+
+@mcp.tool()
+def rename_plan(title: str, plan_id: int | None = None) -> str:
+    """
+    Changes a plan's title; allowed at any time and for a plan of any status
+    (committed plans and their versions are otherwise immutable, and the title
+    belongs to neither). plan_id defaults to the current plan.
+
+    Returns {"plan": {...}} on success, or {"error": ...} — no current plan,
+    plan not found, or an empty title.
+    """
+    conn = _conn()
+    try:
+        if plan_id is None:
+            p = current_plan(conn, date.today())
+            if p is None:
+                return json.dumps({"error": "no current plan; pass plan_id"})
+            plan_id = p["plan_id"]
+        return json.dumps({"plan": _plan_rename_plan(conn, plan_id, title)})
+    except PlanValidationError as e:
+        return json.dumps({"error": str(e)})
     except Exception as e:
         return json.dumps({"error": describe_error(e, None)})
 

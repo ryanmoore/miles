@@ -1181,7 +1181,8 @@ def get_workout_session(activity_id: int) -> str:
     Detailed view of a single workout: all laps in sequence, each classified by lap_type:
       warmup | work | recovery (jog between reps) | float (slow-but-still-work laps,
       e.g. MP flux slow halves) | cooldown | steady (no interval structure detected).
-    Trivial laps (< 200m or < 45s) are filtered out.
+    Laps under 200m or 45s are listed too (short reps, short jogs); their lap_type is
+    null unless they sit between reps, and their intensity is null.
     Each lap: lap_num, lap_type, intensity, distance_miles, duration_s, pace_min_mi, avg_hr, max_hr.
     intensity names what a work/float lap was run at relative to the athlete's estimated
     fitness at the time — MP | threshold | interval | repetition | aerobic | sprint
@@ -1217,7 +1218,6 @@ def get_workout_session(activity_id: int) -> str:
             ROUND({db.hr_sql("l.max_heartrate", "a")}) AS max_hr
         FROM laps l JOIN activities a ON a.activity_id = l.activity_id
         WHERE l.activity_id = ?
-          AND l.distance_m >= 200 AND l.moving_time_s >= 45
           AND l.average_speed_mps IS NOT NULL AND l.average_speed_mps > 0
         ORDER BY l.lap_index
     """, [activity_id]).fetchall()

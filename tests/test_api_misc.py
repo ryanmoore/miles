@@ -38,37 +38,25 @@ def _capture_sync_history(monkeypatch) -> list[bool]:
         return 0
 
     monkeypatch.setattr(api.sync, "run_sync", fake_run_sync)
-    monkeypatch.setattr(api, "_sync_progress", api.sync.SyncProgress())
+    monkeypatch.setattr(api.sync, "PROGRESS", api.sync.SyncProgress())
     return seen
 
 
 def test_ui_sync_skips_the_history_pass_even_when_history_is_enabled(monkeypatch):
     monkeypatch.setenv("MILES_SYNC_HISTORY", "1")
     seen = _capture_sync_history(monkeypatch)
-    api._run_sync_in_background(False)
+    api.sync._run_in_background(False)
     assert seen == [False]
 
 
 def test_sync_endpoint_runs_history_only_when_asked(monkeypatch):
-    started: list[tuple] = []
-
-    class FakeThread:
-        def __init__(self, target, args, daemon):
-            started.append(args)
-
-        def start(self):
-            pass
-
-    monkeypatch.setattr(api.threading, "Thread", FakeThread)
+    started: list[bool] = []
+    monkeypatch.setattr(api.sync, "start_background", lambda history: started.append(history) or True)
     client = TestClient(api.app)
 
-    monkeypatch.setattr(api, "_sync_progress", api.sync.SyncProgress())
     assert client.post("/api/sync").json() == {"status": "started"}
-    monkeypatch.setattr(api, "_sync_progress", api.sync.SyncProgress())
     assert client.post("/api/sync?history=true").json() == {"status": "started"}
-    assert started == [(False,), (True,)]
-
-
+    assert started == [False, True]
 
 
 def test_activities_list_includes_non_runs_without_run_fields(monkeypatch):

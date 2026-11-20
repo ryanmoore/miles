@@ -76,7 +76,7 @@ def test_a_failing_strava_request_leaks_no_credential(
     caplog.set_level(logging.DEBUG)
     client = TestClient(api.app)
 
-    api._sync_progress = SyncProgress()
+    sync.PROGRESS = SyncProgress()
     assert client.post("/api/sync").json() == {"status": "started"}
     for thread in threading.enumerate():
         if thread is not threading.current_thread() and thread.daemon:

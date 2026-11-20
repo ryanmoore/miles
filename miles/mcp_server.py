@@ -7,7 +7,7 @@ from typing import Literal, Sequence, cast
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import areas_mcp, db, elevation, heat, load_mcp, notes_mcp, outbound, outbound_mcp, route_locations, routing_mcp
+from . import areas_mcp, db, elevation, heat, load_mcp, notes_mcp, outbound, outbound_mcp, route_locations, routing_mcp, sync_mcp
 from . import routes as routes_service
 from .terrain_mcp import register_terrain_tools
 from .weather import ATTRIBUTION as WEATHER_ATTRIBUTION
@@ -3164,6 +3164,7 @@ outbound_mcp.register_outbound_tools(mcp)
 routing_mcp.register_routing_tools(mcp)
 load_mcp.register_load_tools(mcp)
 notes_mcp.register_notes_tools(mcp)
+sync_mcp.register_sync_tools(mcp)
 
 
 def main() -> None:

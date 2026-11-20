@@ -505,6 +505,36 @@ def run_sync(
     return new_count
 
 
+# The one in-process run, shared by every caller of start_background so a
+# second request joins it instead of starting another.
+PROGRESS = SyncProgress()
+
+
+def _run_in_background(history: bool) -> None:
+    """Thread target: opens its own connection (sqlite3.Connection isn't safe
+    to share across threads) and reports through PROGRESS. The history pass
+    can wait out many 15-minute Strava windows, so only an explicit request
+    runs it; the scheduled miles-sync owns it otherwise. Any exception
+    (network down, bad credentials, a real bug) is caught here so it can't
+    take the server down or leave PROGRESS stuck at "running" forever."""
+    try:
+        with db.connection() as conn:
+            new_count = run_sync(conn, full=False, history=history, progress=PROGRESS)
+        PROGRESS.finish(new_count)
+    except Exception as e:
+        _logger.exception("Background sync failed")
+        PROGRESS.fail(describe_error(e))
+
+
+def start_background(history: bool) -> bool:
+    """Start a sync on a daemon thread unless one is already running.
+    Returns whether this call started it."""
+    if not PROGRESS.try_start():
+        return False
+    threading.Thread(target=_run_in_background, args=(history,), daemon=True).start()
+    return True
+
+
 @click.command()
 @click.option("--full", is_flag=True, help="Ignore last sync date and fetch everything.")
 @click.option(

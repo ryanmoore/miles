@@ -200,7 +200,7 @@ builds, fitness estimates, intensity distribution and training load (injury-risk
 stored routes (compare, compose, junctions, proximity), the terrain model, area import, area
 surveys (the stretches worth running around a start, with the athlete's own adjustments and
 exclusions) and route search (routes assembled around chosen sections, with a random walk as
-the fallback), outbound-request counts, and read-only SQL over every table.
+the fallback), outbound-request counts, `sync_activities` (pull new activities from Strava so the record is current), and read-only SQL over every table.
 
 `run_type` reflects the label you set in Strava (`easy`, `workout`, `long_run`, `race`);
 untagged activities get an inferred type from name, distance, and pace history — your

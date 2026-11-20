@@ -67,7 +67,8 @@ its date; don't append a second, conflicting one.
 One per block, with these sections:
 
 - **Header** — goal race and date, what the race is for, block start, the
-  plan version of record, last updated, and the date synced through.
+  plan version of record, last updated, and the date synced through (run
+  `sync_activities` first if the record is stale).
 - **Capacities** — the core of the log. A table:
 
   | Capacity | Status | Upkeep | Last stimulus | Evidence |

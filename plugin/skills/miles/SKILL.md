@@ -55,7 +55,8 @@ tone to what they show:
 
 ## Entry-point routing
 
-Pick the tool that matches the question type before pulling anything else:
+Pick the tool that matches the question type before pulling anything else. When the record
+looks stale or a run the athlete mentions is missing, call `sync_activities` first.
 
 - **Recent training** ("how have the last weeks gone," "how does today's workout compare
   with the last one like it") → `get_recent_history` first: one call with per-run detail,

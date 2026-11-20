@@ -78,8 +78,9 @@ skill: an Adjustments line, and a status change for any capacity whose focus mov
 ## Freshness
 
 Every draft/revision tool response carries `last_sync_at`/`days_stale`. Check it opening any
-drafting or revision session — past a couple of days stale, say so before proposing anything
-("last sync was Friday — sync first so I'm not planning blind?"), advisory, never a hard block.
+drafting or revision session — when the record is a couple of days stale or today's run is
+missing, run `sync_activities` yourself and carry on from the refreshed record; if the sync
+errors or is still waiting on a rate limit, say what the record is current through and go on.
 Standing rule for the life of a plan: never characterize the in-progress week's volume without
 stating the sync date behind it ("14 miles, synced through Tuesday," never bare) — a quiet week
 on a stale sync is missing data, not a slow start ("you've run 0 miles this week, 42 is bold"

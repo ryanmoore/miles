@@ -4,7 +4,6 @@ import logging
 import os
 import re
 import sqlite3
-import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime, timedelta, timezone
@@ -49,7 +48,7 @@ from .searches_api import router as searches_api_router
 from .terrain_api import router as terrain_api_router
 from .builds import Build, detect_builds
 from .derive import connect_derived as _conn, derive_all
-from .errors import StravaAllowanceLowError, StravaNotConfiguredError, describe_error
+from .errors import StravaAllowanceLowError, StravaNotConfiguredError
 from .format import fmt_pace, fmt_time
 from .periods import Gap, Period, WeekAgg, is_active, monday_of, zero_fill, detect_periods
 from .mcp_server import mcp as _mcp_server
@@ -108,7 +107,6 @@ async def _strava_not_configured(request: Request, exc: StravaNotConfiguredError
 
 
 _logger = logging.getLogger(__name__)
-_sync_progress = sync.SyncProgress()
 
 # GIT_HASH/BUILD_TIME are baked into the image env at `docker build` time
 # (see Dockerfile, docker-build.sh). Outside Docker, or if unset, fall back
@@ -1651,35 +1649,14 @@ class SyncTriggerResponse(TypedDict):
     status: str
 
 
-def _run_sync_in_background(history: bool) -> None:
-    """Thread target for /api/sync: opens its own connection (sqlite3.Connection
-    isn't safe to share across threads) and runs the same retry loop miles-sync
-    uses; progress is exposed via _sync_progress, polled by
-    GET /api/sync/status. The history pass can wait out many 15-minute Strava
-    windows, so only an explicit request runs it; the scheduled miles-sync owns
-    it otherwise. Any exception (network down, bad credentials, a real bug)
-    is caught here so it can't take the server down or leave the progress state
-    stuck at "running" forever."""
-    try:
-        with db.connection() as conn:
-            new_count = sync.run_sync(conn, full=False, history=history, progress=_sync_progress)
-        _sync_progress.finish(new_count)
-    except Exception as e:
-        _logger.exception("Background sync failed")
-        _sync_progress.fail(describe_error(e))
-
-
 @app.post("/api/sync")
 def trigger_sync(history: bool = False) -> SyncTriggerResponse:
-    if not _sync_progress.try_start():
-        return SyncTriggerResponse(status="running")
-    threading.Thread(target=_run_sync_in_background, args=(history,), daemon=True).start()
-    return SyncTriggerResponse(status="started")
+    return SyncTriggerResponse(status="started" if sync.start_background(history) else "running")
 
 
 @app.get("/api/sync/status")
 def sync_status() -> sync.SyncStatus:
-    return _sync_progress.snapshot()
+    return sync.PROGRESS.snapshot()
 
 
 # Must precede the catch-all static mount below.

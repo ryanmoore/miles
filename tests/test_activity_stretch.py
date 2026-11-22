@@ -9,6 +9,7 @@ from test_sections import Map, pt
 from test_survey import insert_area
 
 from miles import db, elevation, streams, terrain_mcp
+from miles.activity_stretch import _absorb_blips
 
 HILL_START_M, HILL_END_M, HILL_RISE_M = 200.0, 260.0, 12.0
 
@@ -77,6 +78,17 @@ def test_the_whole_run_lists_its_ways_in_order_with_ranges_and_a_capped_profile(
     assert whole["area"] == "test" and len(whole["points"]) <= 40
     assert [w["name"] for w in part["ways"]] == ["ridge_road"]
     assert part["ways"][0]["start_m"] == 100 and part["ways"][0]["end_m"] == 200
+
+
+def test_a_short_entry_between_runs_of_the_same_way_is_absorbed_but_not_between_different_ways():
+    def entry(way: str, start: float, end: float) -> dict:
+        return {"start_m": start, "end_m": end, "way_id": way}
+
+    blips = [entry("a", 2220, 2235), entry("b", 2235, 2245), entry("a", 2245, 2360), entry("c", 2360, 2365), entry("a", 2365, 2375)]
+    assert [(w["way_id"], w["start_m"], w["end_m"]) for w in _absorb_blips(blips)] == [("a", 2220, 2375)]
+
+    crossing = [entry("a", 0, 100), entry("b", 100, 105), entry("c", 105, 200.04)]
+    assert [(w["way_id"], w["end_m"]) for w in _absorb_blips(crossing)] == [("a", 100), ("b", 105), ("c", 200.0)]
 
 
 def test_without_an_imported_area_the_ways_are_empty_and_unfilled_map_elevation_is_null(conn, server, monkeypatch):

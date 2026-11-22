@@ -16,6 +16,9 @@ from .tiles import bbox_for_center_radius
 STEP_M = 5.0
 SMOOTHING_SAMPLES = 5
 MAX_POINTS = 40
+# A way entry shorter than this between two entries of the same way is a
+# junction or a parallel way the track passed, not a change of way.
+BLIP_M = 15.0
 
 
 def _covering_area(conn: sqlite3.Connection, lat: float, lng: float) -> sqlite3.Row | None:
@@ -54,7 +57,21 @@ def _ways(conn: sqlite3.Connection, area_id: int, dist: np.ndarray, lat: np.ndar
                 "start_m": float(dist[i]), "end_m": end_m, "way_id": edge["way_id"], "name": edge["way_name"],
                 "highway": edge["highway"], "surface": edge["surface_class"],
             })
-    return ways
+    return _absorb_blips(ways)
+
+
+def _absorb_blips(ways: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Join the entries either side of a BLIP_M blip into one; round the distances."""
+    merged: list[dict[str, object]] = []
+    for i, way in enumerate(ways):
+        short = float(way["end_m"]) - float(way["start_m"]) < BLIP_M  # type: ignore[arg-type]
+        if 0 < i < len(ways) - 1 and short and ways[i - 1]["way_id"] == ways[i + 1]["way_id"]:
+            continue
+        if merged and merged[-1]["way_id"] == way["way_id"]:
+            merged[-1]["end_m"] = way["end_m"]
+        else:
+            merged.append(dict(way))
+    return [{**w, "start_m": round(float(w["start_m"]), 1), "end_m": round(float(w["end_m"]), 1)} for w in merged]  # type: ignore[arg-type]
 
 
 def _profile(ele: list[float | None], dist: np.ndarray, source: str) -> dict[str, object] | None:
@@ -68,7 +85,7 @@ def _profile(ele: list[float | None], dist: np.ndarray, source: str) -> dict[str
         "start_ele_m": round(float(smooth[0]), 1),
         "end_ele_m": round(float(smooth[-1]), 1),
         "gain_m": round(float(rises[rises > 0].sum()), 1),
-        "loss_m": round(float(-rises[rises < 0].sum()), 1),
+        "loss_m": round(float(abs(rises[rises < 0].sum())), 1),
         "avg_grade_pct": round(float(smooth[-1] - smooth[0]) / length * 100.0, 1) if length > 0 else None,
     }
 

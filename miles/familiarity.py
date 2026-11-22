@@ -92,6 +92,21 @@ def _track_fixes(activity_id: int) -> list[tuple[float, float]]:
     return fixes
 
 
+def edge_index(conn: sqlite3.Connection, edge_ids: list[int]) -> tuple[routes_spatial.NearestIndex, dict[int, tuple[float, int]]]:
+    """A NearestIndex over the edges' sample points (keyed by edge id, offset
+    = point position), and per edge its (length_m, sample point count)."""
+    index = routes_spatial.NearestIndex(cell_size_m=40.0)
+    edge_info: dict[int, tuple[float, int]] = {}
+    for start in range(0, len(edge_ids), 500):
+        chunk = edge_ids[start:start + 500]
+        marks = ",".join("?" for _ in chunk)
+        for row in conn.execute(f"SELECT edge_id, length_m, points_blob FROM net_edges WHERE edge_id IN ({marks})", chunk):
+            points = network.unpack_edge_points(bytes(row["points_blob"]))
+            edge_info[row["edge_id"]] = (row["length_m"], len(points))
+            index.add(row["edge_id"], ((lat, lng, float(k)) for k, (lat, lng, _d, _e) in enumerate(points)))
+    return index, edge_info
+
+
 def update(conn: sqlite3.Connection, area_id: int, max_activities: int | None = None) -> FamiliarityStatus:
     """Match not-yet-matched activities (newest first, at most max_activities)
     against the area's sections and record how far each ran along each."""
@@ -108,16 +123,7 @@ def update(conn: sqlite3.Connection, area_id: int, max_activities: int | None = 
     for s in all_sections:
         for edge_id in s.edge_ids:
             section_of_edge[edge_id].append(s.section_id)
-    index = routes_spatial.NearestIndex(cell_size_m=40.0)
-    edge_info: dict[int, tuple[float, int]] = {}  # length_m, sample point count
-    wanted = sorted(section_of_edge)
-    for start in range(0, len(wanted), 500):
-        chunk = wanted[start:start + 500]
-        marks = ",".join("?" for _ in chunk)
-        for row in conn.execute(f"SELECT edge_id, length_m, points_blob FROM net_edges WHERE edge_id IN ({marks})", chunk):
-            points = network.unpack_edge_points(bytes(row["points_blob"]))
-            edge_info[row["edge_id"]] = (row["length_m"], len(points))
-            index.add(row["edge_id"], ((lat, lng, float(k)) for k, (lat, lng, _d, _e) in enumerate(points)))
+    index, edge_info = edge_index(conn, sorted(section_of_edge))
 
     for activity in pending:
         activity_id = activity["activity_id"]

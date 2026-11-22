@@ -7,7 +7,7 @@ from typing import ParamSpec
 
 from mcp.server.fastmcp import FastMCP
 
-from . import db, terrain
+from . import activity_stretch, db, terrain
 from . import routes as routes_service
 from .errors import reporting
 
@@ -78,6 +78,25 @@ def register_terrain_tools(mcp: FastMCP) -> None:
         """
         with db.connection(terrain.connect) as conn:
             return json.dumps(terrain.analyze_activity_terrain(conn, activity_id))
+
+    @mcp.tool()
+    @reporting(terrain.TerrainDataError)
+    def get_activity_stretch(activity_id: int, start_m: float | None = None, end_m: float | None = None) -> str:
+        """
+        Where a stretch of one recorded run was: start/end coordinates, a
+        capped list of points along it, elevation start/end/gain/loss/average
+        grade from the recorded altitude stream and from cached map elevation
+        (each labelled with its source; null where not available), and the
+        named ways under it in running order with the distance range each
+        covers, highway class and surface. Ways come from an imported area
+        covering the run; otherwise ways is empty and area is null. Stretch
+        grades are lightly smoothed, so short steep hills keep their grade.
+        start_m/end_m are metres along the run (default: the whole run);
+        convert to miles and feet when quoting. Needs the run's streams with
+        GPS; errors for a missing or GPS-less (treadmill) run.
+        """
+        with db.connection(terrain.connect) as conn:
+            return json.dumps(activity_stretch.activity_stretch(conn, activity_id, start_m, end_m))
 
     @mcp.tool()
     @_reporting_rebuild

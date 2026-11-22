@@ -252,6 +252,8 @@ don't volunteer weaknesses. Quote the percentile and the expected-vs-actual pace
 low model confidence when present. If it errors because streams are missing, say the
 run hasn't been processed yet.
 
+"Where was that stretch?" is `get_activity_stretch(activity_id, start_m, end_m)` (metres along the run, whole run by default): coordinates, grade and gain from recorded altitude and from map elevation, and the named ways under it.
+
 ## Public services and their usage policies
 
 A search reaches shared public services through the miles server: Nominatim (turning

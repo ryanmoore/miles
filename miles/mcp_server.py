@@ -1193,11 +1193,13 @@ def get_workout_session(activity_id: int) -> str:
     Use this to inspect within-session structure — whether reps held even, drifted,
     or fell apart — rather than relying solely on session averages.
     activity_id comes from get_build_snapshot, compare_workouts_by_build, or get_activities.
+    An empty laps with laps_fetched false means no sync has fetched them yet, not that none were recorded.
     """
     conn = _conn()
 
     activity = conn.execute("""
         SELECT activity_id, name, DATE(start_date) AS date, workout_label, dominant_intensity,
+               laps_synced_at IS NOT NULL AS laps_fetched,
                ROUND(distance_m / 1609.34, 2) AS total_miles,
                moving_time_s AS total_time_s, strava_url
         FROM activities WHERE activity_id = ?
@@ -1225,6 +1227,7 @@ def get_workout_session(activity_id: int) -> str:
     keep = ("lap_index", "distance_miles", "duration_s", "pace_min_mi", "avg_hr", "max_hr", "intensity")
     return json.dumps(_fmt_paces({
         **dict(activity),
+        "laps_fetched": bool(activity["laps_fetched"]),
         "laps": [
             {"lap_num": i + 1, "lap_type": r["lap_type"], **{k: r[k] for k in keep}}
             for i, r in enumerate(laps)
@@ -2818,7 +2821,7 @@ def run_sql(query: str) -> str:
       sessions regardless of naming" is
       WHERE dominant_intensity = 'threshold')
 
-    Table: laps  (one row per lap; only workouts and races are synced)
+    Table: laps  (one row per lap; synced for workouts, races and recent runs)
       lap_id, activity_id, lap_index, distance_m, moving_time_s, average_speed_mps,
       average_heartrate, max_heartrate, average_cadence, total_elevation_gain_m, pace_zone,
       lap_type (derived, rebuilt each sync — warmup/work/recovery/float/cooldown/steady;

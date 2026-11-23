@@ -219,6 +219,12 @@ def _old_run(conn: sqlite3.Connection, activity_id: int = 99, start: str = "2020
     insert_activity(conn, activity_id, start_date=start)
 
 
+@pytest.fixture
+def no_recent_run_laps(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sync, "RECENT_RUN_LAP_COUNT", 0)
+
+
+@pytest.mark.usefixtures("no_recent_run_laps")
 def test_passes_run_in_order_and_report_their_own_phase(conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, phases: list[str]):
     _Strava(monkeypatch, [_row(1, workout_type=3), _row(2)])
     _old_run(conn)  # an older run with no laps yet, for the history pass
@@ -245,6 +251,7 @@ def test_detail_laps_stop_at_the_reserve_and_the_rest_wait_for_the_next_sync(con
     assert conn.execute("SELECT COUNT(*) FROM activities WHERE laps_synced_at IS NULL").fetchone()[0] == 3
 
 
+@pytest.mark.usefixtures("no_recent_run_laps")
 def test_history_pass_stops_at_the_reserve_and_runs_newest_first_after_long_runs(conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch):
     strava = _Strava(monkeypatch, [])
     for activity_id, start, workout_type in [(1, "2026-01-01", 0), (2, "2026-01-03", 0), (3, "2025-06-01", 2)]:
@@ -256,6 +263,18 @@ def test_history_pass_stops_at_the_reserve_and_runs_newest_first_after_long_runs
     assert strava.lap_calls == [3, 2, 1]
 
 
+def test_detail_laps_cover_the_newest_runs_of_any_type_without_the_history_pass(conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch):
+    count = sync.RECENT_RUN_LAP_COUNT + 2
+    strava = _Strava(monkeypatch, [_row(i, f"2026-01-{i:02d}T08:00:00", workout_type=2) for i in range(1, count + 1)])
+
+    sync.run_sync(conn, full=False, history=False, reserve=12)
+
+    assert sorted(strava.lap_calls) == list(range(3, count + 1))
+    stamped = {r[0] for r in conn.execute("SELECT activity_id FROM activities WHERE laps_synced_at IS NOT NULL")}
+    assert stamped == set(range(3, count + 1))
+
+
+@pytest.mark.usefixtures("no_recent_run_laps")
 def test_the_history_pass_is_skipped_when_off(conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch):
     strava = _Strava(monkeypatch, [])
     insert_activity(conn, 1, start_date="2026-01-01T08:00:00")

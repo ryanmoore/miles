@@ -19,3 +19,4 @@ def test_a_session_lists_short_reps_and_short_jogs(monkeypatch):
     monkeypatch.setattr(mcp_server, "_conn", lambda: conn)
     session = json.loads(mcp_server.get_workout_session(1))
     assert [lap["duration_s"] for lap in session["laps"]] == [90, 60, 30]
+    assert session["laps_fetched"] is False

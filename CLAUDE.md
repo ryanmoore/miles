@@ -88,7 +88,7 @@ Range: `>= build_start AND <= race_date` (includes race day in week 0).
 
 ## Workout laps & classification
 
-`miles-sync` lazily fetches laps for all activities with effective type `workout` or `race` and stores them in the `laps` table. Each subsequent sync picks up any new ones automatically.
+`miles-sync` fetches laps into the `laps` table for every activity with effective type `workout` or `race`, plus the newest runs of any type (`RECENT_RUN_LAP_COUNT`); the history pass trickles in the rest (`laps_synced_at` NULL = not fetched yet).
 
 `miles/classifier.py` assigns a `workout_label` to each workout activity based on name keywords (e.g. "LT", "MP Flux", "Tempo"). Many activities remain unlabeled — either generic Strava auto-names ("Afternoon Run", "Evening Run") or one-off names. This is expected; query by `name LIKE` or `run_sql` for those. Labeled workouts support the `get_workout_laps` MCP tool for cross-build comparisons.
 

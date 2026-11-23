@@ -61,7 +61,7 @@ first sync of a long history:
 - Re-run the same command any time afterwards for an incremental sync (only new activities).
   Use `--full` to ignore the last sync date and re-fetch everything.
 - Every sync runs in passes. Pass 1 lists new activities and always runs. Pass 2 fetches laps
-  for new workouts and races and streams (for the terrain model) for new runs. Pass 3 fetches
+  for new workouts, races and the newest runs and streams (for the terrain model) for new runs. Pass 3 fetches
   weather (Open-Meteo, not counted against Strava; paced under its published limits, and a failed request ends the pass until the next sync). Pass 4 trickles in history: laps for older
   runs, then streams and terrain segments, most valuable first, up to `--history-limit`
   (default 900) of each per sync. A year of history takes a few syncs. Passes 2 and 4 track

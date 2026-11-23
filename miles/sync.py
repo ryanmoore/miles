@@ -23,6 +23,8 @@ _logger = logging.getLogger(__name__)
 
 HISTORY_ENV = "MILES_SYNC_HISTORY"
 DEFAULT_HISTORY_LIMIT = 900
+# Newest runs of any type whose laps pass 2 fetches, besides workouts and races.
+RECENT_RUN_LAP_COUNT = 10
 # An incremental sync lists activities this far before the newest stored one.
 INCREMENTAL_LOOKBACK = timedelta(days=30)
 
@@ -232,7 +234,8 @@ def _derive(conn: sqlite3.Connection, progress: SyncProgress) -> None:
 
 
 def _pass_details(conn: sqlite3.Connection, new_run_ids: Collection[int], gate: strava_budget.Gate, progress: SyncProgress) -> None:
-    """Pass 2: laps for workouts and races that have none yet, then streams
+    """Pass 2: laps for the workouts and races, and the newest runs of any
+    type, that have none yet, then streams
     and terrain segments for the runs pass 1 found. Both stop at the Strava
     reserve; what is left is picked up by the next sync (laps) or the history
     pass (streams)."""
@@ -245,14 +248,19 @@ def _pass_details(conn: sqlite3.Connection, new_run_ids: Collection[int], gate: 
     conn.commit()
 
     effective_run_type = db.effective_run_type_sql()
+    sport_clause, sport_params = run_sport_filter()
     unsynced = conn.execute(f"""
-        SELECT activity_id, name FROM activities
-        WHERE {effective_run_type} IN ('workout', 'race')
-          AND laps_synced_at IS NULL
+        SELECT activity_id FROM activities
+        WHERE laps_synced_at IS NULL
+          AND ({effective_run_type} IN ('workout', 'race')
+               OR activity_id IN (
+                   SELECT activity_id FROM activities
+                   WHERE {sport_clause} AND laps_synced_at IS NULL
+                   ORDER BY start_date DESC LIMIT {RECENT_RUN_LAP_COUNT}))
         ORDER BY start_date
-    """).fetchall()
+    """, sport_params).fetchall()
     if unsynced:
-        _logger.info("Fetching laps for %s workout(s)...", len(unsynced))
+        _logger.info("Fetching laps for %s run(s)...", len(unsynced))
         _fetch_laps(
             conn,
             [a["activity_id"] for a in unsynced],
@@ -428,7 +436,8 @@ def _run(
     activities fetched.
 
       1. activities: list and store what is new (always runs, never gated)
-      2. details: laps for new workouts, streams and terrain for new runs
+      2. details: laps for workouts, races and the newest runs, streams and
+         terrain for new runs
       3. weather: Open-Meteo for activities without it
       4. history: remaining laps, streams and terrain (skipped when
          history=False)

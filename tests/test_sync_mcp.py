@@ -1,4 +1,5 @@
 import json
+import threading
 
 import pytest
 from helpers import call_tool
@@ -42,3 +43,18 @@ def test_a_run_in_progress_is_joined_and_reported_when_the_wait_expires(server: 
 
     assert result["started"] is False
     assert (result["status"], result["phase"], result["until"]) == ("running", "waiting", "14:15")
+
+
+def test_returns_once_the_record_is_current_while_weather_is_still_running(
+    server: FastMCP, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = threading.Event()
+    monkeypatch.setattr(sync, "_pass_activities", lambda conn, full, progress, gate: (2, set()))
+    monkeypatch.setattr(sync, "_pass_details", lambda *a: None)
+    monkeypatch.setattr(sync, "_pass_weather", lambda conn, progress: release.wait(timeout=10))
+
+    try:
+        result = call_tool(server, "sync_activities", {"wait_s": 5})
+        assert (result["status"], result["record_current"]) == ("running", True)
+    finally:
+        release.set()

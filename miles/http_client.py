@@ -106,8 +106,9 @@ NOMINATIM = ServicePolicy(
 # must be given up on in seconds: one retry, short timeout.
 OSRM = ServicePolicy("osrm", min_interval_s=1.1, max_attempts=2, backoff_base_s=1.0, timeout_s=3.0)
 TERRARIUM = ServicePolicy("terrarium", min_interval_s=0.1, max_attempts=4, backoff_base_s=1.0, timeout_s=60.0)
+# Responses are small and fast; a stalled TLS handshake is better retried than waited out.
 OPEN_METEO = ServicePolicy(
-    "open-meteo", min_interval_s=1.0, max_attempts=3, backoff_base_s=2.0, min_pause_s={429: 60.0}, timeout_s=60.0
+    "open-meteo", min_interval_s=1.0, max_attempts=3, backoff_base_s=2.0, min_pause_s={429: 60.0}, timeout_s=10.0
 )
 # Two attempts: a dropped connection restarts the whole (large) download.
 GEOFABRIK = ServicePolicy("geofabrik", exclusive=True, max_attempts=2, backoff_base_s=5.0, timeout_s=300.0)

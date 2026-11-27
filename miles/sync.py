@@ -48,12 +48,14 @@ class SyncStatus(TypedDict):
     finished_at: str | None
     error: str | None
     new_activities: int | None
+    record_current: bool  # activities, laps and derived values are in place; weather and later passes may still run
 
 
 def _idle_status() -> SyncStatus:
     return {
         "status": "idle", "phase": None, "done": None, "total": None, "until": None,
         "started_at": None, "finished_at": None, "error": None, "new_activities": None,
+        "record_current": False,
     }
 
 
@@ -87,6 +89,10 @@ class SyncProgress:
             self._start_locked()
             return True
 
+    def mark_current(self) -> None:
+        with self._lock:
+            self._update_locked(record_current=True)
+
     def phase(
         self, name: str, *, done: int | None = None, total: int | None = None, until: str | None = None
     ) -> None:
@@ -96,7 +102,7 @@ class SyncProgress:
     def finish(self, new_activities: int) -> None:
         with self._lock:
             self._update_locked(
-                status="done", phase="done", new_activities=new_activities,
+                status="done", phase="done", new_activities=new_activities, record_current=True,
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
 
@@ -465,12 +471,14 @@ def _run(
         _logger.info("Plan %s auto-completed (matching race synced).", completed_plan_id)
 
     _pass_details(conn, new_run_ids, gate, progress)
+    # Weather feeds nothing derived, so the record is readable after this.
+    _derive(conn, progress)
+    progress.mark_current()
+
     _pass_weather(conn, progress)
     if history:
         _pass_history(conn, history_limit, gate, progress)
-
-    # Recompute all derived values (inferred run types, lap types, ...) from raw synced rows.
-    _derive(conn, progress)
+        _derive(conn, progress)
 
     # Stamp the moment this sync finished so readers (adherence, plan tools)
     # can tell how fresh the synced data is without guessing from activities.

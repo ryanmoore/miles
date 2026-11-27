@@ -205,7 +205,8 @@ date, or the cut time of tiles uploaded from a local file) and `refresh_suggeste
   (roughly one unit per 14 days times one per 10 variables, treated here as
   an approximation). Data is CC BY 4.0 and needs the attribution "Weather data
   by Open-Meteo.com" linking <https://open-meteo.com/>.
-- **miles enforces:** 1 s between requests and up to three attempts. Runs at
+- **miles enforces:** 1 s between requests, a 10 s timeout and up to three
+  attempts. Runs at
   one ~11 km location are split into request windows that never span more
   than 14 days, so every request weighs one call, and one request covers the
   runs of a fortnight rather than a decade. The first failed request (a 429, any

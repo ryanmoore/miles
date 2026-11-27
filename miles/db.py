@@ -956,6 +956,18 @@ def _same_start(old: str | None, new: str | None) -> bool:
         return False
 
 
+def _mark_activities_dirty(conn: sqlite3.Connection, activity_ids: set[int]) -> None:
+    """Marks derived values dirty from the earliest start date among these activities."""
+    if activity_ids:
+        placeholders = ",".join("?" for _ in activity_ids)
+        row = conn.execute(
+            f"SELECT MIN(DATE(start_date)) AS d FROM activities WHERE activity_id IN ({placeholders})",
+            sorted(activity_ids),
+        ).fetchone()
+        if row is not None and row["d"] is not None:
+            mark_derive_dirty(conn, row["d"])
+
+
 def upsert_weather(conn: sqlite3.Connection, rows: list[WeatherRow]) -> None:
     conn.executemany("""
         INSERT OR REPLACE INTO weather (
@@ -970,6 +982,8 @@ def upsert_weather(conn: sqlite3.Connection, rows: list[WeatherRow]) -> None:
             :hourly_json, :raw_json
         )
     """, rows)
+    # Lap intensity is judged on heat-adjusted pace, so weather feeds derive.
+    _mark_activities_dirty(conn, {row["activity_id"] for row in rows})
     conn.commit()
 
 
@@ -987,15 +1001,7 @@ def upsert_laps(conn: sqlite3.Connection, laps: list[LapRow]) -> None:
             :total_elevation_gain_m, :pace_zone, :raw_json
         )
     """, laps)
-    activity_ids = sorted({lap["activity_id"] for lap in laps})
-    if activity_ids:
-        placeholders = ",".join("?" for _ in activity_ids)
-        row = conn.execute(
-            f"SELECT MIN(DATE(start_date)) AS d FROM activities WHERE activity_id IN ({placeholders})",
-            activity_ids,
-        ).fetchone()
-        if row is not None and row["d"] is not None:
-            mark_derive_dirty(conn, row["d"])
+    _mark_activities_dirty(conn, {lap["activity_id"] for lap in laps})
     conn.commit()
 
 

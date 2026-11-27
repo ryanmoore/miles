@@ -498,3 +498,21 @@ def test_the_cli_prints_the_runs_log_messages(monkeypatch: pytest.MonkeyPatch):
     assert result.exit_code == 0, result.output
     assert "Done. 1 new/updated." in result.output
     assert "Sync complete. 1 new/updated activities." in result.output
+
+
+def test_weather_arriving_after_the_early_derive_is_derived_before_the_run_ends(conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
+    _Strava(monkeypatch, [_row(1)])
+    weather_row = dict.fromkeys(
+        ("temp_c_start", "temp_c_end", "temp_c_max", "apparent_temp_c_max", "humidity_avg", "precip_mm", "wind_kph_avg", "hourly_json", "raw_json")
+    ) | {"activity_id": 1, "fetched_at": "2026-01-05T09:00:00", "temp_c_avg": 30.0}
+
+    def weather_pass(c: sqlite3.Connection, progress: sync.SyncProgress) -> None:
+        assert _dirty_since(c) is None  # the early derive already ran
+        db.upsert_weather(c, [weather_row])  # type: ignore[list-item]
+        assert _dirty_since(c) == "2026-01-05"
+
+    monkeypatch.setattr(sync, "_pass_weather", weather_pass)
+
+    sync.run_sync(conn, full=False, history=False, progress=sync.SyncProgress())
+
+    assert _dirty_since(conn) is None

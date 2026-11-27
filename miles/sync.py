@@ -471,14 +471,15 @@ def _run(
         _logger.info("Plan %s auto-completed (matching race synced).", completed_plan_id)
 
     _pass_details(conn, new_run_ids, gate, progress)
-    # Weather feeds nothing derived, so the record is readable after this.
+    # Readable from here; weather (heat-adjusted lap intensity) and history
+    # mark their rows dirty again and the final derive picks them up.
     _derive(conn, progress)
     progress.mark_current()
 
     _pass_weather(conn, progress)
     if history:
         _pass_history(conn, history_limit, gate, progress)
-        _derive(conn, progress)
+    _derive(conn, progress)
 
     # Stamp the moment this sync finished so readers (adherence, plan tools)
     # can tell how fresh the synced data is without guessing from activities.

@@ -14,7 +14,7 @@ from typing import Any, NamedTuple, cast
 
 from typing_extensions import TypedDict
 
-from . import elements, notes, plan
+from . import elements, notes, plan, supplementary
 from .db import PlanGoalRow
 from .fitness import MILE_M
 from .periods import monday_of
@@ -41,6 +41,7 @@ class _Week:
     miles: float = 0.0
     runs: list[_Run] = field(default_factory=list)
     other: list[tuple[str, str]] = field(default_factory=list)  # (date, sport_type) of non-run activities
+    sessions: list[supplementary.Session] = field(default_factory=list)  # by effective date
 
 
 def _names(value: object, allowed: Collection[str] | None = None) -> list[str]:
@@ -86,6 +87,23 @@ def _activity_days(week: _Week, params: Mapping[str, Any]) -> float:
     return len({d for d, sport in week.other if sport in params["sport_types"]})
 
 
+def _kind(value: object) -> str:
+    if not isinstance(value, str) or not plan.KIND_PATTERN.fullmatch(value.strip().lower()):
+        raise PlanValidationError("expected a session kind such as 'strength'")
+    return value.strip().lower()
+
+
+def _flag(value: object) -> bool:
+    if not isinstance(value, bool):
+        raise PlanValidationError("expected true or false")
+    return value
+
+
+def _supplementary_sessions(week: _Week, params: Mapping[str, Any]) -> float:
+    counted = {"done", "partial"} if params["partial"] else {"done"}
+    return sum(s["kind"] == params["kind"] and s["state"] in counted for s in week.sessions)
+
+
 # Each type: (week -> number, {param name: normalizer}). A new type is one function and one entry.
 GOAL_TYPES: dict[str, tuple[Callable[[_Week, Mapping[str, object]], float], dict[str, Callable[[object], object]]]] = {
     "weekly_miles": (_weekly_miles, {}),
@@ -93,6 +111,7 @@ GOAL_TYPES: dict[str, tuple[Callable[[_Week, Mapping[str, object]], float], dict
     "tagged_runs": (_tagged_runs, {"tag": _slug}),
     "run_kind": (_run_kind, {"kinds": _slugs}),
     "activity_days": (_activity_days, {"sport_types": _names}),
+    "supplementary_sessions": (_supplementary_sessions, {"kind": _kind, "partial": _flag}),
 }
 
 
@@ -239,9 +258,13 @@ class GoalResults(TypedDict):
     goals: list[GoalResult]
 
 
-def _load_weeks(conn: sqlite3.Connection, goals: Sequence[PlanGoalRow], mondays: Sequence[str]) -> dict[str, _Week]:
+def _load_weeks(
+    conn: sqlite3.Connection, goals: Sequence[PlanGoalRow], mondays: Sequence[str],
+    sessions: Sequence[supplementary.Session],
+) -> dict[str, _Week]:
     """What each scored week's goals read: run miles, notes and (when a goal
-    needs them) stream detections, and the non-run activities."""
+    needs them) stream detections, the non-run activities, and the
+    supplementary sessions that fall in the week once moves are applied."""
     weeks = {m: _Week() for m in mondays}
     if not weeks:
         return weeks
@@ -277,6 +300,10 @@ def _load_weeks(conn: sqlite3.Connection, goals: Sequence[PlanGoalRow], mondays:
             week = weeks.get(monday_of(date.fromisoformat(r["date"])).isoformat())
             if week is not None:
                 week.other.append((r["date"], r["sport_type"]))
+    for session in sessions:
+        week = weeks.get(monday_of(date.fromisoformat(session["effective_date"])).isoformat())
+        if week is not None:
+            week.sessions.append(session)
     for week in weeks.values():
         week.miles = round(week.miles, 2)
     return weeks
@@ -343,7 +370,12 @@ def plan_goal_results(conn: sqlite3.Connection, plan_id: int) -> GoalResults:
     scored = [w for w in plan_weeks if date.fromisoformat(w) + timedelta(days=6) < cutoff]
     governing = {w: plan.current_version_for_week(conn, plan_id, date.fromisoformat(w)) for w in scored}
     by_week = {w: {g["key"]: g for g in b["goals"] if g["horizon"] == "weekly"} for w, b in governing.items() if b}
-    data = _load_weeks(conn, [*latest["goals"], *(g for gs in by_week.values() for g in gs.values())], scored)
+    all_goals = [*latest["goals"], *(g for gs in by_week.values() for g in gs.values())]
+    sessions = (
+        supplementary.sessions(conn, plan_id, latest["days"])
+        if any(g["type"] == "supplementary_sessions" for g in all_goals) else []
+    )
+    data = _load_weeks(conn, all_goals, scored, sessions)
     return {"goals": [
         _weekly_result(g, plan_weeks, {w: gs.get(g["key"]) for w, gs in by_week.items()}, data)
         if g["horizon"] == "weekly" else _cycle_result(g, plan_weeks, data)

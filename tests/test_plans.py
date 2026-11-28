@@ -396,7 +396,7 @@ def _plan_with_days(conn, title: str, first: int, last: int, *, commit: bool = T
     plan.upsert_draft_days(conn, version_id, [
         d for w in range(first, last + 1) for d in (
             {"date": (THIS_MONDAY + timedelta(weeks=w)).isoformat(), "slot": "easy", "target_miles": 30.0 + w},
-            {"date": (THIS_MONDAY + timedelta(weeks=w, days=2)).isoformat(), "slot": "strength", "title": "Lift"},
+            {"date": (THIS_MONDAY + timedelta(weeks=w, days=2)).isoformat(), "slot": "supplementary", "title": "Lift", "target": {"kind": "strength"}},
         )
     ])
     if commit:
@@ -460,16 +460,16 @@ def test_compare_summaries_cover_the_shared_weeks_and_strength_only_days_are_lis
 
     long_plan = _plan_with_days(conn, "Ten weeks", 0, 9)
     short = _plan_with_days(conn, "Nine weeks", 20, 28, commit=False)
-    conn.execute("DELETE FROM plan_days WHERE version_id IN (SELECT version_id FROM plan_versions WHERE plan_id = ?) AND slot = 'strength'", [short])
+    conn.execute("DELETE FROM plan_days WHERE version_id IN (SELECT version_id FROM plan_versions WHERE plan_id = ?) AND slot = 'supplementary'", [short])
 
     # Paired by position the shorter plan sets the count, so the totals compare like with like.
     by_position = tool("compare_plans", sides=[{"plan_id": long_plan}, {"plan_id": short, "draft": True}])
     assert by_position["shared_weeks_note"] == "Figures cover the 9 weeks all plans share"
     assert [(s["weeks"], s["total_miles"]) for s in by_position["sides"]] == [(10, 306.0), (9, 486.0)]
     assert len(by_position["weeks"]) == 10
-    # The strength session on the baseline's Wednesday is listed and reads as strength.
+    # The strength session on the baseline's Wednesday is listed and reads as supplementary.
     wednesday = [d for d in by_position["weeks"][0]["sides"][1]["day_differences"] if d["day"] == "Wed"]
-    assert wednesday == [{"day": "Wed", "baseline": "strength Lift", "side": "rest"}]
+    assert wednesday == [{"day": "Wed", "baseline": "supplementary Lift", "side": "rest"}]
 
     # Paired by date the shared range is named, and equal coverage shows no note.
     by_date = tool("compare_plans", sides=[{"plan_id": long_plan}, {"plan_id": long_plan, "from_week": mon(1), "to_week": mon(9)}])

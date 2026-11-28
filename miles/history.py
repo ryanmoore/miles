@@ -330,7 +330,7 @@ def _plan_days(conn: sqlite3.Connection, this_monday: date) -> list[dict[str, An
 
 def _adjustments(conn: sqlite3.Connection, start: str, end: str) -> dict[str, list[str]]:
     out: dict[str, list[str]] = defaultdict(list)
-    for r in conn.execute("SELECT date, action, reason FROM plan_log WHERE date BETWEEN ? AND ? ORDER BY date", [start, end]):
+    for r in conn.execute("SELECT date, action, reason FROM plan_log WHERE seq IS NULL AND date BETWEEN ? AND ? ORDER BY date", [start, end]):
         out[monday_of(date.fromisoformat(r["date"])).isoformat()].append(
             f"{r['date'][5:]} {r['action']}" + (f": {r['reason']}" if r["reason"] else "")
         )

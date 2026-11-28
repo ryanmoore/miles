@@ -156,6 +156,8 @@ class PlanLogRow(TypedDict):
     action: str
     reason: str | None
     created_at: str
+    seq: int | None  # set on a structured supplementary-session event (see supplementary.py)
+    detail: str | None  # JSON payload of that event
 
 
 class PlanAdherenceRow(TypedDict):
@@ -253,7 +255,10 @@ def connection(opener: Callable[[], sqlite3.Connection] | None = None) -> Iterat
         conn.close()
 
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
+
+# Sport types a strength session is recorded as on Strava.
+STRENGTH_SPORT_TYPES: tuple[str, ...] = ("WeightTraining", "Workout")
 
 
 def add_missing_columns(conn: sqlite3.Connection, table: str, *columns: str) -> bool:
@@ -543,6 +548,12 @@ def init_db(conn: sqlite3.Connection) -> None:
         )
     """)
     add_missing_columns(conn, "plan_days", "terrain TEXT", "note TEXT", "target_minutes REAL", "rationale TEXT")
+    # The strength slot became the supplementary slot with kind "strength" (a
+    # schema change, so committed versions are rewritten too).
+    conn.execute(
+        "UPDATE plan_days SET slot = 'supplementary', "
+        "target_json = json_set(COALESCE(target_json, '{}'), '$.kind', 'strength') WHERE slot = 'strength'"
+    )
     # "Life happened" annotations — day-level reality that never touches the plan
     # or bumps a version. No FK to a version; scoped to the plan only.
     conn.execute("""
@@ -555,6 +566,9 @@ def init_db(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL
         )
     """)
+    # seq and detail make a row a structured event on one planned session
+    # (supplementary.py); annotations leave both NULL.
+    add_missing_columns(conn, "plan_log", "seq INTEGER", "detail TEXT")
     # Derived: rebuilt from scratch by derive_all, versioned by DERIVE_VERSION.
     # Created alongside the ground-truth tables so run_sql always sees it.
     conn.execute("""
@@ -765,7 +779,7 @@ def _fold_strength_days_into_goals(conn: sqlite3.Connection) -> None:
             "INSERT INTO plan_goals (version_id, key, horizon, type, params, target, why, overrides, flag) "
             "VALUES (?, 'strength', 'weekly', 'activity_days', ?, ?, ?, ?, 0)",
             [
-                version_id, json.dumps({"sport_types": ["WeightTraining", "Workout"]}), target,
+                version_id, json.dumps({"sport_types": list(STRENGTH_SPORT_TYPES)}), target,
                 "Strength days per week, carried over from the plan's per-week strength target.",
                 json.dumps({w: n for w, n in by_week.items() if n != target}),
             ],

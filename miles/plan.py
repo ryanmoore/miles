@@ -15,6 +15,7 @@ week/day/field, so the MCP layer can surface them to a planner agent verbatim.
 """
 
 import json
+import re
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal, NotRequired, Required, cast
@@ -35,13 +36,18 @@ from .races import classify_race_distance
 
 # Closed vocabularies — validation rejects anything outside them.
 PHASES: tuple[str, ...] = ("base", "sharpen", "peak", "taper", "race")
-SLOTS: tuple[str, ...] = ("easy", "workout", "long", "rest", "race", "strength")
+SLOTS: tuple[str, ...] = ("easy", "workout", "long", "rest", "race", "supplementary")
 LOG_ACTIONS: tuple[str, ...] = ("skipped", "moved", "modified", "note")
 # terrain composes with any run slot rather than being a slot itself (a trail
 # long run is still a long run); NULL in plan_days.terrain means road.
 TERRAIN_VALUES: tuple[str, ...] = ("road", "trail")
 # zone_name vocabulary is exactly the zones_from_predicted anchors, plus "easy"
 # (which freezes to the easy_range band rather than a zones_from_predicted key).
+# A supplementary session is any non-run practice (strength, mobility, drills);
+# kind is a short free-text label and items its checklist.
+KIND_PATTERN = re.compile(r"[a-z0-9][a-z0-9 _-]{0,23}")
+MAX_ITEMS = 30
+_ITEM_CAPS: dict[str, int] = {"name": 60, "amount": 30}
 ZONE_NAMES: tuple[str, ...] = ("easy", "marathon", "threshold", "interval", "repetition")
 
 # easy freezes to [MP + EASY_LO_OFFSET, MP + EASY_HI_OFFSET] — matches the
@@ -70,7 +76,7 @@ RACE_MATCH_WINDOW_DAYS = 1
 # A sketch is deleted this long after its last write unless committed.
 SKETCH_TTL = timedelta(days=14)
 
-# Run slots contribute mileage; rest/strength never do.
+# Run slots contribute mileage; rest/supplementary never do.
 MILEAGE_SLOTS: frozenset[str] = frozenset({"easy", "workout", "long", "race"})
 # Tolerance (miles) absorbing per-day rounding when checking a week's authored
 # mileage band against the sum of its days — a real drift is far larger.
@@ -108,6 +114,13 @@ _STEP_TEXT_CAPS: dict[str, int] = {
 _STEP_COUNTS: tuple[str, ...] = ("reps", "reps_lo", "reps_hi", "sets")
 
 
+class SessionItem(TypedDict):
+    """One line of a supplementary session's checklist; amount is free text
+    ("3x8", "20", "2 min")."""
+    name: Required[str]
+    amount: NotRequired[str]
+
+
 class DayTarget(TypedDict, total=False):
     """Contents of plan_days.target_json (JSON-encoded). All fields optional.
     reps/rep_distance_m sketch a workout's structure; pace_lo/pace_hi are
@@ -129,6 +142,8 @@ class DayTarget(TypedDict, total=False):
     zone_name: str
     hr_lo: float
     hr_hi: float
+    kind: str
+    items: list[SessionItem]
 
 
 class WeekInput(TypedDict):
@@ -580,6 +595,36 @@ def _validate_steps(day_label: str, steps: object) -> None:
             raise PlanValidationError(f"{label}: optional must be true or false")
 
 
+def _validate_supplementary(day_label: str, slot: str, target: DayTarget) -> None:
+    """kind (required, lowercased in place) and items belong to supplementary
+    sessions only; item names are unique because checks are stored by name."""
+    if slot != "supplementary":
+        if "kind" in target or "items" in target:
+            raise PlanValidationError(f"{day_label}: kind and items apply to supplementary sessions only")
+        return
+    kind = target.get("kind")
+    if not isinstance(kind, str) or not KIND_PATTERN.fullmatch(kind.strip().lower()):
+        raise PlanValidationError(
+            f"{day_label}: a supplementary session needs a target kind, a short label such as 'strength' or 'mobility'"
+        )
+    target["kind"] = kind.strip().lower()
+    items = target.get("items", [])
+    if not isinstance(items, list) or len(items) > MAX_ITEMS:
+        raise PlanValidationError(f"{day_label}: items must be a list of at most {MAX_ITEMS} entries")
+    names: set[str] = set()
+    for i, item in enumerate(cast(list[object], items), 1):
+        label = f"{day_label}: item {i}"
+        if not isinstance(item, dict) or not item.get("name") or set(item) - set(_ITEM_CAPS):
+            raise PlanValidationError(f"{label} must be an object with a name and an optional amount")
+        for key, cap in _ITEM_CAPS.items():
+            v = item.get(key)
+            if v is not None and (not isinstance(v, str) or len(v) > cap):
+                raise PlanValidationError(f"{label}: {key} must be a string of at most {cap} characters")
+        if item["name"] in names:
+            raise PlanValidationError(f"{label}: duplicate item name {item['name']!r}")
+        names.add(item["name"])
+
+
 def _validate_day_target(day: DayInput, target: DayTarget) -> DayTarget:
     """Pure field-level validation of one day's target — no conn, no
     resolution. Shared by _freeze_day_target (committed versions: also
@@ -617,6 +662,8 @@ def _validate_day_target(day: DayInput, target: DayTarget) -> DayTarget:
         raise PlanValidationError(f"{day_label}: target hr_hi must be non-negative")
     if hr_lo is not None and hr_hi is not None and hr_lo > hr_hi:
         raise PlanValidationError(f"{day_label}: target hr_lo must be <= hr_hi")
+
+    _validate_supplementary(day_label, day["slot"], validated)
 
     zone_name = validated.get("zone_name")
     if zone_name is not None and zone_name not in ZONE_NAMES:
@@ -1072,8 +1119,8 @@ def upsert_draft_days(conn: sqlite3.Connection, version_id: int, days: list[DayI
         except ValueError as e:
             raise PlanValidationError(f"day date {d['date']!r} is not a valid ISO date") from e
         _validate_day_fields(d)
-        target = d.get("target")
-        validated_target = _validate_day_target(d, target) if target else None
+        target = d.get("target") or ({} if d["slot"] == "supplementary" else None)
+        validated_target = _validate_day_target(d, target) if target is not None else None
         rows.append((
             version_id, d["date"], d.get("seq", 1), d["slot"], d.get("title"),
             d.get("target_miles"), json.dumps(validated_target) if validated_target else None,

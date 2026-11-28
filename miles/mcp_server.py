@@ -20,7 +20,7 @@ from .fitness import WINDOW_DAYS, estimate_fitness
 from .format import app_url, fmt_pace, fmt_time
 from .offload import threaded
 from .periods import GAP_WEEKS_TO_SPLIT, Period, WeekAgg, is_active, monday_of, sunday_of, detect_periods
-from . import plan_compare
+from . import plan_compare, supplementary
 from .plan_api import plan_summaries
 from .plan import (
     DayInput,
@@ -1839,8 +1839,8 @@ def compare_plans(sides: list[dict[str, object]]) -> str:
     `miles_is_target` true) plus, for every side after the
     first, day_differences: the weekdays whose session types, total miles (by
     more than max(1 mi, 15% of the larger day)) or (between two plans) titles
-    differ from the baseline's; a strength session on one side only is listed
-    (its slot reads "strength") though the page shades it faintest. Summaries
+    differ from the baseline's; a supplementary session on one side only is listed
+    (its slot reads "supplementary") though the page shades it faintest. Summaries
     cover only the weeks every plan side has (by position, the first N weeks
     of the shortest plan); a runs side is summarised over its own weeks within
     that set, and each side's `weeks` is still its full count. When that is
@@ -2122,7 +2122,7 @@ def set_draft_days(days: list[DayInput], plan_id: int | None = None) -> str:
     alongside set_draft_weeks. A day may be authored before its week row
     exists; get_draft's gap report will say so, this call won't reject it.
 
-    days: list of {date, slot (easy|workout|long|rest|race|strength), seq?
+    days: list of {date, slot (easy|workout|long|rest|race|supplementary), seq?
       (default 1; 2+ = doubles), title?, target_miles?, target_minutes?,
       terrain? (road|trail; default road — composes with any run slot rather
       than being one itself: a trail long run is still a long run, and its
@@ -2133,7 +2133,13 @@ def set_draft_days(days: list[DayInput], plan_id: int | None = None) -> str:
       {steps?, reps?, reps_lo?, reps_hi? (a rep range; reps stays the point form),
       rep_duration_s?, rep_distance_m?, pace_lo?, pace_hi?, zone_name?,
       hr_lo?, hr_hi? (bpm; hr_hi alone is a ceiling and renders as "keep HR
-      under X")}. steps (at most 12, display-only, never scored) lays the
+      under X"), kind?, items?}. A supplementary day (strength, mobility, any
+      non-run practice; never counts toward mileage) requires target.kind (a short
+      lowercase label, e.g. "strength") and takes target.items, its checklist:
+      [{name, amount? (free text: "3x8", "20", "2 min")}]; names are unique within
+      the session because the athlete's check-offs are stored by name. The athlete
+      ticks items off and moves or skips sessions on the Plan page; none of that
+      changes the plan (see get_supplementary_sessions). steps (at most 12, display-only, never scored) lays the
       workout out block by block: [{work (required: "3 min", "400 m"), reps? |
       reps_lo?+reps_hi? (absent = one steady segment), sets?, effort?, rest?
       ("60 s"), rest_mode? (walk|jog|float|stand), set_rest?, label?,
@@ -2198,6 +2204,9 @@ def set_draft_goals(goals: list[dict[str, object]], plan_id: int | None = None) 
       run_kind {kinds: [...]}: runs whose note `kind` is one of those.
       activity_days {sport_types: [...]}: distinct days with a non-run activity
         of those Strava sport types (strength: ["WeightTraining", "Workout"]).
+      supplementary_sessions {kind, partial}: supplementary sessions of that kind
+        done in the week, counted on the day they were done (after any move); with
+        partial true a session with some items ticked counts too.
     Weeks the sync has not fully covered have no value (absent, not zero).
 
     Returns the compact acknowledgement (see get_draft, which returns `goals`),
@@ -2618,6 +2627,75 @@ def log_plan_adjustment(
         return json.dumps({"error": describe_error(e, None)})
 
 
+def _plan_id_or_current(conn: sqlite3.Connection, plan_id: int | None) -> int:
+    if plan_id is not None:
+        return plan_id
+    p = current_plan(conn, date.today())
+    if p is None:
+        raise PlanValidationError("no current plan; pass plan_id")
+    return p["plan_id"]
+
+
+@mcp.tool()
+def get_supplementary_sessions(start: str, end: str, plan_id: int | None = None) -> str:
+    """
+    The plan's supplementary sessions (strength, mobility, any non-run practice)
+    whose planned or effective date falls in [start, end] (YYYY-MM-DD), each with
+    the athlete's progress: items with `checked`, `moved_to`, `skipped`,
+    `effective_date` (where the session now lives: moved_to, else its planned
+    date) and `state`: done (every item ticked, marked done, or for kind strength
+    a strength activity that day), partial, skipped, or open. plan_id defaults to
+    the current plan. Or {"error": ...}.
+    """
+    conn = _conn()
+    try:
+        pid = _plan_id_or_current(conn, plan_id)
+        rows = [
+            s for s in supplementary.plan_sessions(conn, pid)
+            if start <= s["date"] <= end or start <= s["effective_date"] <= end
+        ]
+        return json.dumps({"sessions": rows})
+    except PlanValidationError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        return json.dumps({"error": describe_error(e, None)})
+
+
+@mcp.tool()
+def update_supplementary_session(
+    session_date: str,
+    seq: int = 1,
+    check: list[str] | None = None,
+    uncheck: list[str] | None = None,
+    done: bool | None = None,
+    skip: bool | None = None,
+    move_to: str | None = None,
+    plan_id: int | None = None,
+) -> str:
+    """
+    Records what the athlete did with one planned supplementary session, by its
+    planned date (session_date, YYYY-MM-DD) and seq, without changing the plan or bumping a version (like the
+    Plan page's tick boxes). Any combination of:
+      check / uncheck: item names to tick or untick (names as in the session's items).
+      done: mark the whole session done or not (for a session with no items).
+      skip: skip or unskip it.
+      move_to: any date, past or future (YYYY-MM-DD); the planned date or "" puts
+        it back. The latest move wins.
+    Returns the session as get_supplementary_sessions reads it, or {"error": ...}.
+    """
+    conn = _conn()
+    try:
+        session = supplementary.record(
+            conn, _plan_id_or_current(conn, plan_id), session_date, seq,
+            check=check or (), uncheck=uncheck or (), done=done, skip=skip, move_to=move_to,
+        )
+        return json.dumps(session)
+    except PlanValidationError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        return json.dumps({"error": describe_error(e, None)})
+
+
 @mcp.tool()
 def abandon_plan(reason: str, plan_id: int | None = None) -> str:
     """
@@ -2910,7 +2988,7 @@ def run_sql(query: str) -> str:
       get_plan_goals: it computes the weekly values and progress.
 
     Table: plan_days  (PK: version_id, date, seq; seq 1 normally, 2+ = doubles)
-      version_id, date, seq, slot (easy|workout|long|rest|race|strength), title,
+      version_id, date, seq, slot (easy|workout|long|rest|race|supplementary), title,
       target_miles (nullable), target_json (nullable — JSON-encoded DayTarget:
       reps/reps_lo/reps_hi (a rep range; reps stays the point form),
       rep_duration_s (time-based reps), rep_distance_m, pace_lo/pace_hi
@@ -2927,7 +3005,10 @@ def run_sql(query: str) -> str:
       target_miles)
 
     Table: plan_log  (day-level reality; doesn't touch the plan or bump a version)
-      log_id, plan_id, date, action (skipped|moved|modified|note), reason, created_at
+      log_id, plan_id, date, action (skipped|moved|modified|note), reason, created_at,
+      seq and detail (JSON), set only on the structured events of a supplementary
+      session (action check|done|skip|move; date is the planned date; later events
+      override earlier ones; read them with get_supplementary_sessions)
 
     Table: plan_adherence  (DERIVED — rebuilt from scratch by derive_all and
       versioned by DERIVE_VERSION like fitness_checkpoints; one row per

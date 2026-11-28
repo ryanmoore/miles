@@ -105,7 +105,7 @@ was once said, wrongly, to an athlete who simply hadn't synced).
    Tuesday") and ask whether the plan should start today, backdate to where that block actually
    began, or begin on a future date — don't assume today.
 3. **Propose a week-level skeleton as a draft** — phases, target miles (a range, or deliberately
-   left open), workout count per week, long-run progression, any strength or trail days.
+   left open), workout count per week, long-run progression, any supplementary or trail days.
    `start_plan_draft` opens it; write the weeks and share the `url` the draft tools return. The
    chat reply carries the reasoning, citing the record on every major number, and points at the
    page for the weeks themselves; it does not repeat them as a table or a week-by-week
@@ -223,8 +223,15 @@ always lists it.
 
 ## New vocabulary
 
-- **Strength** (`slot: "strength"`) is never judged by adherence — prescribe freely. To track
-  strength days per week, use an `activity_days` goal over `["WeightTraining", "Workout"]`.
+- **Supplementary sessions** (`slot: "supplementary"`) are non-run practice: strength, mobility,
+  drills, anything. Each needs `target.kind` (a short lowercase label such as `strength`) and takes
+  `target.items`, its checklist of `{name, amount?}` ("Goblet squat" 3x8, "Hip 90/90" 2 min); item
+  names are unique within a session. They are never judged by adherence or counted in mileage.
+  The athlete ticks items, moves a missed session to another day, or skips it on the Plan page,
+  and that is a record beside the plan, not a revision: `get_supplementary_sessions` reads it,
+  `update_supplementary_session` writes it on their behalf (check, mark done, move, skip). To track
+  sessions per week use a `supplementary_sessions` goal (`kind`, `partial`), which counts a
+  session on the day it was done.
 - **Trail** (`terrain: "trail"`, composing with any run slot — a trail long run is still a
   `long`) takes the same targets as road, but its pace guidance is advisory only: adherence
   never scores trail pace (grade makes a road band meaningless). Prescribe it without pace

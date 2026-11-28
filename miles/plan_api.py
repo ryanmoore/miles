@@ -15,11 +15,11 @@ from datetime import date, timedelta
 from collections.abc import Iterable, Sequence
 from typing import cast, get_args
 
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from fastapi import APIRouter, HTTPException
 
-from . import db, goals, heat, notes, plan, plan_adherence
+from . import db, goals, heat, notes, plan, plan_adherence, supplementary
 from .builds import Build
 from .classifier import classify_workout
 from .derive import CHECKPOINT_PACE_COL, connect_derived as _conn, predicted_pace_for_race
@@ -101,7 +101,7 @@ class TodayOut(TypedDict):
     """Today's slice of the plan. Present for any active plan regardless of
     sync freshness (only week_so_far/vs_last_week depend on synced data).
     `sessions` is every plan_days row for today in seq order (a double run
-    day, or a run plus a strength day); empty when today has no explicit row,
+    day, or a run plus a supplementary session); empty when today has no explicit row,
     i.e. an implied rest day."""
     date: str
     sessions: list[PlanDayOut]
@@ -159,7 +159,8 @@ class PlanResponse(TypedDict):
     days: list[PlanDayOut]
     docs: list[dict[str, object]]  # plan_docs metadata (no bodies); see notes.list_plan_docs
     actual: dict[str, list[PlanActivity]]  # keyed by date, every synced run in the plan window
-    log: dict[str, list[PlanLogEntry]]  # keyed by date, every plan_log entry in the plan window
+    log: dict[str, list[PlanLogEntry]]  # keyed by date, every plan_log annotation in the plan window
+    supplementary: list[supplementary.Session]  # every supplementary session, with the athlete's checks and moves
     weeks_to_race: int | None  # None for a plan with no race
     this_week: ThisWeekStat | None
     goal: GoalStat | None
@@ -246,7 +247,7 @@ def _log_by_date(conn: sqlite3.Connection, plan_id: int, start: str, end: str) -
     """plan_log entries in [start, end] (inclusive), keyed by date."""
     rows = conn.execute(
         "SELECT log_id, date, action, reason FROM plan_log "
-        "WHERE plan_id = ? AND date >= ? AND date <= ? ORDER BY date, log_id",
+        "WHERE plan_id = ? AND seq IS NULL AND date >= ? AND date <= ? ORDER BY date, log_id",
         [plan_id, start, end],
     ).fetchall()
     out: dict[str, list[PlanLogEntry]] = {}
@@ -547,6 +548,7 @@ def get_plan(plan_id: int | None = None, draft: bool = False) -> PlanResponse | 
         docs=notes.list_plan_docs(conn, active["plan_id"]),
         actual=activities,
         log=logs,
+        supplementary=supplementary.sessions(conn, active["plan_id"], days_in),
         weeks_to_race=weeks_to_race,
         this_week=this_week,
         goal=goal,
@@ -556,6 +558,31 @@ def get_plan(plan_id: int | None = None, draft: bool = False) -> PlanResponse | 
         week_so_far=week_so_far,
         vs_last_week=vs_last_week,
     )
+
+
+class SessionUpdate(TypedDict):
+    """What the athlete did with one supplementary session; see supplementary.record."""
+    date: str
+    seq: int
+    check: NotRequired[list[str]]
+    uncheck: NotRequired[list[str]]
+    done: NotRequired[bool]
+    skip: NotRequired[bool]
+    move_to: NotRequired[str]
+
+
+@router.post("/api/plans/{plan_id}/sessions")
+def update_session(plan_id: int, body: SessionUpdate) -> supplementary.Session:
+    """Athlete-authored check-offs, done mark, skip and move for one planned
+    supplementary session. Events only: the plan is never changed."""
+    conn = _conn()
+    try:
+        return supplementary.record(
+            conn, plan_id, body["date"], body["seq"], check=body.get("check", ()), uncheck=body.get("uncheck", ()),
+            done=body.get("done"), skip=body.get("skip"), move_to=body.get("move_to"),
+        )
+    except PlanValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 class TodayResponse(TypedDict):

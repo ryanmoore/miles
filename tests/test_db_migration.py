@@ -78,6 +78,7 @@ _SCHEMA_HASHES = {
     11: "9379addc11ac03150aa303c9c588f2be1c57aaaaa6ea8cf713975c6887bf586e",
     12: "4075ff4c7a96586bd40ece8252320631fc5c4bed187969d19b96a850570b06ad",
     13: "6a822d44f2ae0f85b3b02e4038ab394d574f8983fa356f5e45a2bc7c8a225803",
+    14: "724f6cf8bacf5c29f4c60c372b443a8faf4f23afd47bd4cc235c8432ae0b59cd",
 }
 
 
@@ -229,6 +230,30 @@ def test_a_version_9_database_folds_strength_day_targets_into_goals(conn: sqlite
     assert json.loads(goals[1]["params"]) == {"sport_types": ["WeightTraining", "Workout"]}
     assert json.loads(goals[1]["overrides"]) == {"2026-01-19": 1, "2026-01-26": 0}
     assert (goals[3]["target"], json.loads(goals[3]["overrides"])) == (0, {})
+
+
+def test_a_version_13_database_turns_strength_days_into_supplementary_sessions(tmp_path: Path):
+    old = _release_database(tmp_path / "v13.db")
+    db.init_db(old)
+    old.execute("INSERT INTO plans (plan_id, title, created_at) VALUES (1, 'P', '2026-01-01')")
+    old.execute(
+        "INSERT INTO plan_versions (version_id, plan_id, version_n, created_at, committed_at, author) "
+        "VALUES (1, 1, 1, '2026-01-02', '2026-01-02', 'agent')"
+    )
+    for seq, slot, target in ((1, "strength", None), (2, "strength", '{"steps": []}'), (3, "easy", None)):
+        old.execute(
+            "INSERT INTO plan_days (version_id, date, seq, slot, target_json) VALUES (1, '2026-01-05', ?, ?, ?)",
+            [seq, slot, target],
+        )
+    old.execute("PRAGMA user_version = 13")
+    old.commit()
+
+    db.init_db(old)
+
+    rows = old.execute("SELECT slot, target_json FROM plan_days ORDER BY seq").fetchall()
+    assert [(r["slot"], json.loads(r["target_json"]) if r["target_json"] else None) for r in rows] == [
+        ("supplementary", {"kind": "strength"}), ("supplementary", {"steps": [], "kind": "strength"}), ("easy", None),
+    ]
 
 
 class _RacingConnection:

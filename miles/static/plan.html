@@ -245,8 +245,36 @@
     .plan-view .plan-slot.slot-long .plan-slot-num { color: var(--series-1); }
     .plan-view .plan-slot.slot-race { border-color: var(--good); }
     .plan-view .plan-slot.slot-race .plan-slot-num { color: var(--good); }
-    .plan-view .plan-slot.slot-strength { border-color: var(--series-5); }
-    .plan-view .plan-slot.slot-strength .plan-slot-num { color: var(--series-5); }
+    .plan-view .plan-slot.slot-supplementary { border-color: var(--kind); }
+    .plan-view .plan-slot.slot-supplementary .plan-slot-num { color: var(--kind); }
+    .plan-view .plan-slot.state-done { border-style: solid; background: color-mix(in srgb, var(--kind) 16%, var(--surface)); }
+    .plan-view .plan-slot.state-skipped { opacity: 0.5; text-decoration: line-through; }
+    .plan-view .plan-slot.slot-ghost { border-style: dotted; opacity: 0.55; }
+    .plan-view .mcal-slot.ghost { opacity: 0.55; }
+    .plan-view .mcal-slot.state-skipped { opacity: 0.5; text-decoration: line-through; }
+
+    /* Supplementary session: checklist and its move/skip actions. Every tap target is at least 44px tall. */
+    .plan-view .sess { margin: 0.5rem 0; padding: 0.5rem 0; border-top: 1px solid var(--gridline); }
+    .plan-view .sess-head { display: flex; align-items: baseline; gap: 0.5rem; font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+    .plan-view .sess-when { color: var(--muted); font-weight: 500; text-transform: none; letter-spacing: 0; }
+    .plan-view .sess-badge { margin-left: auto; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+    .plan-view .sess.state-done .sess-badge { color: var(--good); }
+    .plan-view .sess-title { font-size: 1rem; font-weight: 650; color: var(--text); margin: 0.125rem 0; }
+    .plan-view .sess.state-skipped .sess-title, .plan-view .sess.state-skipped .sess-items { opacity: 0.5; text-decoration: line-through; }
+    .plan-view .sess-item { display: flex; align-items: center; gap: 0.625rem; min-height: 44px; font-size: 0.9375rem; cursor: pointer; }
+    .plan-view .sess-item input { width: 22px; height: 22px; flex-shrink: 0; accent-color: var(--accent); }
+    .plan-view .sess-item input:checked + .sess-name { color: var(--muted); text-decoration: line-through; }
+    .plan-view .sess-amt { margin-left: auto; color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .plan-view .sess-actions { display: flex; flex-wrap: wrap; gap: 0.375rem; margin-top: 0.25rem; }
+    .plan-view .sess-btn {
+      display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.75rem; font: inherit; font-size: 0.8125rem;
+      color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; list-style: none;
+    }
+    .plan-view .sess-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    .plan-view .sess-other summary::-webkit-details-marker { display: none; }
+    .plan-view .sess-other[open] { flex-basis: 100%; }
+    .plan-view .sess-date { min-height: 44px; margin-top: 0.25rem; font: inherit; }
+    .sess-toast { position: fixed; left: 50%; bottom: 5rem; transform: translateX(-50%); z-index: 50; padding: 0.625rem 1rem; border-radius: 8px; background: var(--series-6); color: #fff; font-size: 0.875rem; }
 
     .plan-view .cal-day { cursor: pointer; }
 
@@ -748,23 +776,36 @@
     easy: 'var(--muted)',
   };
 
-  const SLOT_LABEL = { easy: 'Easy', workout: 'Workout', long: 'Long', rest: 'Rest', race: 'Race', strength: 'Strength' };
+  const SLOT_LABEL = { easy: 'Easy', workout: 'Workout', long: 'Long', rest: 'Rest', race: 'Race', supplementary: 'Supplementary' };
 
   // Planned-slot palette — one entry per plan.py SLOTS value, colors matching
   // TYPE_COLOR's actual-run-type mapping above (long/workout/race/easy share
   // the same hue whether the source is a synced run or a planned slot).
-  // 'strength' has no synced-run counterpart in TYPE_COLOR (no page colors
-  // WeightTraining runs), so it gets its own slot: --series-5 (violet), the
-  // most CVD-distinct unused slot against the four already in use. Terrain is
-  // never a color — a trail day gets the ▲ glyph instead (TRAIL_GLYPH below).
+  // A supplementary session is colored by its kind (see kindColor), never by
+  // this entry, which only covers a row with no kind. Terrain is never a
+  // color — a trail day gets the ▲ glyph instead (TRAIL_GLYPH below).
   const SLOT_COLOR = {
     easy: 'var(--muted)',
     workout: 'var(--series-8)',
     long: 'var(--series-1)',
     race: 'var(--good)',
-    strength: 'var(--series-5)',
+    supplementary: 'var(--series-5)',
     rest: 'var(--baseline)',
   };
+  // None of these is a run slot's color. Kinds take them in the order they are
+  // first drawn, so a plan's first five kinds never share one.
+  const KIND_PALETTE = ['var(--series-5)', 'var(--series-2)', 'var(--series-3)', 'var(--series-6)', 'var(--series-7)'];
+  const KIND_COLORS = new Map();
+  function kindColor(kind) {
+    if (!KIND_COLORS.has(kind)) KIND_COLORS.set(kind, KIND_PALETTE[KIND_COLORS.size % KIND_PALETTE.length]);
+    return KIND_COLORS.get(kind);
+  }
+  const supplementaryKind = d => d.slot === 'supplementary' ? d.target?.kind : null;
+  const colorOf = d => supplementaryKind(d) ? kindColor(supplementaryKind(d)) : SLOT_COLOR[d.slot];
+  function slotLabel(d) {
+    const kind = supplementaryKind(d);
+    return kind ? kind[0].toUpperCase() + kind.slice(1) : (SLOT_LABEL[d.slot] ?? d.slot);
+  }
   const TRAIL_GLYPH = ' ▲'; // ▲ — terrain modifier, never a color (a trail long run is still a long run)
 
   const MILE_M = 1609.34;
@@ -832,7 +873,7 @@
     if (day.terrain === 'trail' && pace && !hasSteps) lines.push('trail — pace is guidance only, not judged');
 
     if (day.target_minutes != null) {
-      const slotWord = (SLOT_LABEL[day.slot] ?? day.slot).toLowerCase();
+      const slotWord = slotLabel(day).toLowerCase();
       lines.push(`${fmtDuration(day.target_minutes)}${day.terrain === 'trail' ? ' trail' : ''} ${slotWord}`);
     } else if (day.target_miles != null) {
       lines.push(`${day.target_miles.toFixed(1)} mi`);
@@ -974,7 +1015,9 @@
   // always resolve against fresh data.
   function planData(data, todayActual) {
     return {
-      dayByDate: data ? groupSessionsByDate(data.days) : new Map(),
+      raw: data,
+      todayActual,
+      dayByDate: data ? groupSessionsByDate(data.days, data.supplementary) : new Map(),
       actualByDate: new Map([...(data ? Object.entries(data.actual ?? {}) : []), ...Object.entries(todayActual ?? {})]),
       logByDate: data ? new Map(Object.entries(data.log ?? {})) : new Map(),
       docs: data?.docs ?? [],
@@ -992,16 +1035,23 @@
 
   // Groups plan_days rows by date, preserving the server's date/seq order —
   // a date can carry more than one row (a double run, or a run plus a
-  // strength day), so every consumer of dayByDate gets an array, never a
+  // supplementary session), so every consumer of dayByDate gets an array, never a
   // single row that would silently drop the rest.
-  function groupSessionsByDate(days) {
+  // A supplementary session sits on its effective date (after a move) and
+  // leaves a `ghost` row on its planned date.
+  function groupSessionsByDate(days, supplementary = []) {
+    const state = new Map(supplementary.map(s => [`${s.date}#${s.seq}`, s]));
     const m = new Map();
+    const put = (date, row) => { const arr = m.get(date); if (arr) arr.push(row); else m.set(date, [row]); };
     for (const d of days) {
-      const arr = m.get(d.date);
-      if (arr) arr.push(d); else m.set(d.date, [d]);
+      const session = state.get(`${d.date}#${d.seq}`);
+      if (!session) { put(d.date, d); continue; }
+      put(session.effective_date, { ...d, session });
+      if (session.effective_date !== d.date) put(d.date, { ...d, session, ghost: true });
     }
     return m;
   }
+  const liveOn = (data, dateStr) => (data.dayByDate.get(dateStr) ?? []).filter(d => !d.ghost);
 
   // The day's `steps` as one row per block ("7 × 3 min", effort beside it,
   // recovery and cue muted beneath). Empty when the day has none.
@@ -1033,16 +1083,135 @@
     return day.rationale ? `<details class="why"><summary>Why</summary><p>${esc(day.rationale)}</p></details>` : '';
   }
 
+  // -----------------------------------------------------------------------
+  // Supplementary sessions: a checklist the athlete ticks, plus moves and
+  // skips. Writes are optimistic and recorded beside the plan (adr/0011).
+  // -----------------------------------------------------------------------
+
+  const TODAY = (d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)(new Date());
+  const MISSED_DAYS = 7;
+  const RAW_PLANS = []; // every /api/plan response held, so a write updates all of them
+
+  const sessionTicked = s => s.items.filter(i => i.checked).length;
+
+  // "✓", "2/5", "skip": what a calendar chip or session header leads with.
+  function sessionBadge(s) {
+    if (s.state === 'done') return '✓';
+    if (s.state === 'skipped') return 'skip';
+    return s.items.length ? `${sessionTicked(s)}/${s.items.length}` : null;
+  }
+
+  function sessionHTML(s, { missed = false } = {}) {
+    const badge = sessionBadge(s);
+    const ids = `data-plan="${s.planId}" data-date="${s.date}" data-seq="${s.seq}"`;
+    const checklist = missed && s.items.length ? '' : s.items.length
+      ? `<div class="sess-items">${s.items.map(i => `
+          <label class="sess-item"><input type="checkbox" data-sess-item="${esc(i.name)}"${i.checked ? ' checked' : ''}>
+            <span class="sess-name">${esc(i.name)}</span>${i.amount ? `<span class="sess-amt">${esc(i.amount)}</span>` : ''}</label>`).join('')}</div>`
+      : `<button type="button" class="sess-btn" data-sess-act="done">${s.marked_done ? '✓ Done · undo' : 'Mark done'}</button>`;
+    const moves = [[TODAY, 'Move to today'], [addDays(TODAY, -1), 'Move to yesterday']]
+      .filter(([d]) => d !== s.effective_date)
+      .map(([d, label], i) => `<button type="button" class="sess-btn${missed && i === 0 ? ' primary' : ''}" data-sess-act="move" data-to="${d}">${label}</button>`);
+    return `<div class="sess state-${s.state}" ${ids}>
+      <div class="sess-head"><span class="sess-kind" style="color:${kindColor(s.kind)}">${esc(s.kind)}</span>
+        ${missed ? `<span class="sess-when">planned ${esc(shortDate(s.effective_date))}</span>` : ''}
+        ${badge ? `<span class="sess-badge">${badge}</span>` : ''}</div>
+      ${s.title ? `<div class="sess-title">${esc(s.title)}</div>` : ''}
+      ${checklist}
+      <div class="sess-actions">
+        ${moves.join('')}
+        <details class="sess-other"><summary class="sess-btn">Another day…</summary><input type="date" class="sess-date" value="${s.effective_date}" aria-label="Move to date"></details>
+        <button type="button" class="sess-btn" data-sess-act="skip" data-on="${!s.skipped}">${s.skipped ? 'Undo skip' : 'Skip'}</button>
+        ${s.moved_to ? `<button type="button" class="sess-btn" data-sess-act="move" data-to="">Back to ${esc(shortDate(s.date))}</button>` : ''}
+      </div>
+    </div>`;
+  }
+
+  // What the server will compute for a write, applied locally first.
+  function patchSession(s, body) {
+    for (const [names, on] of [[body.check, true], [body.uncheck, false]]) {
+      for (const i of s.items) if (names?.includes(i.name)) i.checked = on;
+    }
+    if (body.done !== undefined) s.marked_done = body.done;
+    if (body.skip !== undefined) s.skipped = body.skip;
+    if (body.move_to !== undefined) {
+      s.moved_to = body.move_to && body.move_to !== s.date ? body.move_to : null;
+      s.effective_date = s.moved_to ?? s.date;
+      s.strength_activity = false;
+    }
+    const ticked = sessionTicked(s);
+    s.state = s.skipped ? 'skipped'
+      : s.marked_done || s.strength_activity || (s.items.length > 0 && ticked === s.items.length) ? 'done'
+      : ticked ? 'partial' : 'open';
+  }
+
+  function showSessionError(message) {
+    document.querySelector('.sess-toast')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="sess-toast" role="alert">Couldn't save: ${esc(message)}</div>`);
+    setTimeout(() => document.querySelector('.sess-toast')?.remove(), 5000);
+  }
+
+  let sessionWrites = Promise.resolve();
+  let pendingWrites = 0;
+
+  function updateSession({ plan, date, seq }, body) {
+    const copies = RAW_PLANS.filter(p => p.plan.plan_id === Number(plan))
+      .map(p => p.supplementary.find(x => x.date === date && x.seq === Number(seq))).filter(Boolean);
+    const before = copies.map(s => structuredClone(s));
+    copies.forEach(s => patchSession(s, body));
+    refreshViews();
+    pendingWrites++;
+    sessionWrites = sessionWrites.then(async () => {
+      try {
+        const res = await fetch(`/api/plans/${plan}/sessions`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date, seq: Number(seq), ...body }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `HTTP ${res.status}`);
+        const fresh = await res.json();
+        if (pendingWrites === 1) copies.forEach(s => Object.assign(s, fresh));
+      } catch (err) {
+        copies.forEach((s, i) => Object.assign(s, before[i]));
+        showSessionError(err.message);
+      }
+      pendingWrites--;
+      refreshViews();
+    });
+  }
+
+  // Rebuilds every view that shows a session from the held responses.
+  function refreshViews() {
+    if (PLAN_DATA?.raw) {
+      PLAN_DATA = planData(PLAN_DATA.raw, PLAN_DATA.todayActual);
+      if (PLAN_DATA.raw.today?.week_start) renderToday(PLAN_DATA.raw);
+    }
+    if (PLAN_TAB_DATA?.raw) {
+      PLAN_TAB_DATA = planData(PLAN_TAB_DATA.raw);
+      refreshCalendar?.();
+    }
+    reopenPopover();
+  }
+
   // One popover block per session: slot label, title, structure, totals,
   // guidance, rationale — in that order so the colored slot reads first,
   // same as the calendar chip.
   function daySessionBlockHTML(day) {
     const glyph = day.terrain === 'trail' ? TRAIL_GLYPH : '';
-    const title = day.title ? esc(day.title) : (SLOT_LABEL[day.slot] ?? day.slot);
+    const title = day.title ? esc(day.title) : slotLabel(day);
     const targetLines = describeDayTarget(day);
+    if (day.ghost) {
+      return `<div class="day-popover-session ghost"><div class="day-popover-slot" style="color:${colorOf(day)}">${esc(slotLabel(day))}</div>
+        <div class="day-popover-title">${title}</div>
+        <p class="day-popover-note">Moved to ${esc(longDate(day.session.moved_to))}.</p>
+        <div class="sess-actions" data-plan="${day.session.planId}" data-date="${day.date}" data-seq="${day.seq}">
+          <button type="button" class="sess-btn" data-sess-act="move" data-to="">Back to ${esc(shortDate(day.date))}</button></div></div>`;
+    }
+    if (day.session) {
+      return `<div class="day-popover-session">${sessionHTML(day.session)}
+        ${day.note ? `<p class="day-popover-note">${esc(day.note)}</p>` : ''}${whyHTML(day)}</div>`;
+    }
     return `
       <div class="day-popover-session">
-        <div class="day-popover-slot" style="color:${SLOT_COLOR[day.slot] ?? 'var(--text)'}">${esc(SLOT_LABEL[day.slot] ?? day.slot)}</div>
+        <div class="day-popover-slot" style="color:${colorOf(day) ?? 'var(--text)'}">${esc(slotLabel(day))}</div>
         <div class="day-popover-title">${title}${glyph}</div>
         ${stepsHTML(day)}
         ${targetLines.length ? `<div class="day-popover-targets">${targetLines.map(l => `<div>${esc(l)}</div>`).join('')}</div>` : ''}
@@ -1069,6 +1238,16 @@
       </div>`;
   }
 
+  // The open popover's date and whether it reads the Plan tab's data, so a
+  // session write can redraw it.
+  let openPopover = null;
+  const reopenPopover = () => {
+    if (!openPopover) return;
+    const { dateStr, tab } = openPopover;
+    document.getElementById('day-popover-backdrop')?.remove();
+    openDayPopover(dateStr, tab ? PLAN_TAB_DATA : PLAN_DATA);
+  };
+
   function openDayPopover(dateStr, data) {
     if (!data) return;
     const sessions = data.dayByDate.get(dateStr) ?? [];
@@ -1076,11 +1255,13 @@
     const logs = data.logByDate.get(dateStr) ?? [];
     const docs = docsOn(data.docs, dateStr);
     if (!sessions.length && !runs.length && !logs.length && !docs.length) return; // nothing to show for this date
+    openPopover = { dateStr, tab: data === PLAN_TAB_DATA };
     // Must land inside main.plan-view — every popover style is scoped under
     // it, and a body-level insert renders as unstyled text at the page bottom.
     document.querySelector('main.plan-view').insertAdjacentHTML('beforeend', dayPopoverHTML(dateStr, sessions, runs, logs, docs));
     const backdrop = document.getElementById('day-popover-backdrop');
     function close() {
+      openPopover = null;
       backdrop.remove();
       document.removeEventListener('keydown', onKey);
     }
@@ -1744,15 +1925,20 @@
     if (isRestSlot(day)) {
       return `<div class="plan-slot slot-rest">Rest${glyph}</div>`;
     }
-    const label = day.title ? esc(day.title) : SLOT_LABEL[day.slot] ?? day.slot;
-    const num = day.target_miles != null ? `${trimMiles(day.target_miles)} mi`
+    const label = day.title ? esc(day.title) : slotLabel(day);
+    if (day.ghost) {
+      return `<div class="plan-slot slot-ghost" title="${esc(label)} moved to ${esc(shortDate(day.session.moved_to))}"><div class="plan-slot-label">↪ ${label}</div></div>`;
+    }
+    const num = day.session ? sessionBadge(day.session)
+      : day.target_miles != null ? `${trimMiles(day.target_miles)} mi`
       : day.target_minutes != null ? fmtDuration(day.target_minutes)
       : null;
     const extras = [];
     if (day.target_miles != null) extras.push(`${day.target_miles.toFixed(1)}mi`);
     if (day.target_minutes != null) extras.push(fmtDuration(day.target_minutes));
     const titleAttr = `${label}${extras.length ? ' · ' + extras.join(' · ') : ''}`;
-    return `<div class="plan-slot slot-${day.slot}" title="${esc(titleAttr)}">
+    const state = day.session ? ` state-${day.session.state}` : '';
+    return `<div class="plan-slot slot-${day.slot}${state}" style="--kind:${colorOf(day)}" title="${esc(titleAttr)}">
       ${num != null ? `<div class="plan-slot-num">${esc(num)}</div>` : ''}
       <div class="plan-slot-label">${label}${glyph}</div>
     </div>`;
@@ -1803,12 +1989,14 @@
 
   function mobileSessionHTML(day) {
     const glyph = day.terrain === 'trail' ? TRAIL_GLYPH : '';
-    const label = day.title ? esc(day.title) : (SLOT_LABEL[day.slot] ?? day.slot);
-    const num = day.target_miles != null ? `${trimMiles(day.target_miles)} mi`
+    const label = day.title ? esc(day.title) : slotLabel(day);
+    if (day.ghost) return `<div class="mcal-slot ghost"><span class="mcal-slot-label">↪ ${label} · moved to ${esc(shortDate(day.session.moved_to))}</span></div>`;
+    const num = day.session ? sessionBadge(day.session)
+      : day.target_miles != null ? `${trimMiles(day.target_miles)} mi`
       : day.target_minutes != null ? fmtDuration(day.target_minutes)
       : null;
-    const color = SLOT_COLOR[day.slot] ?? 'var(--muted)';
-    return `<div class="mcal-slot">
+    const color = colorOf(day) ?? 'var(--muted)';
+    return `<div class="mcal-slot${day.session ? ` state-${day.session.state}` : ''}">
       ${num != null ? `<span class="mcal-slot-num" style="color:${color}">${esc(num)}</span>` : ''}
       <span class="mcal-slot-label">${label}${glyph}</span>
     </div>`;
@@ -1921,25 +2109,26 @@
   // Current week first, then upcoming weeks in order, then past weeks most
   // recent first under a History divider. One week is expanded at a time by
   // the nav; tapping a summary toggles its week independently.
+  let refreshCalendar = null;
   function renderCalendar(data, bandByWeek, goals) {
     const { weeks, days, actual, log } = data;
     if (!weeks.length) return;
 
-    const dayByDate = groupSessionsByDate(days);
+    let dayByDate = groupSessionsByDate(days, data.supplementary);
     const actualByDate = new Map(Object.entries(actual ?? {}));
     const logByDate = new Map(Object.entries(log ?? {}));
     const weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const hasBands = bandByWeek && bandByWeek.size > 0;
 
-    const weekHTML = w => `<div class="cwk${w.is_current ? ' current' : ''}" data-week="${w.week_start}">
-        <button type="button" class="cwk-sum" aria-expanded="false">${weekSummaryHTML(w, actualByDate, bandByWeek?.get(w.week_start), goals)}</button>
-        <div class="cwk-body" hidden>
+    const weekBodyHTML = w => `
           <div class="cal">
             <div class="cal-header">${weekdayLabels.map(d => `<div class="cal-hcell">${d}</div>`).join('')}</div>
             ${weekRow(w, dayByDate, actualByDate, logByDate)}
           </div>
-          <div class="cal-cards">${weekCardMobileHTML(w, dayByDate, actualByDate, logByDate)}</div>
-        </div>
+          <div class="cal-cards">${weekCardMobileHTML(w, dayByDate, actualByDate, logByDate)}</div>`;
+    const weekHTML = w => `<div class="cwk${w.is_current ? ' current' : ''}" data-week="${w.week_start}">
+        <button type="button" class="cwk-sum" aria-expanded="false">${weekSummaryHTML(w, actualByDate, bandByWeek?.get(w.week_start), goals)}</button>
+        <div class="cwk-body" hidden>${weekBodyHTML(w)}</div>
       </div>`;
     const past = weeks.filter(w => !w.is_current && !w.is_future).reverse();
     const ordered = [...weeks.filter(w => w.is_current), ...weeks.filter(w => w.is_future)];
@@ -1948,7 +2137,7 @@
     section.insertAdjacentHTML('beforeend', `
       <section id="section-calendar">
         <h2>Calendar</h2>
-        <p class="desc">Dashed chip is the planned slot, colored by type · filled pill is the synced run · dot marker is a plan_log note · ▲ marks a trail day · tap a week to expand it, tap a day for detail${hasBands ? ' · colored chip is the completed week’s adherence band' : ''}</p>
+        <p class="desc">Dashed chip is the planned slot, colored by type · filled pill is the synced run · dot marker is a plan_log note · ▲ marks a trail day · ↪ marks where a moved session was planned · tap a week to expand it, tap a day for detail${hasBands ? ' · colored chip is the completed week’s adherence band' : ''}</p>
         <div class="cal-nav">
           <button type="button" class="filter-btn" data-week-nav="-1">&lsaquo; Prev</button>
           <button type="button" class="filter-btn" data-week-nav="0">This week</button>
@@ -1961,11 +2150,16 @@
           <span><span class="cal-dot" style="background:var(--series-8)"></span>Workout</span>
           <span><span class="cal-dot" style="background:var(--series-1)"></span>Long run</span>
           <span><span class="cal-dot" style="background:var(--good)"></span>Race</span>
-          <span><span class="cal-dot" style="background:var(--series-5)"></span>Strength</span>
+          <span><span class="cal-dot" style="background:var(--series-5)"></span>Supplementary (a color per kind)</span>
           <span>▲ Trail</span>
           <span><span class="cal-log-marker" style="position:static;display:inline-block;margin-right:0.3125rem"></span>Log note</span>
         </div>
       </section>`);
+
+    refreshCalendar = () => {
+      dayByDate = groupSessionsByDate(days, data.supplementary);
+      for (const w of weeks) section.querySelector(`.cwk[data-week="${w.week_start}"] .cwk-body`).innerHTML = weekBodyHTML(w);
+    };
 
     const currentIdx = weeks.findIndex(w => w.is_current);
     let navIdx = currentIdx >= 0 ? currentIdx : (weeks[0].is_future ? 0 : weeks.length - 1);
@@ -2522,11 +2716,22 @@
     return kickerHTML(today.date, race, data.synced_through);
   }
 
-  // The card's hero is the first non-strength session (strength supplements
-  // a run, it doesn't lead the card); falls back to the first session when
-  // every session that day is strength.
+  // The card's hero is the first run session (a supplementary session
+  // accompanies a run, it doesn't lead the card); falls back to the first
+  // session when every session that day is supplementary.
   function heroSession(sessions) {
-    return sessions.find(d => d.slot !== 'strength') ?? sessions[0] ?? null;
+    return sessions.find(d => d.slot !== 'supplementary') ?? sessions[0] ?? null;
+  }
+
+  // Today's supplementary sessions (moved ones included) as checklists, then
+  // recent unfinished ones with Move to today as the main action.
+  function todaySupplementaryHTML(todayStr) {
+    const all = PLAN_DATA.raw.supplementary;
+    const current = all.filter(s => s.effective_date === todayStr);
+    const missed = all.filter(s => (s.state === 'open' || s.state === 'partial')
+      && s.effective_date < todayStr && s.effective_date >= addDays(todayStr, -MISSED_DAYS));
+    return `${current.map(s => sessionHTML(s)).join('')}
+      ${missed.length ? `<div class="today-done"><div class="panel-label">Missed</div>${missed.map(s => sessionHTML(s, { missed: true })).join('')}</div>` : ''}`;
   }
 
   // One compact line per session beyond the hero — same idiom as the
@@ -2534,12 +2739,12 @@
   // full session card.
   function alsoTodayLineHTML(day) {
     const glyph = day.terrain === 'trail' ? TRAIL_GLYPH : '';
-    const label = day.title ? esc(day.title) : (SLOT_LABEL[day.slot] ?? day.slot);
+    const label = day.title ? esc(day.title) : slotLabel(day);
     const extras = [];
     if (day.target_miles != null) extras.push(`${day.target_miles.toFixed(1)} mi`);
     if (day.target_minutes != null) extras.push(fmtDuration(day.target_minutes));
     return `<div class="today-next-line">
-      <span class="cal-dot" style="background:${SLOT_COLOR[day.slot] ?? 'var(--muted)'}"></span>
+      <span class="cal-dot" style="background:${colorOf(day) ?? 'var(--muted)'}"></span>
       <span>${label}${glyph}${extras.length ? ` · ${extras.join(' · ')}` : ''}</span>
     </div>`;
   }
@@ -2554,7 +2759,7 @@
     if (!today || !today.week_start) {
       return `<div class="today-card"><p class="desc" style="margin:0">Outside the plan window.</p></div>`;
     }
-    const sessions = today.sessions ?? [];
+    const sessions = liveOn(PLAN_DATA, today.date).filter(d => d.slot !== 'supplementary');
     const hero = heroSession(sessions);
     const others = sessions.filter(d => d !== hero);
     const dateLine = `<div class="panel-label">Today · ${new Date(today.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</div>`;
@@ -2564,8 +2769,8 @@
       if (hero && hero.note) parts.push(`<p class="today-note">${esc(hero.note)}</p>`);
     } else {
       const glyph = hero.terrain === 'trail' ? TRAIL_GLYPH : '';
-      const label = hero.title ? esc(hero.title) : (SLOT_LABEL[hero.slot] ?? hero.slot);
-      parts.push(`<div class="today-slot" style="color:${SLOT_COLOR[hero.slot] ?? 'var(--text)'}">${esc(SLOT_LABEL[hero.slot] ?? hero.slot)}</div>`);
+      const label = hero.title ? esc(hero.title) : slotLabel(hero);
+      parts.push(`<div class="today-slot" style="color:${colorOf(hero) ?? 'var(--text)'}">${esc(slotLabel(hero))}</div>`);
       parts.push(`<div class="today-title">${label}${glyph}</div>`);
       const lines = describeDayTarget(hero);
       if (lines.length) {
@@ -2578,6 +2783,7 @@
       parts.push(whyHTML(hero));
     }
     parts.push(alsoTodayHTML(others));
+    parts.push(todaySupplementaryHTML(today.date));
     // Undated documents cover the whole plan, so Today always lists them.
     const docs = [...docsOn(PLAN_DATA.docs, today.date), ...PLAN_DATA.docs.filter(d => !d.start_date)];
     if (docs.length) parts.push(`<div class="today-docs">${docs.map(d => `📄 ${docLinkHTML(d)}`).join(' · ')}</div>`);
@@ -2602,11 +2808,11 @@
     return `<div class="today-done"><div class="panel-label">Synced today</div>${lines}</div>`;
   }
 
-  // "+ strength" / "+ 2nd run" — a compact suffix naming what else is on
+  // "+ strength" / "+ 2nd run" (a supplementary session reads as its kind) — a compact suffix naming what else is on
   // the date, never a second full line.
   function sessionSuffixWord(s, primary) {
-    if (s.slot === primary.slot && s.slot !== 'strength' && s.slot !== 'rest') return '2nd run';
-    return (SLOT_LABEL[s.slot] ?? s.slot).toLowerCase();
+    if (s.slot === primary.slot && s.slot !== 'supplementary' && s.slot !== 'rest') return '2nd run';
+    return slotLabel(s).toLowerCase();
   }
 
   // Tomorrow's primary slot as the card's footer, plus a compact suffix
@@ -2614,13 +2820,13 @@
   // tomorrow's popover (the inner data-plan-date wins via closest()).
   function upNextHTML(todayStr) {
     const tomorrow = addDays(todayStr, 1);
-    const sessions = PLAN_DATA.dayByDate.get(tomorrow) ?? [];
+    const sessions = liveOn(PLAN_DATA, tomorrow);
     if (!sessions.length) return '';
     const primary = heroSession(sessions);
     const others = sessions.filter(d => d !== primary);
     const wd = new Date(tomorrow + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long' });
     const glyph = primary.terrain === 'trail' ? TRAIL_GLYPH : '';
-    const label = primary.title ? esc(primary.title) : (SLOT_LABEL[primary.slot] ?? primary.slot);
+    const label = primary.title ? esc(primary.title) : slotLabel(primary);
     const extras = [];
     if (primary.target_miles != null) extras.push(`${primary.target_miles.toFixed(1)} mi`);
     if (primary.target_minutes != null) extras.push(fmtDuration(primary.target_minutes));
@@ -2630,7 +2836,7 @@
       <div class="today-next" data-plan-date="${tomorrow}">
         <div class="panel-label">Up next · ${wd}</div>
         <div class="today-next-line">
-          <span class="cal-dot" style="background:${SLOT_COLOR[primary.slot] ?? 'var(--muted)'}"></span>
+          <span class="cal-dot" style="background:${colorOf(primary) ?? 'var(--muted)'}"></span>
           <span>${label}${glyph}${extras.length ? ` · ${extras.join(' · ')}` : ''}${suffix}</span>
         </div>
       </div>`;
@@ -2642,29 +2848,29 @@
   // straight off the row. The done-fill means "a run synced", never just
   // "the date passed". On a multi-session day the number sums target_miles
   // across every non-rest session (an 8+4 double reads "12"); color/label
-  // follow the first non-strength session.
-  const scheduledOn = dateStr => (PLAN_DATA.dayByDate.get(dateStr) ?? []).filter(d => d.slot !== 'rest');
+  // follow the first run session.
+  const scheduledOn = dateStr => liveOn(PLAN_DATA, dateStr).filter(d => d.slot !== 'rest');
   const plannedMilesOf = scheduled => scheduled.reduce((s, d) => s + (d.target_miles ?? 0), 0);
 
   // "Tempo (6 mi)": a session's title or slot name with its mileage or duration.
   function sessionText(d) {
-    const label = d.title ? d.title : (SLOT_LABEL[d.slot] ?? d.slot);
+    const label = d.title ? d.title : slotLabel(d);
     const amount = d.target_miles != null ? `${trimMiles(d.target_miles)} mi` : d.target_minutes != null ? fmtDuration(d.target_minutes) : null;
     return amount ? `${label} (${amount})` : label;
   }
 
   function dayChip(dateStr, todayStr) {
-    const sessions = PLAN_DATA.dayByDate.get(dateStr) ?? [];
+    const sessions = liveOn(PLAN_DATA, dateStr);
     const runs = PLAN_DATA.actualByDate.get(dateStr) ?? [];
     const primary = heroSession(sessions);
     const slot = primary ? primary.slot : 'rest';
-    const color = SLOT_COLOR[slot] ?? 'var(--muted)';
+    const color = colorOf(primary ?? { slot }) ?? 'var(--muted)';
     const stateClass = [
       runs.length ? 'done' : '',
       dateStr === todayStr ? 'today' : dateStr > todayStr ? 'upcoming' : '',
     ].filter(Boolean).join(' ');
     const glyph = primary && primary.terrain === 'trail' ? TRAIL_GLYPH : '';
-    const label = primary ? (SLOT_LABEL[primary.slot] ?? primary.slot) : 'Rest';
+    const label = primary ? slotLabel(primary) : 'Rest';
     const wd = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
 
     const scheduled = scheduledOn(dateStr);
@@ -2880,7 +3086,7 @@
     }
     const week = source.weeks.find(w => w.week_start === monday);
     if (!week) return null;
-    for (const [d, sessions] of groupSessionsByDate(source.days)) {
+    for (const [d, sessions] of groupSessionsByDate(source.days, source.supplementary)) {
       if (d >= monday && d <= addDays(monday, 6)) PLAN_DATA.dayByDate.set(d, sessions);
     }
     return week;
@@ -2936,7 +3142,13 @@
     return res.json();
   }
 
-  const loadPlan = (planId, draft) => loadPlanApi('/api/plan', planId, draft ? '&draft=1' : '');
+  const loadPlan = (planId, draft) => loadPlanApi('/api/plan', planId, draft ? '&draft=1' : '').then(data => {
+    if (data) {
+      data.supplementary.forEach(s => { s.planId = data.plan.plan_id; });
+      RAW_PLANS.push(data);
+    }
+    return data;
+  });
   const loadVersions = () => loadPlanApi('/api/plan-versions', SELECTED_PLAN);
   const loadAdherence = () => loadPlanApi('/api/plan-adherence', SELECTED_PLAN);
   let plansPromise;
@@ -3294,7 +3506,7 @@
   function cmpLevel(base, other, withTitles) {
     const sum = l => l.reduce((t, x) => t + x.miles, 0);
     const key = (l, f) => [...new Set(l.map(f))].sort().join('|');
-    const runs = l => l.filter(x => x.slot !== 'strength');
+    const runs = l => l.filter(x => x.slot !== 'supplementary');
     const a = sum(runs(base)), b = sum(runs(other)), gap = Math.abs(a - b);
     const level = gap <= Math.max(CMP_NEGLIGIBLE_MI, CMP_NEGLIGIBLE_FRAC * Math.max(a, b)) ? 0 : gap <= 3 ? 2 : gap <= 6 ? 3 : 4;
     if (key(runs(base), x => x.slot) !== key(runs(other), x => x.slot)) return Math.max(level, 3);
@@ -3351,7 +3563,7 @@
     slotEl('cmpweeks').insertAdjacentHTML('beforeend', `
       <section>
         <h2>Weeks</h2>
-        <p class="desc">Every side after the first is shaded by how far each day differs from the first side's same weekday: faint for a title only (plan against plan) or a strength session only, stronger for a bigger mileage gap, a different run type or a run on one side only; gaps within ${CMP_NEGLIGIBLE_MI} mi or ${CMP_NEGLIGIBLE_FRAC * 100}% of the larger day are not shaded · tap a day for detail</p>
+        <p class="desc">Every side after the first is shaded by how far each day differs from the first side's same weekday: faint for a title only (plan against plan) or a supplementary session only, stronger for a bigger mileage gap, a different run type or a run on one side only; gaps within ${CMP_NEGLIGIBLE_MI} mi or ${CMP_NEGLIGIBLE_FRAC * 100}% of the larger day are not shaded · tap a day for detail</p>
         ${html}
       </section>`);
     document.querySelectorAll('.cmp-week').forEach(el => {
@@ -3466,6 +3678,30 @@
     });
     planP.then(d => { document.title = d ? `Miles · ${d.plan.title}` : 'Miles · Plan'; }, () => {});
   }
+
+  // The day popover lives outside #root, so session controls are handled on the
+  // document; the capture phase keeps a tap on one from also opening a popover.
+  document.addEventListener('change', e => {
+    const box = e.target.closest('[data-sess-item]');
+    const dateInput = e.target.closest('.sess-date');
+    const sess = e.target.closest('[data-seq]');
+    if (!sess || !(box || dateInput)) return;
+    if (box) updateSession(sess.dataset, { [box.checked ? 'check' : 'uncheck']: [box.dataset.sessItem] });
+    else if (dateInput.value) updateSession(sess.dataset, { move_to: dateInput.value });
+  });
+
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.sess, .day-popover-session.ghost')) return;
+    e.stopPropagation();
+    const btn = e.target.closest('[data-sess-act]');
+    const ids = e.target.closest('[data-seq]');
+    if (!btn || !ids) return;
+    const act = btn.dataset.sessAct;
+    const session = RAW_PLANS.flatMap(p => p.supplementary).find(x => x.planId === Number(ids.dataset.plan) && x.date === ids.dataset.date && x.seq === Number(ids.dataset.seq));
+    if (act === 'move') updateSession(ids.dataset, { move_to: btn.dataset.to });
+    else if (act === 'skip') updateSession(ids.dataset, { skip: btn.dataset.on === 'true' });
+    else if (act === 'done') updateSession(ids.dataset, { done: !session.marked_done });
+  }, true);
 
   document.getElementById('root').addEventListener('click', e => {
     // A muted in-page link (e.g. the dashboard's "see the Plan tab")
